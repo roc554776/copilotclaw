@@ -1,0 +1,24 @@
+groups:
+  - name: copilot_token_usage
+    interval: 1m
+    rules:
+      - record: copilot:gen_ai_usage_input_tokens:1m_sum
+        expr: |
+          sum by (gen_ai_request_model) (
+            sum_over_time(
+              {service_name="github-copilot"}
+              | json
+              | label_format gen_ai_request_model=attributes_gen_ai_request_model
+              | unwrap attributes_gen_ai_usage_input_tokens [1m]
+            )
+          )
+      - record: copilot:gen_ai_usage_output_tokens:1m_sum
+        expr: |
+          sum by (gen_ai_request_model) (
+            sum_over_time(
+              {service_name="github-copilot"}
+              | json
+              | label_format gen_ai_request_model=attributes_gen_ai_request_model
+              | unwrap attributes_gen_ai_usage_output_tokens [1m]
+            )
+          )
