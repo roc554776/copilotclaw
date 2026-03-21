@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lsof -iTCP -sTCP:LISTEN -nP)",
+      "Bash(grep -oE '[0-9]+$')"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "SessionStart": [ { "type": "command", "command": "python3 .github/hooks/copilotclaw/main.py" } ],
+    "UserPromptSubmitted": [ { "type": "command", "command": "python3 .github/hooks/copilotclaw/main.py" } ],
+    "PreToolUse": [ { "type": "command", "command": "python3 .github/hooks/copilotclaw/main.py" } ],
+    "PostToolUse": [ { "type": "command", "command": "python3 .github/hooks/copilotclaw/main.py" } ],
+    "PreCompact": [ { "type": "command", "command": "python3 .github/hooks/copilotclaw/main.py" } ],
+    "SubagentStart": [ { "type": "command", "command": "python3 .github/hooks/copilotclaw/main.py" } ],
+    "SubagentStop": [ { "type": "command", "command": "python3 .github/hooks/copilotclaw/main.py" } ],
+    "Stop": [ { "type": "command", "command": "python3 .github/hooks/copilotclaw/main.py" } ]
+  }
+}

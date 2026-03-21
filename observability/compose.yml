@@ -1,0 +1,111 @@
+services:
+  loki:
+    image: grafana/loki:3.0.0
+    volumes:
+      - './loki-config.yaml:/etc/loki/local-config.yaml:ro'
+      - './loki-rules:/loki/rules:ro'
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - '44631:3100'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -O- -q http://localhost:3100/ready || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  tempo:
+    image: grafana/tempo:2.4.0
+    volumes:
+      - './tempo-config.yaml:/etc/tempo/config.yaml:ro'
+      - tempo-data:/var/tempo
+    command: ['-config.file=/etc/tempo/config.yaml']
+    ports:
+      - '44857:3200'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -O- -q http://localhost:3200/ready || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    volumes:
+      - './prometheus.yaml:/etc/prometheus/prometheus.yml:ro'
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+      - '--web.enable-remote-write-receiver'
+    ports:
+      - '45247:9090'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -O- -q http://localhost:9090/-/ready || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    volumes:
+      - './otel-collector-config.yaml:/etc/otel/config.yaml:ro'
+    command: ['--config=/etc/otel/config.yaml']
+    ports:
+      - '45573:4317'
+      - '45574:4318'
+      - '45591:13133'
+    depends_on:
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', '/otelcol-contrib', '--version']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:10.4.1
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - './grafana/provisioning:/etc/grafana/provisioning:ro'
+    ports:
+      - '46379:3000'
+    depends_on:
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -O- -q http://localhost:3000/api/health || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ready:
+    image: busybox:1.37
+    command: ['tail', '-f', '/dev/null']
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+    profiles:
+      - ready
+
+volumes:
+  loki-data:
+  tempo-data:
+  prometheus-data:
+  grafana-data:
