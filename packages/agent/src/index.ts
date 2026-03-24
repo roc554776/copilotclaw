@@ -1,24 +1,32 @@
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
-import { randomNumberTool } from "./tools/random-number.js";
+import { createChannelTools } from "./tools/channel.js";
+
+const GATEWAY_URL = `http://localhost:19741`;
+const MAX_TURNS = 1000;
 
 async function main(): Promise<void> {
   const client = new CopilotClient();
 
   try {
+    const { receiveFirstInput, replyAndReceiveInput } = createChannelTools({
+      gatewayBaseUrl: GATEWAY_URL,
+    });
+
     const session = await client.createSession({
       model: "gpt-4.1",
       onPermissionRequest: approveAll,
-      tools: [randomNumberTool],
+      tools: [receiveFirstInput, replyAndReceiveInput],
     });
 
     await runSessionLoop({
       session: adaptCopilotSession(session),
       initialPrompt:
-        'Use the random_number tool with min=1 and max=100, then say "hello, random value: <value>" where <value> is the result. Respond in one sentence.',
-      continueProbability: 0.8,
-      maxRetries: 20,
+        "Call the copilotclaw_receive_first_input tool now to receive the first user input.",
+      continuePrompt:
+        "Call the copilotclaw_reply_and_receive_input tool to reply to the user and receive the next input. Do NOT stop without calling this tool.",
+      maxTurns: MAX_TURNS,
       onMessage: (content) => { console.log(content); },
       log: (message) => { console.error(`[agent] ${message}`); },
     });

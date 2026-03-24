@@ -19,54 +19,36 @@ function createMockSession(): SessionLike & { callbacks: SessionLoopCallbacks | 
 }
 
 describe("runSessionLoop", () => {
-  it("sends initial prompt and stops when random >= continueProbability", async () => {
+  it("sends initial prompt and continue prompt on each idle", async () => {
     const session = createMockSession();
     const result = await runSessionLoop({
       session,
-      initialPrompt: "hello",
-      continueProbability: 0.8,
-      maxRetries: 20,
-      random: () => 1.0,
+      initialPrompt: "init",
+      continuePrompt: "continue",
+      maxTurns: 3,
     });
 
-    expect(session.sendCalls[0]?.prompt).toBe("hello");
-    expect(result.helloCount).toBe(1);
-  });
-
-  it("blocks stop and sends follow-up with random_number tool prompt", async () => {
-    const session = createMockSession();
-    let callCount = 0;
-    const result = await runSessionLoop({
-      session,
-      initialPrompt: "start",
-      continueProbability: 0.8,
-      maxRetries: 20,
-      random: () => {
-        callCount++;
-        return callCount <= 3 ? 0.5 : 0.9;
-      },
-    });
-
-    expect(result.helloCount).toBe(4);
-    expect(session.sendCalls).toHaveLength(4);
+    expect(session.sendCalls[0]?.prompt).toBe("init");
+    expect(session.sendCalls[1]?.prompt).toBe("continue");
     expect(session.sendCalls[1]?.mode).toBe("enqueue");
-    expect(session.sendCalls[1]?.prompt).toContain("hello 1");
-    expect(session.sendCalls[1]?.prompt).toContain("random_number");
-    expect(session.sendCalls[2]?.prompt).toContain("hello 2");
-    expect(session.sendCalls[3]?.prompt).toContain("hello 3");
+    expect(session.sendCalls[2]?.prompt).toBe("continue");
+    expect(session.sendCalls[3]?.prompt).toBe("continue");
+    // 4th idle exceeds maxTurns=3, stops
+    expect(result.turnCount).toBe(4);
   });
 
-  it("stops at maxRetries even if random always continues", async () => {
+  it("stops at maxTurns", async () => {
     const session = createMockSession();
     const result = await runSessionLoop({
       session,
-      initialPrompt: "start",
-      continueProbability: 0.8,
-      maxRetries: 3,
-      random: () => 0,
+      initialPrompt: "init",
+      continuePrompt: "continue",
+      maxTurns: 1,
     });
 
-    expect(result.helloCount).toBe(4);
+    // turn 1: idle after init -> send continue
+    // turn 2: idle after continue -> exceeds maxTurns=1
+    expect(result.turnCount).toBe(2);
   });
 
   it("delivers assistant messages via onMessage callback", async () => {
@@ -82,10 +64,9 @@ describe("runSessionLoop", () => {
 
     await runSessionLoop({
       session,
-      initialPrompt: "hello",
-      continueProbability: 0,
-      maxRetries: 20,
-      random: () => 1.0,
+      initialPrompt: "init",
+      continuePrompt: "continue",
+      maxTurns: 1,
       onMessage: (content) => { messages.push(content); },
     });
 
@@ -103,9 +84,9 @@ describe("runSessionLoop", () => {
     await expect(
       runSessionLoop({
         session,
-        initialPrompt: "hello",
-        continueProbability: 0.8,
-        maxRetries: 20,
+        initialPrompt: "init",
+        continuePrompt: "continue",
+        maxTurns: 10,
       }),
     ).rejects.toThrow("something broke");
   });
@@ -122,9 +103,9 @@ describe("runSessionLoop", () => {
 
     await runSessionLoop({
       session,
-      initialPrompt: "hello",
-      continueProbability: 0.8,
-      maxRetries: 20,
+      initialPrompt: "init",
+      continuePrompt: "continue",
+      maxTurns: 10,
     }).catch(() => {});
 
     expect(disconnectSpy).toHaveBeenCalled();
@@ -137,10 +118,9 @@ describe("runSessionLoop", () => {
 
     await runSessionLoop({
       session,
-      initialPrompt: "hello",
-      continueProbability: 0,
-      maxRetries: 20,
-      random: () => 1.0,
+      initialPrompt: "init",
+      continuePrompt: "continue",
+      maxTurns: 0,
       log: (msg) => { logs.push(msg); },
     });
 
