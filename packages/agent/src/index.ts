@@ -3,15 +3,22 @@ import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
 import { createChannelTools } from "./tools/channel.js";
 
-const GATEWAY_URL = `http://localhost:19741`;
+const GATEWAY_URL = process.env["COPILOTCLAW_GATEWAY_URL"] ?? "http://localhost:19741";
+const CHANNEL_ID = process.env["COPILOTCLAW_CHANNEL_ID"];
 const MAX_TURNS = 1000;
 
 async function main(): Promise<void> {
+  if (CHANNEL_ID === undefined) {
+    console.error("Error: COPILOTCLAW_CHANNEL_ID environment variable is required");
+    process.exit(1);
+  }
+
   const client = new CopilotClient();
 
   try {
     const { receiveFirstInput, replyAndReceiveInput } = createChannelTools({
       gatewayBaseUrl: GATEWAY_URL,
+      channelId: CHANNEL_ID,
     });
 
     const session = await client.createSession({

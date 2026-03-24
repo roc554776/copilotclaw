@@ -6,6 +6,7 @@ const REPLY_INSTRUCTION = `\n\n[SYSTEM] You MUST use the ${REPLY_TOOL_NAME} tool
 
 export interface ChannelToolDeps {
   gatewayBaseUrl: string;
+  channelId: string;
   pollIntervalMs?: number;
   fetch?: typeof globalThis.fetch;
 }
@@ -15,23 +16,28 @@ interface NextInputResponse {
   message: string;
 }
 
-async function pollNextInput(deps: ChannelToolDeps): Promise<NextInputResponse> {
+async function pollNextInputs(deps: ChannelToolDeps): Promise<NextInputResponse[]> {
   const fetchFn = deps.fetch ?? globalThis.fetch;
   const interval = deps.pollIntervalMs ?? 5000;
 
   for (;;) {
-    const res = await fetchFn(`${deps.gatewayBaseUrl}/api/inputs/next`, { method: "POST" });
+    const res = await fetchFn(`${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/inputs/next`, { method: "POST" });
     if (res.status === 200) {
-      const data = await res.json() as NextInputResponse;
+      const data = await res.json() as NextInputResponse[];
       return data;
     }
     await new Promise((r) => { setTimeout(r, interval); });
   }
 }
 
+function combineMessages(inputs: NextInputResponse[]): { lastInputId: string; combined: string } {
+  const combined = inputs.map((i) => i.message).join("\n\n");
+  return { lastInputId: inputs[inputs.length - 1]!.id, combined };
+}
+
 async function postReply(deps: ChannelToolDeps, inputId: string, message: string): Promise<void> {
   const fetchFn = deps.fetch ?? globalThis.fetch;
-  await fetchFn(`${deps.gatewayBaseUrl}/api/replies`, {
+  await fetchFn(`${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/replies`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ inputId, message }),
@@ -49,9 +55,10 @@ export function createChannelTools(deps: ChannelToolDeps) {
       required: [],
     },
     handler: async () => {
-      const input = await pollNextInput(deps);
-      currentInputId = input.id;
-      return { userMessage: input.message + REPLY_INSTRUCTION };
+      const inputs = await pollNextInputs(deps);
+      const { lastInputId, combined } = combineMessages(inputs);
+      currentInputId = lastInputId;
+      return { userMessage: combined + REPLY_INSTRUCTION };
     },
     skipPermission: true,
   });
@@ -69,9 +76,10 @@ export function createChannelTools(deps: ChannelToolDeps) {
       if (currentInputId !== undefined) {
         await postReply(deps, currentInputId, args.message);
       }
-      const input = await pollNextInput(deps);
-      currentInputId = input.id;
-      return { userMessage: input.message + REPLY_INSTRUCTION };
+      const inputs = await pollNextInputs(deps);
+      const { lastInputId, combined } = combineMessages(inputs);
+      currentInputId = lastInputId;
+      return { userMessage: combined + REPLY_INSTRUCTION };
     },
     skipPermission: true,
   });

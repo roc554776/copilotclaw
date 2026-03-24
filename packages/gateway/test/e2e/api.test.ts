@@ -4,10 +4,14 @@ import { Store } from "../../src/store.js";
 
 let handle: ServerHandle;
 let baseUrl: string;
+let defaultChannelId: string;
 
 beforeAll(async () => {
-  handle = await startServer({ port: 0, store: new Store() });
+  handle = await startServer({ port: 0, store: new Store(), agentManager: null });
   baseUrl = `http://localhost:${handle.port}`;
+  // Get the default channel created on startup
+  const channels = await (await fetch(`${baseUrl}/api/channels`)).json() as Array<{ id: string }>;
+  defaultChannelId = channels[0]!.id;
 });
 
 afterAll(async () => {
@@ -22,80 +26,116 @@ describe("GET /healthz", () => {
   });
 });
 
-describe("POST /api/inputs", () => {
-  it("creates an input and returns it with id", async () => {
-    const res = await fetch(`${baseUrl}/api/inputs`, {
+describe("GET /api/channels", () => {
+  it("returns the default channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels`);
+    expect(res.status).toBe(200);
+    const channels = await res.json() as Array<{ id: string }>;
+    expect(channels).toHaveLength(1);
+    expect(channels[0]!.id).toBe(defaultChannelId);
+  });
+});
+
+describe("POST /api/channels", () => {
+  it("creates a new channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
+    expect(res.status).toBe(201);
+    const ch = await res.json() as { id: string; createdAt: string };
+    expect(ch.id).toBeTruthy();
+    expect(ch.id).not.toBe(defaultChannelId);
+  });
+});
+
+describe("POST /api/channels/:channelId/inputs", () => {
+  it("creates an input in the channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/inputs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "test input" }),
     });
     expect(res.status).toBe(201);
-    const body = await res.json() as { id: string; message: string };
+    const body = await res.json() as { id: string; channelId: string; message: string };
     expect(body.id).toBeTruthy();
+    expect(body.channelId).toBe(defaultChannelId);
     expect(body.message).toBe("test input");
   });
 
   it("returns 400 when message is missing", async () => {
-    const res = await fetch(`${baseUrl}/api/inputs`, {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/inputs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
     expect(res.status).toBe(400);
   });
+
+  it("returns 404 for non-existent channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/nonexistent/inputs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "hello" }),
+    });
+    expect(res.status).toBe(404);
+  });
 });
 
-describe("POST /api/inputs/next", () => {
+describe("POST /api/channels/:channelId/inputs/next", () => {
   it("returns 204 when queue is empty", async () => {
-    const freshHandle = await startServer({ port: 0, store: new Store() });
-    const res = await fetch(`http://localhost:${freshHandle.port}/api/inputs/next`, {
-      method: "POST",
-    });
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const channels = await (await fetch(`http://localhost:${freshHandle.port}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+    const res = await fetch(`http://localhost:${freshHandle.port}/api/channels/${chId}/inputs/next`, { method: "POST" });
     expect(res.status).toBe(204);
     await freshHandle.close();
   });
 
-  it("dequeues input in FIFO order", async () => {
-    const freshHandle = await startServer({ port: 0, store: new Store() });
+  it("drains all queued inputs at once", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
     const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
 
-    await fetch(`${url}/api/inputs`, {
+    await fetch(`${url}/api/channels/${chId}/inputs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "first" }),
     });
-    await fetch(`${url}/api/inputs`, {
+    await fetch(`${url}/api/channels/${chId}/inputs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "second" }),
     });
 
-    const res1 = await fetch(`${url}/api/inputs/next`, { method: "POST" });
-    expect((await res1.json() as { message: string }).message).toBe("first");
+    const res = await fetch(`${url}/api/channels/${chId}/inputs/next`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const inputs = await res.json() as Array<{ message: string }>;
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]!.message).toBe("first");
+    expect(inputs[1]!.message).toBe("second");
 
-    const res2 = await fetch(`${url}/api/inputs/next`, { method: "POST" });
-    expect((await res2.json() as { message: string }).message).toBe("second");
-
-    const res3 = await fetch(`${url}/api/inputs/next`, { method: "POST" });
-    expect(res3.status).toBe(204);
+    // Queue is now empty
+    const res2 = await fetch(`${url}/api/channels/${chId}/inputs/next`, { method: "POST" });
+    expect(res2.status).toBe(204);
 
     await freshHandle.close();
   });
 });
 
-describe("POST /api/replies", () => {
+describe("POST /api/channels/:channelId/replies", () => {
   it("attaches a reply to an input", async () => {
-    const freshHandle = await startServer({ port: 0, store: new Store() });
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
     const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
 
-    const inputRes = await fetch(`${url}/api/inputs`, {
+    const inputRes = await fetch(`${url}/api/channels/${chId}/inputs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: "question" }),
     });
     const { id } = await inputRes.json() as { id: string };
 
-    const replyRes = await fetch(`${url}/api/replies`, {
+    const replyRes = await fetch(`${url}/api/channels/${chId}/replies`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ inputId: id, message: "answer" }),
@@ -107,32 +147,13 @@ describe("POST /api/replies", () => {
     await freshHandle.close();
   });
 
-  it("returns 404 for unknown input id", async () => {
-    const res = await fetch(`${baseUrl}/api/replies`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ inputId: "nonexistent", message: "reply" }),
-    });
-    expect(res.status).toBe(404);
-  });
-
   it("returns 400 when fields are missing", async () => {
-    const res = await fetch(`${baseUrl}/api/replies`, {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/replies`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ inputId: "id" }),
     });
     expect(res.status).toBe(400);
-  });
-});
-
-describe("GET /", () => {
-  it("returns HTML dashboard", async () => {
-    const res = await fetch(`${baseUrl}/`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/html");
-    const html = await res.text();
-    expect(html).toContain("copilotclaw");
   });
 });
 
@@ -143,12 +164,23 @@ describe("POST /api/stop", () => {
       port: 0,
       store: new Store(),
       onStop: () => { stopped = true; },
+      agentManager: null,
     });
     const res = await fetch(`http://localhost:${stopHandle.port}/api/stop`, { method: "POST" });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: "stopping" });
     expect(stopped).toBe(true);
     await stopHandle.close();
+  });
+});
+
+describe("GET /", () => {
+  it("returns HTML dashboard", async () => {
+    const res = await fetch(`${baseUrl}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain("copilotclaw");
   });
 });
 

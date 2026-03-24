@@ -1,4 +1,5 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { AgentManager } from "./agent-manager.js";
 import { renderDashboard } from "./dashboard.js";
 import { Store } from "./store.js";
 
@@ -30,63 +31,117 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function createRequestHandler(store: Store, onStop: () => void) {
+function parseChannelRoute(pathname: string): { channelId: string; action: string } | undefined {
+  const match = /^\/api\/channels\/([^/]+)\/(.+)$/.exec(pathname);
+  if (match) return { channelId: match[1]!, action: match[2]! };
+  return undefined;
+}
+
+export interface ServerDeps {
+  port?: number;
+  store?: Store;
+  onStop?: () => void;
+  agentManager?: AgentManager | null;
+}
+
+function createRequestHandler(store: Store, onStop: () => void, agentManager: AgentManager | null) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
+    const fullPathname = url?.split("?")[0] ?? "/";
+    // Parse query string for channel selection in dashboard
+    const queryString = url?.split("?")[1] ?? "";
+    const params = new URLSearchParams(queryString);
 
-    const pathname = url?.split("?")[0];
-
-    if (pathname === "/healthz" && method === "GET") {
+    if (fullPathname === "/healthz" && method === "GET") {
       json(res, 200, { status: "ok" });
       return;
     }
 
-    if (pathname === "/api/stop" && method === "POST") {
+    if (fullPathname === "/api/stop" && method === "POST") {
       json(res, 200, { status: "stopping" });
+      agentManager?.killAll();
       onStop();
       return;
     }
 
-    if (pathname === "/" && method === "GET") {
-      const html = renderDashboard(store.listAll());
+    // Channel management
+    if (fullPathname === "/api/channels" && method === "GET") {
+      json(res, 200, store.listChannels());
+      return;
+    }
+
+    if (fullPathname === "/api/channels" && method === "POST") {
+      const channel = store.createChannel();
+      json(res, 201, channel);
+      return;
+    }
+
+    // Channel-scoped routes: /api/channels/:channelId/:action
+    const route = parseChannelRoute(fullPathname);
+    if (route !== undefined) {
+      const { channelId, action } = route;
+
+      if (store.getChannel(channelId) === undefined) {
+        json(res, 404, { error: "channel not found" });
+        return;
+      }
+
+      if (action === "inputs" && method === "POST") {
+        const body = parseJson(await readBody(req));
+        if (!isRecord(body) || typeof body["message"] !== "string") {
+          json(res, 400, { error: "missing 'message' field" });
+          return;
+        }
+        const input = store.addInput(channelId, body["message"] as string);
+        if (input === undefined) {
+          json(res, 404, { error: "channel not found" });
+          return;
+        }
+        // Auto-spawn agent if none running for this channel
+        if (agentManager !== null && !agentManager.hasAgent(channelId)) {
+          agentManager.spawnAgent(channelId);
+        }
+        json(res, 201, input);
+        return;
+      }
+
+      if (action === "inputs/next" && method === "POST") {
+        const inputs = store.drainInputs(channelId);
+        if (inputs.length === 0) {
+          json(res, 204, null);
+          return;
+        }
+        json(res, 200, inputs);
+        return;
+      }
+
+      if (action === "replies" && method === "POST") {
+        const body = parseJson(await readBody(req));
+        if (!isRecord(body) || typeof body["inputId"] !== "string" || typeof body["message"] !== "string") {
+          json(res, 400, { error: "missing 'inputId' or 'message' field" });
+          return;
+        }
+        const updated = store.addReply(body["inputId"] as string, body["message"] as string);
+        if (updated === undefined) {
+          json(res, 404, { error: "input not found" });
+          return;
+        }
+        json(res, 200, updated);
+        return;
+      }
+
+      json(res, 404, { error: "unknown channel action" });
+      return;
+    }
+
+    // Dashboard
+    if (fullPathname === "/" && method === "GET") {
+      const channels = store.listChannels();
+      const selectedChannelId = params.get("channel") ?? channels[0]?.id;
+      const inputs = selectedChannelId !== undefined ? store.listInputs(selectedChannelId) : [];
+      const html = renderDashboard(channels, inputs, selectedChannelId);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
-      return;
-    }
-
-    if (pathname === "/api/inputs" && method === "POST") {
-      const body = parseJson(await readBody(req));
-      if (!isRecord(body) || typeof body["message"] !== "string") {
-        json(res, 400, { error: "missing 'message' field" });
-        return;
-      }
-      const input = store.addInput(body["message"] as string);
-      json(res, 201, input);
-      return;
-    }
-
-    if (pathname === "/api/inputs/next" && method === "POST") {
-      const input = store.findNextInput();
-      if (input === undefined) {
-        json(res, 204, null);
-        return;
-      }
-      json(res, 200, input);
-      return;
-    }
-
-    if (pathname === "/api/replies" && method === "POST") {
-      const body = parseJson(await readBody(req));
-      if (!isRecord(body) || typeof body["inputId"] !== "string" || typeof body["message"] !== "string") {
-        json(res, 400, { error: "missing 'inputId' or 'message' field" });
-        return;
-      }
-      const updated = store.addReply(body["inputId"] as string, body["message"] as string);
-      if (updated === undefined) {
-        json(res, 404, { error: "input not found" });
-        return;
-      }
-      json(res, 200, updated);
       return;
     }
 
@@ -101,11 +156,20 @@ export interface ServerHandle {
   close: () => Promise<void>;
 }
 
-export function startServer(options?: { port?: number; store?: Store; onStop?: () => void }): Promise<ServerHandle> {
+export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const port = options?.port ?? DEFAULT_PORT;
   const store = options?.store ?? new Store();
   const onStop = options?.onStop ?? (() => { process.exit(0); });
-  const handleRequest = createRequestHandler(store, onStop);
+  // agentManager: null means no agent spawning (for tests), undefined means create default
+  const agentManager = options?.agentManager === null
+    ? null
+    : options?.agentManager ?? new AgentManager({ gatewayPort: port });
+  const handleRequest = createRequestHandler(store, onStop, agentManager);
+
+  // Create default channel on startup
+  if (store.listChannels().length === 0) {
+    store.createChannel();
+  }
 
   return new Promise((resolve) => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -126,6 +190,7 @@ export function startServer(options?: { port?: number; store?: Store; onStop?: (
         port: actualPort,
         store,
         close: () => new Promise<void>((res, rej) => {
+          agentManager?.killAll();
           server.close((err) => { err ? rej(err) : res(); });
         }),
       });

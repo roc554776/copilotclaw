@@ -1,4 +1,4 @@
-import type { UserInput } from "./store.js";
+import type { Channel, UserInput } from "./store.js";
 
 function escapeHtml(text: string): string {
   return text
@@ -19,8 +19,17 @@ function renderMessage(input: UserInput): string {
   return userBubble + agentBubble;
 }
 
-export function renderDashboard(inputs: UserInput[]): string {
+function renderTab(channel: Channel, isActive: boolean): string {
+  const cls = isActive ? "tab active" : "tab";
+  const label = channel.id.slice(0, 8);
+  return `<a class="${cls}" href="/?channel=${escapeHtml(channel.id)}">${escapeHtml(label)}</a>`;
+}
+
+export function renderDashboard(channels: Channel[], inputs: UserInput[], activeChannelId: string | undefined): string {
   const messages = inputs.map(renderMessage).join("\n");
+  const tabs = channels.map((ch) => renderTab(ch, ch.id === activeChannelId)).join("\n");
+  const channelId = activeChannelId ?? "";
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -29,6 +38,12 @@ export function renderDashboard(inputs: UserInput[]): string {
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #0d1117; color: #c9d1d9; height: 100vh; display: flex; flex-direction: column; }
+    #tabs { display: flex; gap: 0.25rem; padding: 0.5rem 1rem 0; background: #161b22; border-bottom: 1px solid #30363d; align-items: center; }
+    .tab { padding: 0.4rem 0.75rem; border-radius: 0.4rem 0.4rem 0 0; background: #0d1117; color: #8b949e; text-decoration: none; font-size: 0.85rem; }
+    .tab.active { background: #0d1117; color: #58a6ff; border: 1px solid #30363d; border-bottom: 1px solid #0d1117; margin-bottom: -1px; }
+    .tab:hover { color: #c9d1d9; }
+    #new-tab { padding: 0.4rem 0.6rem; background: none; border: 1px dashed #30363d; border-radius: 0.4rem; color: #8b949e; cursor: pointer; font-size: 0.85rem; }
+    #new-tab:hover { color: #c9d1d9; border-color: #58a6ff; }
     #chat { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
     .msg { display: flex; flex-direction: column; max-width: 70%; }
     .msg.user { align-self: flex-end; align-items: flex-end; }
@@ -39,7 +54,7 @@ export function renderDashboard(inputs: UserInput[]): string {
     .pending { color: #8b949e; font-style: italic; }
     .time { font-size: 0.7rem; color: #484f58; margin-top: 0.2rem; }
     #input-area { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid #30363d; background: #161b22; }
-    #input-area textarea { flex: 1; padding: 0.5rem 0.75rem; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 0.5rem; font-family: inherit; font-size: 0.9rem; resize: none; rows: 1; }
+    #input-area textarea { flex: 1; padding: 0.5rem 0.75rem; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 0.5rem; font-family: inherit; font-size: 0.9rem; resize: none; }
     #input-area textarea:focus { outline: none; border-color: #58a6ff; }
     #input-area button { padding: 0.5rem 1.25rem; background: #238636; color: #fff; border: none; border-radius: 0.5rem; cursor: pointer; font-size: 0.9rem; }
     #input-area button:hover { background: #2ea043; }
@@ -48,6 +63,10 @@ export function renderDashboard(inputs: UserInput[]): string {
   </style>
 </head>
 <body>
+  <div id="tabs">
+    ${tabs}
+    <button id="new-tab">+</button>
+  </div>
   <div id="chat">
     ${messages || '<div class="empty">Send a message to start the conversation.</div>'}
   </div>
@@ -56,17 +75,19 @@ export function renderDashboard(inputs: UserInput[]): string {
     <button id="send">Send</button>
   </div>
   <script>
+    const CHANNEL_ID = "${escapeHtml(channelId)}";
     const chat = document.getElementById("chat");
     const msgInput = document.getElementById("msg");
     const sendBtn = document.getElementById("send");
+    const newTabBtn = document.getElementById("new-tab");
 
     async function sendMessage() {
       const text = msgInput.value.trim();
-      if (!text) return;
+      if (!text || !CHANNEL_ID) return;
       sendBtn.disabled = true;
       msgInput.value = "";
       try {
-        await fetch("/api/inputs", {
+        await fetch("/api/channels/" + CHANNEL_ID + "/inputs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: text }),
@@ -79,7 +100,7 @@ export function renderDashboard(inputs: UserInput[]): string {
     }
 
     async function refreshChat() {
-      const res = await fetch("/");
+      const res = await fetch("/?channel=" + CHANNEL_ID);
       if (!res.ok) return;
       const html = await res.text();
       const parser = new DOMParser();
@@ -91,6 +112,13 @@ export function renderDashboard(inputs: UserInput[]): string {
       }
     }
 
+    async function createChannel() {
+      const res = await fetch("/api/channels", { method: "POST" });
+      if (!res.ok) return;
+      const ch = await res.json();
+      window.location.href = "/?channel=" + ch.id;
+    }
+
     sendBtn.addEventListener("click", sendMessage);
     msgInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -98,6 +126,7 @@ export function renderDashboard(inputs: UserInput[]): string {
         sendMessage();
       }
     });
+    newTabBtn.addEventListener("click", createChannel);
 
     setInterval(refreshChat, 2000);
     chat.scrollTop = chat.scrollHeight;

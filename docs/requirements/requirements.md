@@ -37,13 +37,18 @@ VSCode のように、単一の常駐プロセス（gateway）がシステム全
 - 起動コマンドは冪等であること: 既に起動済みなら何もしない、ポートが塞がっているが healthy でなければリトライ後タイムアウト
 - CLI で gateway を起動すると、サーバープロセスはバックグラウンドにデタッチされ、CLI 自体は即座に終了すること
 
-### Req: Channel（Gateway 経由の Agent-User 対話）
+### Req: Multi-Channel（Gateway 経由の Agent-User 対話）
 
-Agent と human が gateway を介して対話する仕組み（channel）を提供する。
+Agent と human が gateway を介して対話する仕組み（channel）を提供する。複数の channel を並行して運用できる。
 
-- Agent は gateway の API を通じて user input を受け取り、reply を返す
+- 各 channel は固有の channel ID を持ち、独立した input queue と会話履歴を持つ
+- Agent は channel ID に紐付き、gateway の API を通じてその channel の user input を受け取り reply を返す
 - Agent は session が idle になっても自動的に停止せず、常に次の user input を待ち続ける
 - カスタムツール名は `copilotclaw_` プレフィクスで統一する
+- channel に未処理の user input があり、対応する agent がなければ gateway が agent を子プロセスとして自動起動する
+- 同一 channel に未処理の user input が複数ある場合、agent は一括で取得する
+- Gateway 起動時にデフォルト channel を 1 つ作成する
+- Dashboard は複数タブで複数 channel を扱えるインターフェースとする
 
 ### Req: 自動テストの義務化
 
