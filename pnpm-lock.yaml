@@ -21,6 +21,15 @@ importers:
         specifier: ^6.0.2
         version: 6.0.2
 
+  packages/gateway:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.15
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.2
+
 packages:
 
   '@github/copilot-darwin-arm64@1.0.11':
