@@ -36,6 +36,18 @@ VSCode のように、単一の常駐プロセス（gateway）がシステム全
 - dashboard ページで user input と reply のペアを一覧表示する
 - 起動コマンドは冪等であること: 既に起動済みなら何もしない、ポートが塞がっているが healthy でなければリトライ後タイムアウト
 
+### Req: 自動テストの義務化
+
+すべての実装には自動テストが伴わなければならない。テストのない実装のみの PR はマージしない。
+
+- unit / integration / E2E の各レイヤーを整備する
+- unit: 外部依存なし。純粋なロジックのテスト
+- integration: DB など外部リソースへの依存を含むテスト
+- E2E: 実際にサーバーを起動してエンドポイントや UI を検証するテスト
+- GitHub Copilot は E2E であっても mock を使う（認証要件と BAN リスクのため）
+- フロントエンドの E2E には Playwright を使用する
+- E2E 環境は本番環境と完全に分離する（専用ポート、専用ビルドディレクトリ等）
+
 ## スコープ外（現時点）
 
 - GUI / Web UI の提供（CLI が主体）
@@ -52,4 +64,5 @@ VSCode のように、単一の常駐プロセス（gateway）がシステム全
 - Observability スタック（OTEL テレメトリ収集・可視化）は構築済みで、動作検証が完了している
 - GitHub Copilot Hooks によるイベントログ記録の仕組みが導入済み
 - Copilot SDK を用いた Agent の hello world 実装が完了（session idle loop による停止制御を含む）
-- Gateway プロセスの設計・実装はこれからである
+- Gateway サーバーの実装が完了（インメモリ Store、API エンドポイント、dashboard、冪等起動）
+- 自動テスト基盤の整備はこれからである

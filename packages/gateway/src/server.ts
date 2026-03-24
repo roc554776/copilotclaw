@@ -1,10 +1,8 @@
-import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
+import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { renderDashboard } from "./dashboard.js";
 import { Store } from "./store.js";
 
-export const PORT = 19741;
-
-const store = new Store();
+export const DEFAULT_PORT = 19741;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -32,61 +30,74 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const { method, url } = req;
+function createRequestHandler(store: Store) {
+  return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const { method, url } = req;
 
-  if (url === "/healthz" && method === "GET") {
-    json(res, 200, { status: "ok" });
-    return;
-  }
-
-  if (url === "/" && method === "GET") {
-    const html = renderDashboard(store.listAll());
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(html);
-    return;
-  }
-
-  if (url === "/api/inputs" && method === "POST") {
-    const body = parseJson(await readBody(req));
-    if (!isRecord(body) || typeof body["message"] !== "string") {
-      json(res, 400, { error: "missing 'message' field" });
+    if (url === "/healthz" && method === "GET") {
+      json(res, 200, { status: "ok" });
       return;
     }
-    const input = store.addInput(body["message"] as string);
-    json(res, 201, input);
-    return;
-  }
 
-  if (url === "/api/inputs/next" && method === "POST") {
-    const input = store.findNextInput();
-    if (input === undefined) {
-      json(res, 204, null);
+    if (url === "/" && method === "GET") {
+      const html = renderDashboard(store.listAll());
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
       return;
     }
-    json(res, 200, input);
-    return;
-  }
 
-  if (url === "/api/replies" && method === "POST") {
-    const body = parseJson(await readBody(req));
-    if (!isRecord(body) || typeof body["inputId"] !== "string" || typeof body["message"] !== "string") {
-      json(res, 400, { error: "missing 'inputId' or 'message' field" });
+    if (url === "/api/inputs" && method === "POST") {
+      const body = parseJson(await readBody(req));
+      if (!isRecord(body) || typeof body["message"] !== "string") {
+        json(res, 400, { error: "missing 'message' field" });
+        return;
+      }
+      const input = store.addInput(body["message"] as string);
+      json(res, 201, input);
       return;
     }
-    const updated = store.addReply(body["inputId"] as string, body["message"] as string);
-    if (updated === undefined) {
-      json(res, 404, { error: "input not found" });
+
+    if (url === "/api/inputs/next" && method === "POST") {
+      const input = store.findNextInput();
+      if (input === undefined) {
+        json(res, 204, null);
+        return;
+      }
+      json(res, 200, input);
       return;
     }
-    json(res, 200, updated);
-    return;
-  }
 
-  json(res, 404, { error: "not found" });
+    if (url === "/api/replies" && method === "POST") {
+      const body = parseJson(await readBody(req));
+      if (!isRecord(body) || typeof body["inputId"] !== "string" || typeof body["message"] !== "string") {
+        json(res, 400, { error: "missing 'inputId' or 'message' field" });
+        return;
+      }
+      const updated = store.addReply(body["inputId"] as string, body["message"] as string);
+      if (updated === undefined) {
+        json(res, 404, { error: "input not found" });
+        return;
+      }
+      json(res, 200, updated);
+      return;
+    }
+
+    json(res, 404, { error: "not found" });
+  };
 }
 
-export function startServer(): Promise<void> {
+export interface ServerHandle {
+  server: Server;
+  port: number;
+  store: Store;
+  close: () => Promise<void>;
+}
+
+export function startServer(options?: { port?: number; store?: Store }): Promise<ServerHandle> {
+  const port = options?.port ?? DEFAULT_PORT;
+  const store = options?.store ?? new Store();
+  const handleRequest = createRequestHandler(store);
+
   return new Promise((resolve) => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       handleRequest(req, res).catch((err: unknown) => {
@@ -96,9 +107,19 @@ export function startServer(): Promise<void> {
         }
       });
     });
-    server.listen(PORT, () => {
-      console.error(`[gateway] listening on http://localhost:${PORT}`);
-      resolve();
+
+    server.listen(port, () => {
+      const addr = server.address();
+      const actualPort = typeof addr === "object" && addr !== null ? addr.port : port;
+      console.error(`[gateway] listening on http://localhost:${actualPort}`);
+      resolve({
+        server,
+        port: actualPort,
+        store,
+        close: () => new Promise<void>((res, rej) => {
+          server.close((err) => { err ? rej(err) : res(); });
+        }),
+      });
     });
   });
 }
