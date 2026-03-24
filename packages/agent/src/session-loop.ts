@@ -13,25 +13,23 @@ export interface SessionLike {
 export interface SessionLoopOptions {
   session: SessionLike;
   initialPrompt: string;
-  continueProbability: number;
-  maxRetries: number;
-  random?: () => number;
+  continuePrompt: string;
+  maxTurns: number;
   onMessage?: (content: string) => void;
   log?: (message: string) => void;
 }
 
-export async function runSessionLoop(options: SessionLoopOptions): Promise<{ helloCount: number }> {
+export async function runSessionLoop(options: SessionLoopOptions): Promise<{ turnCount: number }> {
   const {
     session,
     initialPrompt,
-    continueProbability,
-    maxRetries,
-    random = Math.random,
+    continuePrompt,
+    maxTurns,
     onMessage = () => {},
     log = () => {},
   } = options;
 
-  let helloCount = 0;
+  let turnCount = 0;
 
   try {
     const done = new Promise<void>((resolve, reject) => {
@@ -53,29 +51,24 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<{ hel
         onIdle: () => {
           if (settled) return;
 
-          helloCount++;
-          if (helloCount > maxRetries) {
-            log(`reached max retries (${maxRetries}), stopping`);
+          turnCount++;
+          if (turnCount > maxTurns) {
+            log(`reached max turns (${maxTurns}), stopping`);
             settle(() => { resolve(); });
             return;
           }
 
-          if (random() < continueProbability) {
-            log(`blocked stop (hello #${helloCount})`);
-            session
-              .send({
-                prompt: `Say "hello ${helloCount}" and then say you are about to stop.`,
-                mode: "enqueue",
-              })
-              .catch((err: unknown) => {
-                settle(() => {
-                  reject(err instanceof Error ? err : new Error(String(err)));
-                });
+          log(`turn #${turnCount}, sending continue prompt`);
+          session
+            .send({
+              prompt: continuePrompt,
+              mode: "enqueue",
+            })
+            .catch((err: unknown) => {
+              settle(() => {
+                reject(err instanceof Error ? err : new Error(String(err)));
               });
-          } else {
-            log(`allowing stop (after ${helloCount} extra hellos)`);
-            settle(() => { resolve(); });
-          }
+            });
         },
       });
     });
@@ -90,5 +83,5 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<{ hel
     }
   }
 
-  return { helloCount };
+  return { turnCount };
 }

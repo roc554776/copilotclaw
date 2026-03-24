@@ -1,4 +1,4 @@
-import type { UserInput } from "./store.js";
+import type { Channel, UserInput } from "./store.js";
 
 function escapeHtml(text: string): string {
   return text
@@ -8,46 +8,129 @@ function escapeHtml(text: string): string {
     .replaceAll('"', "&quot;");
 }
 
-function renderRow(input: UserInput): string {
-  const reply = input.reply
-    ? `<td>${escapeHtml(input.reply.message)}</td><td>${escapeHtml(input.reply.createdAt)}</td>`
-    : `<td class="pending">waiting…</td><td></td>`;
-  return `<tr>
-    <td>${escapeHtml(input.id)}</td>
-    <td>${escapeHtml(input.message)}</td>
-    <td>${escapeHtml(input.createdAt)}</td>
-    ${reply}
-  </tr>`;
+function renderMessage(input: UserInput): string {
+  const userBubble = `<div class="msg user"><div class="bubble user-bubble">${escapeHtml(input.message)}</div><div class="time">${escapeHtml(input.createdAt)}</div></div>`;
+
+  if (input.reply === undefined) {
+    return userBubble + `<div class="msg agent"><div class="bubble agent-bubble pending">thinking…</div></div>`;
+  }
+
+  const agentBubble = `<div class="msg agent"><div class="bubble agent-bubble">${escapeHtml(input.reply.message)}</div><div class="time">${escapeHtml(input.reply.createdAt)}</div></div>`;
+  return userBubble + agentBubble;
 }
 
-export function renderDashboard(inputs: UserInput[]): string {
-  const rows = inputs.map(renderRow).join("\n");
+function renderTab(channel: Channel, isActive: boolean): string {
+  const cls = isActive ? "tab active" : "tab";
+  const label = channel.id.slice(0, 8);
+  return `<a class="${cls}" href="/?channel=${escapeHtml(channel.id)}">${escapeHtml(label)}</a>`;
+}
+
+export function renderDashboard(channels: Channel[], inputs: UserInput[], activeChannelId: string | undefined): string {
+  const messages = inputs.map(renderMessage).join("\n");
+  const tabs = channels.map((ch) => renderTab(ch, ch.id === activeChannelId)).join("\n");
+  const channelId = activeChannelId ?? "";
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>copilotclaw gateway</title>
+  <title>copilotclaw</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 2rem; background: #0d1117; color: #c9d1d9; }
-    h1 { color: #58a6ff; }
-    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-    th, td { border: 1px solid #30363d; padding: 0.5rem 0.75rem; text-align: left; }
-    th { background: #161b22; color: #8b949e; }
-    tr:hover { background: #161b22; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0d1117; color: #c9d1d9; height: 100vh; display: flex; flex-direction: column; }
+    #tabs { display: flex; gap: 0.25rem; padding: 0.5rem 1rem 0; background: #161b22; border-bottom: 1px solid #30363d; align-items: center; }
+    .tab { padding: 0.4rem 0.75rem; border-radius: 0.4rem 0.4rem 0 0; background: #0d1117; color: #8b949e; text-decoration: none; font-size: 0.85rem; }
+    .tab.active { background: #0d1117; color: #58a6ff; border: 1px solid #30363d; border-bottom: 1px solid #0d1117; margin-bottom: -1px; }
+    .tab:hover { color: #c9d1d9; }
+    #new-tab { padding: 0.4rem 0.6rem; background: none; border: 1px dashed #30363d; border-radius: 0.4rem; color: #8b949e; cursor: pointer; font-size: 0.85rem; }
+    #new-tab:hover { color: #c9d1d9; border-color: #58a6ff; }
+    #chat { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+    .msg { display: flex; flex-direction: column; max-width: 70%; }
+    .msg.user { align-self: flex-end; align-items: flex-end; }
+    .msg.agent { align-self: flex-start; align-items: flex-start; }
+    .bubble { padding: 0.6rem 1rem; border-radius: 1rem; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+    .user-bubble { background: #238636; color: #fff; border-bottom-right-radius: 0.25rem; }
+    .agent-bubble { background: #21262d; color: #c9d1d9; border-bottom-left-radius: 0.25rem; }
     .pending { color: #8b949e; font-style: italic; }
-    code { background: #161b22; padding: 0.15rem 0.3rem; border-radius: 3px; font-size: 0.85em; }
+    .time { font-size: 0.7rem; color: #484f58; margin-top: 0.2rem; }
+    #input-area { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid #30363d; background: #161b22; }
+    #input-area textarea { flex: 1; padding: 0.5rem 0.75rem; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 0.5rem; font-family: inherit; font-size: 0.9rem; resize: none; }
+    #input-area textarea:focus { outline: none; border-color: #58a6ff; }
+    #input-area button { padding: 0.5rem 1.25rem; background: #238636; color: #fff; border: none; border-radius: 0.5rem; cursor: pointer; font-size: 0.9rem; }
+    #input-area button:hover { background: #2ea043; }
+    #input-area button:disabled { opacity: 0.5; cursor: default; }
+    .empty { color: #484f58; text-align: center; margin-top: 2rem; }
   </style>
 </head>
 <body>
-  <h1>copilotclaw gateway</h1>
-  <table>
-    <thead>
-      <tr><th>ID</th><th>User Input</th><th>Input At</th><th>Reply</th><th>Reply At</th></tr>
-    </thead>
-    <tbody>
-      ${rows || '<tr><td colspan="5" class="pending">No inputs yet</td></tr>'}
-    </tbody>
-  </table>
+  <div id="tabs">
+    ${tabs}
+    <button id="new-tab">+</button>
+  </div>
+  <div id="chat">
+    ${messages || '<div class="empty">Send a message to start the conversation.</div>'}
+  </div>
+  <div id="input-area">
+    <textarea id="msg" placeholder="Type a message…" rows="1"></textarea>
+    <button id="send">Send</button>
+  </div>
+  <script>
+    const CHANNEL_ID = "${escapeHtml(channelId)}";
+    const chat = document.getElementById("chat");
+    const msgInput = document.getElementById("msg");
+    const sendBtn = document.getElementById("send");
+    const newTabBtn = document.getElementById("new-tab");
+
+    async function sendMessage() {
+      const text = msgInput.value.trim();
+      if (!text || !CHANNEL_ID) return;
+      sendBtn.disabled = true;
+      msgInput.value = "";
+      try {
+        await fetch("/api/channels/" + CHANNEL_ID + "/inputs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text }),
+        });
+        await refreshChat();
+      } finally {
+        sendBtn.disabled = false;
+        msgInput.focus();
+      }
+    }
+
+    async function refreshChat() {
+      const res = await fetch("/?channel=" + CHANNEL_ID);
+      if (!res.ok) return;
+      const html = await res.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, "text/html");
+      const newChat = doc.getElementById("chat");
+      if (newChat) {
+        chat.innerHTML = newChat.innerHTML;
+        chat.scrollTop = chat.scrollHeight;
+      }
+    }
+
+    async function createChannel() {
+      const res = await fetch("/api/channels", { method: "POST" });
+      if (!res.ok) return;
+      const ch = await res.json();
+      window.location.href = "/?channel=" + ch.id;
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    msgInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+    newTabBtn.addEventListener("click", createChannel);
+
+    setInterval(refreshChat, 2000);
+    chat.scrollTop = chat.scrollHeight;
+  </script>
 </body>
 </html>`;
 }

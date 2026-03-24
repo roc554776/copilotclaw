@@ -1,4 +1,7 @@
-import { DEFAULT_PORT, startServer } from "./server.js";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { DEFAULT_PORT } from "./server.js";
 
 const HEALTH_RETRY_COUNT = 5;
 const HEALTH_RETRY_INTERVAL_MS = 1000;
@@ -21,6 +24,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
+function spawnDaemon(): void {
+  const thisDir = dirname(fileURLToPath(import.meta.url));
+  const daemonScript = join(thisDir, "daemon.js");
+
+  const child = spawn(process.execPath, [daemonScript], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env },
+  });
+  child.unref();
+}
+
+async function waitForHealthy(): Promise<boolean> {
+  for (let i = 0; i < HEALTH_RETRY_COUNT; i++) {
+    await sleep(HEALTH_RETRY_INTERVAL_MS);
+    const status = await checkHealth();
+    if (status === "healthy") return true;
+  }
+  return false;
+}
+
 async function main(): Promise<void> {
   const initialStatus = await checkHealth();
 
@@ -31,24 +55,23 @@ async function main(): Promise<void> {
 
   if (initialStatus === "unhealthy") {
     log(`port ${DEFAULT_PORT} is occupied but unhealthy, retrying...`);
-    for (let attempt = 0; attempt < HEALTH_RETRY_COUNT; attempt++) {
-      await sleep(HEALTH_RETRY_INTERVAL_MS);
-      const status = await checkHealth();
-      if (status === "healthy") {
-        log("became healthy");
-        return;
-      }
-      if (status === "port-free") {
-        log("port freed, starting server");
-        await startServer();
-        return;
-      }
-      log(`retry ${attempt + 1}/${HEALTH_RETRY_COUNT}...`);
+    if (await waitForHealthy()) {
+      log("became healthy");
+      return;
     }
     throw new Error(`port ${DEFAULT_PORT} is occupied but not healthy after ${HEALTH_RETRY_COUNT} retries`);
   }
 
-  await startServer();
+  log("starting gateway daemon...");
+  spawnDaemon();
+
+  if (await waitForHealthy()) {
+    log(`running on http://localhost:${DEFAULT_PORT}`);
+    log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+    log(`run 'pnpm --filter @copilotclaw/gateway run stop' to shut down`);
+  } else {
+    throw new Error("daemon failed to start");
+  }
 }
 
 main().catch((err: unknown) => {
