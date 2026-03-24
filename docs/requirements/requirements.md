@@ -33,8 +33,16 @@ VSCode のように、単一の常駐プロセス（gateway）がシステム全
 
 - gateway は固定ポートで HTTP サーバーを起動し、多重起動を防止する
 - user input のキューイングと agent の reply の管理を担う
-- dashboard ページで user input と reply のペアを一覧表示する
+- dashboard ページで user input と reply のペアをチャット形式で表示し、ユーザーがメッセージを入力できるインターフェースを提供する
 - 起動コマンドは冪等であること: 既に起動済みなら何もしない、ポートが塞がっているが healthy でなければリトライ後タイムアウト
+
+### Req: Channel（Gateway 経由の Agent-User 対話）
+
+Agent と human が gateway を介して対話する仕組み（channel）を提供する。
+
+- Agent は gateway の API を通じて user input を受け取り、reply を返す
+- Agent は session が idle になっても自動的に停止せず、常に次の user input を待ち続ける
+- カスタムツール名は `copilotclaw_` プレフィクスで統一する
 
 ### Req: 自動テストの義務化
 
@@ -65,5 +73,6 @@ VSCode のように、単一の常駐プロセス（gateway）がシステム全
 - Observability スタック（OTEL テレメトリ収集・可視化）は構築済みで、動作検証が完了している
 - GitHub Copilot Hooks によるイベントログ記録の仕組みが導入済み
 - Copilot SDK を用いた Agent の hello world 実装が完了（session idle loop による停止制御を含む）
-- Gateway サーバーの実装が完了（インメモリ Store、API エンドポイント、dashboard、冪等起動）
-- 自動テスト基盤の整備はこれからである
+- Gateway サーバーの実装が完了（インメモリ Store、API エンドポイント、チャット UI dashboard、冪等起動）
+- 自動テスト基盤の整備が完了（Vitest、mock session による agent テスト含む）
+- Channel 機能の初版が完了（gateway 経由の agent-user 対話）
