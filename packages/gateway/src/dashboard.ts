@@ -79,7 +79,7 @@ export function renderDashboard(inputs: UserInput[]): string {
     }
 
     async function refreshChat() {
-      const res = await fetch("/?_data=1", { headers: { "Accept": "application/json" } });
+      const res = await fetch("/");
       if (!res.ok) return;
       const html = await res.text();
       const parser = new DOMParser();

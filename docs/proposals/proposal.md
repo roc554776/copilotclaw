@@ -70,12 +70,18 @@ agent → [LLM 処理] → copilotclaw_reply_and_receive_input
 
 ### Gateway の起動フロー
 
+VSCode の CLI デタッチ方式（`spawn({ detached: true })` + `child.unref()`）を参考に、CLI プロセスとサーバープロセスを分離する。
+
 ```
-起動コマンド
-  → ポートに health check
-  → healthy → 既に起動済み、何もしない
-  → ポート使用中だが unhealthy → リトライ（数回）→ タイムアウトで起動失敗
-  → ポート空き → サーバーを起動
+CLI (copilotclaw gateway start)
+  → health check
+  → healthy → "already running" を表示して CLI 終了
+  → unhealthy → リトライ（数回）→ タイムアウトで起動失敗
+  → port free → サーバープロセスを detached spawn → health check で起動確認 → CLI 終了
+
+サーバープロセス (detached, バックグラウンド)
+  → HTTP サーバーを起動
+  → SIGTERM / /api/stop で graceful shutdown
 ```
 
 ### API エンドポイント
@@ -86,7 +92,8 @@ agent → [LLM 処理] → copilotclaw_reply_and_receive_input
 | `/api/inputs` | POST | user input を投稿（キューに追加） |
 | `/api/inputs/next` | POST | キューから user input を取り出し（FIFO, なければ即時空応答） |
 | `/api/replies` | POST | user input の id に対して reply を投稿 |
-| `/` | GET | dashboard ページ（user input と reply のペア一覧） |
+| `/api/stop` | POST | gateway を停止する |
+| `/` | GET | チャット UI（メッセージ入力 + user input / reply の時系列表示） |
 
 ### データモデル（インメモリ）
 

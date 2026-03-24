@@ -136,6 +136,22 @@ describe("GET /", () => {
   });
 });
 
+describe("POST /api/stop", () => {
+  it("returns stopping status and triggers onStop callback", async () => {
+    let stopped = false;
+    const stopHandle = await startServer({
+      port: 0,
+      store: new Store(),
+      onStop: () => { stopped = true; },
+    });
+    const res = await fetch(`http://localhost:${stopHandle.port}/api/stop`, { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "stopping" });
+    expect(stopped).toBe(true);
+    await stopHandle.close();
+  });
+});
+
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);

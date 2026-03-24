@@ -30,23 +30,31 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function createRequestHandler(store: Store) {
+function createRequestHandler(store: Store, onStop: () => void) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
 
-    if (url === "/healthz" && method === "GET") {
+    const pathname = url?.split("?")[0];
+
+    if (pathname === "/healthz" && method === "GET") {
       json(res, 200, { status: "ok" });
       return;
     }
 
-    if (url === "/" && method === "GET") {
+    if (pathname === "/api/stop" && method === "POST") {
+      json(res, 200, { status: "stopping" });
+      onStop();
+      return;
+    }
+
+    if (pathname === "/" && method === "GET") {
       const html = renderDashboard(store.listAll());
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
       return;
     }
 
-    if (url === "/api/inputs" && method === "POST") {
+    if (pathname === "/api/inputs" && method === "POST") {
       const body = parseJson(await readBody(req));
       if (!isRecord(body) || typeof body["message"] !== "string") {
         json(res, 400, { error: "missing 'message' field" });
@@ -57,7 +65,7 @@ function createRequestHandler(store: Store) {
       return;
     }
 
-    if (url === "/api/inputs/next" && method === "POST") {
+    if (pathname === "/api/inputs/next" && method === "POST") {
       const input = store.findNextInput();
       if (input === undefined) {
         json(res, 204, null);
@@ -67,7 +75,7 @@ function createRequestHandler(store: Store) {
       return;
     }
 
-    if (url === "/api/replies" && method === "POST") {
+    if (pathname === "/api/replies" && method === "POST") {
       const body = parseJson(await readBody(req));
       if (!isRecord(body) || typeof body["inputId"] !== "string" || typeof body["message"] !== "string") {
         json(res, 400, { error: "missing 'inputId' or 'message' field" });
@@ -93,10 +101,11 @@ export interface ServerHandle {
   close: () => Promise<void>;
 }
 
-export function startServer(options?: { port?: number; store?: Store }): Promise<ServerHandle> {
+export function startServer(options?: { port?: number; store?: Store; onStop?: () => void }): Promise<ServerHandle> {
   const port = options?.port ?? DEFAULT_PORT;
   const store = options?.store ?? new Store();
-  const handleRequest = createRequestHandler(store);
+  const onStop = options?.onStop ?? (() => { process.exit(0); });
+  const handleRequest = createRequestHandler(store, onStop);
 
   return new Promise((resolve) => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {

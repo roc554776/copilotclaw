@@ -35,6 +35,7 @@ VSCode のように、単一の常駐プロセス（gateway）がシステム全
 - user input のキューイングと agent の reply の管理を担う
 - dashboard ページで user input と reply のペアをチャット形式で表示し、ユーザーがメッセージを入力できるインターフェースを提供する
 - 起動コマンドは冪等であること: 既に起動済みなら何もしない、ポートが塞がっているが healthy でなければリトライ後タイムアウト
+- CLI で gateway を起動すると、サーバープロセスはバックグラウンドにデタッチされ、CLI 自体は即座に終了すること
 
 ### Req: Channel（Gateway 経由の Agent-User 対話）
 
