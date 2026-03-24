@@ -64,7 +64,7 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<{ hel
             log(`blocked stop (hello #${helloCount})`);
             session
               .send({
-                prompt: `Say "hello ${helloCount}" and then say you are about to stop.`,
+                prompt: `Use the random_number tool with min=1 and max=100, then say "hello ${helloCount}, random value: <value>" where <value> is the result. Then say you are about to stop.`,
                 mode: "enqueue",
               })
               .catch((err: unknown) => {

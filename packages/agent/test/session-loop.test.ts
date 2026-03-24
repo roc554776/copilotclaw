@@ -10,7 +10,6 @@ function createMockSession(): SessionLike & { callbacks: SessionLoopCallbacks | 
     },
     async send(options) {
       mock.sendCalls.push(options);
-      // Simulate async: emit idle on next tick after send
       queueMicrotask(() => { mock.callbacks?.onIdle(); });
       return "msg-id";
     },
@@ -20,9 +19,8 @@ function createMockSession(): SessionLike & { callbacks: SessionLoopCallbacks | 
 }
 
 describe("runSessionLoop", () => {
-  it("sends initial prompt and stops when random < continueProbability is false", async () => {
+  it("sends initial prompt and stops when random >= continueProbability", async () => {
     const session = createMockSession();
-    // random returns 1.0 (>= 0.8), so first idle triggers stop
     const result = await runSessionLoop({
       session,
       initialPrompt: "hello",
@@ -35,7 +33,7 @@ describe("runSessionLoop", () => {
     expect(result.helloCount).toBe(1);
   });
 
-  it("blocks stop and sends follow-up when random < continueProbability", async () => {
+  it("blocks stop and sends follow-up with random_number tool prompt", async () => {
     const session = createMockSession();
     let callCount = 0;
     const result = await runSessionLoop({
@@ -45,16 +43,15 @@ describe("runSessionLoop", () => {
       maxRetries: 20,
       random: () => {
         callCount++;
-        // First 3 calls: continue (0.5 < 0.8), 4th call: stop (0.9 >= 0.8)
         return callCount <= 3 ? 0.5 : 0.9;
       },
     });
 
     expect(result.helloCount).toBe(4);
-    // initial + 3 follow-ups
     expect(session.sendCalls).toHaveLength(4);
     expect(session.sendCalls[1]?.mode).toBe("enqueue");
     expect(session.sendCalls[1]?.prompt).toContain("hello 1");
+    expect(session.sendCalls[1]?.prompt).toContain("random_number");
     expect(session.sendCalls[2]?.prompt).toContain("hello 2");
     expect(session.sendCalls[3]?.prompt).toContain("hello 3");
   });
@@ -66,10 +63,9 @@ describe("runSessionLoop", () => {
       initialPrompt: "start",
       continueProbability: 0.8,
       maxRetries: 3,
-      random: () => 0, // always continue
+      random: () => 0,
     });
 
-    // maxRetries=3 means helloCount stops at 4 (> 3 triggers guard)
     expect(result.helloCount).toBe(4);
   });
 
@@ -77,7 +73,6 @@ describe("runSessionLoop", () => {
     const session = createMockSession();
     const messages: string[] = [];
 
-    // Override send to emit a message before idle
     const origSend = session.send.bind(session);
     session.send = async (options) => {
       const result = await origSend(options);
@@ -99,7 +94,6 @@ describe("runSessionLoop", () => {
 
   it("rejects on session error", async () => {
     const session = createMockSession();
-    // Override send to emit error instead of idle
     session.send = async (options) => {
       session.sendCalls.push(options);
       queueMicrotask(() => { session.callbacks?.onError("something broke"); });
@@ -141,7 +135,6 @@ describe("runSessionLoop", () => {
     session.disconnect = async () => { throw new Error("disconnect failed"); };
     const logs: string[] = [];
 
-    // Should not throw despite disconnect failure
     await runSessionLoop({
       session,
       initialPrompt: "hello",
