@@ -1,0 +1,133 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  packages/agent:
+    dependencies:
+      '@github/copilot-sdk':
+        specifier: ^0.2.0
+        version: 0.2.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.15
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.2
+
+packages:
+
+  '@github/copilot-darwin-arm64@1.0.11':
+    resolution: {integrity: sha512-wdKimjtbsVeXqMqQSnGpGBPFEYHljxXNuWeH8EIJTNRgFpAsimcivsFgql3Twq4YOp0AxfsH36icG4IEen30mA==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-darwin-x64@1.0.11':
+    resolution: {integrity: sha512-VeuPv8rzBVGBB8uDwMEhcHBpldoKaq26yZ5YQm+G9Ka5QIF+1DMah8ZNRMVsTeNKkb1ji9G8vcuCsaPbnG3fKg==}
+    cpu: [x64]
+    os: [darwin]
+    hasBin: true
+
+  '@github/copilot-linux-arm64@1.0.11':
+    resolution: {integrity: sha512-/d8p6RlFYKj1Va2hekFIcYNMHWagcEkaxgcllUNXSyQLnmEtXUkaWtz62VKGWE+n/UMkEwCB6vI2xEwPTlUNBQ==}
+    cpu: [arm64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-linux-x64@1.0.11':
+    resolution: {integrity: sha512-UujTRO3xkPFC1CybchBbCnaTEAG6JrH0etIst07JvfekMWgvRxbiCHQPpDPSzBCPiBcGu0gba0/IT+vUCORuIw==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
+
+  '@github/copilot-sdk@0.2.0':
+    resolution: {integrity: sha512-fCEpD9W9xqcaCAJmatyNQ1PkET9P9liK2P4Vk0raDFoMXcvpIdqewa5JQeKtWCBUsN/HCz7ExkkFP8peQuo+DA==}
+    engines: {node: '>=20.0.0'}
+
+  '@github/copilot-win32-arm64@1.0.11':
+    resolution: {integrity: sha512-EOW8HUM+EmnHEZEa+iUMl4pP1+2eZUk2XCbynYiMehwX9sidc4BxEHp2RuxADSzFPTieQEWzgjQmHWrtet8pQg==}
+    cpu: [arm64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot-win32-x64@1.0.11':
+    resolution: {integrity: sha512-fKGkSNamzs3h9AbmswNvPYJBORCb2Y8CbusijU3C7fT3ohvqnHJwKo5iHhJXLOKZNOpFZgq9YKha410u9sIs6Q==}
+    cpu: [x64]
+    os: [win32]
+    hasBin: true
+
+  '@github/copilot@1.0.11':
+    resolution: {integrity: sha512-cptVopko/tNKEXyBP174yBjHQBEwg6CqaKN2S0M3J+5LEB8u31bLL75ioOPd+5vubqBrA0liyTdcHeZ8UTRbmg==}
+    hasBin: true
+
+  '@types/node@22.19.15':
+    resolution: {integrity: sha512-F0R/h2+dsy5wJAUe3tAU6oqa2qbWY5TpNfL/RGmo1y38hiyO1w3x2jPtt76wmuaJI4DQnOBu21cNXQ2STIUUWg==}
+
+  typescript@6.0.2:
+    resolution: {integrity: sha512-bGdAIrZ0wiGDo5l8c++HWtbaNCWTS4UTv7RaTH/ThVIgjkveJt83m74bBHMJkuCbslY8ixgLBVZJIOiQlQTjfQ==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
+  undici-types@6.21.0:
+    resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
+
+  vscode-jsonrpc@8.2.1:
+    resolution: {integrity: sha512-kdjOSJ2lLIn7r1rtrMbbNCHjyMPfRnowdKjBQ+mGq6NAW5QY2bEZC/khaC5OR8svbbjvLEaIXkOq45e2X9BIbQ==}
+    engines: {node: '>=14.0.0'}
+
+  zod@4.3.6:
+    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
+
+snapshots:
+
+  '@github/copilot-darwin-arm64@1.0.11':
+    optional: true
+
+  '@github/copilot-darwin-x64@1.0.11':
+    optional: true
+
+  '@github/copilot-linux-arm64@1.0.11':
+    optional: true
+
+  '@github/copilot-linux-x64@1.0.11':
+    optional: true
+
+  '@github/copilot-sdk@0.2.0':
+    dependencies:
+      '@github/copilot': 1.0.11
+      vscode-jsonrpc: 8.2.1
+      zod: 4.3.6
+
+  '@github/copilot-win32-arm64@1.0.11':
+    optional: true
+
+  '@github/copilot-win32-x64@1.0.11':
+    optional: true
+
+  '@github/copilot@1.0.11':
+    optionalDependencies:
+      '@github/copilot-darwin-arm64': 1.0.11
+      '@github/copilot-darwin-x64': 1.0.11
+      '@github/copilot-linux-arm64': 1.0.11
+      '@github/copilot-linux-x64': 1.0.11
+      '@github/copilot-win32-arm64': 1.0.11
+      '@github/copilot-win32-x64': 1.0.11
+
+  '@types/node@22.19.15':
+    dependencies:
+      undici-types: 6.21.0
+
+  typescript@6.0.2: {}
+
+  undici-types@6.21.0: {}
+
+  vscode-jsonrpc@8.2.1: {}
+
+  zod@4.3.6: {}
