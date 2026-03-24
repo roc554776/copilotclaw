@@ -2,7 +2,20 @@
   "permissions": {
     "allow": [
       "Bash(lsof -iTCP -sTCP:LISTEN -nP)",
-      "Bash(grep -oE '[0-9]+$')"
+      "Bash(grep -oE '[0-9]+$')",
+      "Bash(curl -s 'https://registry.npmjs.org/-/v1/search?text=github+copilot+sdk&size=10')",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s 'https://registry.npmjs.org/-/v1/search?text=%40github%2Fcopilot&size=10')",
+      "Bash(curl -s 'https://registry.npmjs.org/-/v1/search?text=copilot-extensions&size=10')",
+      "Bash(curl -s 'https://registry.npmjs.org/@github/copilot-sdk')",
+      "Bash(curl -s 'https://registry.npmjs.org/@github/copilot')",
+      "WebFetch(domain:docs.github.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(node dist/index.js)",
+      "WebSearch",
+      "Bash(mise --version)"
     ]
   }
 }
