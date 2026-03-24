@@ -11,6 +11,7 @@ export interface ChannelToolDeps {
   channelId: string;
   pollIntervalMs?: number;
   fetch?: typeof globalThis.fetch;
+  abortSignal?: AbortSignal;
   onStatusChange?: (status: AgentStatusChange) => void;
 }
 
@@ -19,32 +20,55 @@ interface NextInputResponse {
   message: string;
 }
 
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+  });
+}
+
 async function pollNextInputs(deps: ChannelToolDeps): Promise<NextInputResponse[]> {
   const fetchFn = deps.fetch ?? globalThis.fetch;
   const interval = deps.pollIntervalMs ?? 5000;
+  const signal = deps.abortSignal;
+  const fetchOpts: RequestInit = { method: "POST" };
+  if (signal !== undefined) fetchOpts.signal = signal;
 
   for (;;) {
-    const res = await fetchFn(`${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/inputs/next`, { method: "POST" });
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const res = await fetchFn(
+      `${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/inputs/next`,
+      fetchOpts,
+    );
     if (res.status === 200) {
       const data = await res.json() as NextInputResponse[];
       return data;
     }
-    await new Promise((r) => { setTimeout(r, interval); });
+    await sleep(interval, signal);
   }
 }
 
 function combineMessages(inputs: NextInputResponse[]): { lastInputId: string; combined: string } {
+  if (inputs.length === 0) {
+    return { lastInputId: "", combined: "" };
+  }
   const combined = inputs.map((i) => i.message).join("\n\n");
   return { lastInputId: inputs[inputs.length - 1]!.id, combined };
 }
 
 async function postReply(deps: ChannelToolDeps, inputId: string, message: string): Promise<void> {
   const fetchFn = deps.fetch ?? globalThis.fetch;
-  await fetchFn(`${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/replies`, {
+  const opts: RequestInit = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ inputId, message }),
-  });
+  };
+  if (deps.abortSignal !== undefined) opts.signal = deps.abortSignal;
+  const res = await fetchFn(`${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/replies`, opts);
+  if (!res.ok) {
+    throw new Error(`reply failed: ${res.status} ${res.statusText}`);
+  }
 }
 
 export function createChannelTools(deps: ChannelToolDeps) {

@@ -12,6 +12,7 @@ export interface AgentManagerOptions {
 export class AgentManager {
   private readonly gatewayPort: number;
   private readonly agentScript: string;
+  private spawning = false;
 
   constructor(options: AgentManagerOptions) {
     this.gatewayPort = options.gatewayPort;
@@ -20,11 +21,18 @@ export class AgentManager {
   }
 
   async ensureAgent(): Promise<void> {
+    if (this.spawning) return;
     const socketPath = getAgentSocketPath();
     const status = await getAgentStatus(socketPath);
-    if (status !== null) return; // agent is alive
+    if (status !== null) return;
 
-    this.spawnAgent();
+    this.spawning = true;
+    try {
+      this.spawnAgent();
+    } finally {
+      // Reset after grace period for socket to be bound
+      setTimeout(() => { this.spawning = false; }, 3000);
+    }
   }
 
   private spawnAgent(): void {

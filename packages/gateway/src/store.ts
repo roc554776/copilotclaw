@@ -87,7 +87,7 @@ export class Store {
   pendingCounts(): Record<string, number> {
     const counts: Record<string, number> = {};
     for (const [channelId, queue] of this.queues) {
-      if (queue.length > 0) counts[channelId] = queue.length;
+      counts[channelId] = queue.length;
     }
     return counts;
   }
@@ -102,6 +102,9 @@ export class Store {
     const queue = this.queues.get(channelId);
     if (queue === undefined) return 0;
     const count = queue.length;
+    for (const id of queue) {
+      this.inputs.delete(id);
+    }
     queue.length = 0;
     return count;
   }

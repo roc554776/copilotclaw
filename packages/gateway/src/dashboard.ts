@@ -75,7 +75,7 @@ export function renderDashboard(channels: Channel[], inputs: UserInput[], active
     <button id="send">Send</button>
   </div>
   <script>
-    const CHANNEL_ID = "${escapeHtml(channelId)}";
+    const CHANNEL_ID = ${JSON.stringify(channelId ?? "")};
     const chat = document.getElementById("chat");
     const msgInput = document.getElementById("msg");
     const sendBtn = document.getElementById("send");

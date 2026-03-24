@@ -15,8 +15,11 @@ interface ChannelSessionEntry {
   info: ChannelSessionInfo;
   client: CopilotClient;
   abortController: AbortController;
+  sessionPromise: Promise<void>;
+  generation: number;
   retryCount: number;
   lastOldestInputId?: string;
+  restarting: boolean;
 }
 
 export interface ChannelSessionManagerOptions {
@@ -30,6 +33,7 @@ export class ChannelSessionManager {
   private readonly sessions = new Map<string, ChannelSessionEntry>();
   private readonly gatewayBaseUrl: string;
   private readonly staleTimeoutMs: number;
+  private generationCounter = 0;
 
   constructor(options: ChannelSessionManagerOptions) {
     this.gatewayBaseUrl = options.gatewayBaseUrl;
@@ -59,26 +63,37 @@ export class ChannelSessionManager {
 
     const abortController = new AbortController();
     const client = new CopilotClient();
+    const generation = ++this.generationCounter;
     const entry: ChannelSessionEntry = {
       info: { status: "starting", startedAt: new Date().toISOString() },
       client,
       abortController,
+      sessionPromise: Promise.resolve(),
+      generation,
       retryCount: 0,
+      restarting: false,
     };
-    this.sessions.set(channelId, entry);
 
-    this.runSession(channelId, entry).catch((err: unknown) => {
+    const promise = this.runSession(channelId, entry).catch((err: unknown) => {
       console.error(`[agent] channel ${channelId.slice(0, 8)} session error:`, err);
     }).finally(() => {
-      this.sessions.delete(channelId);
+      // Only delete if this is still the current generation
+      const current = this.sessions.get(channelId);
+      if (current !== undefined && current.generation === generation) {
+        this.sessions.delete(channelId);
+      }
       client.stop().catch(() => {});
     });
+
+    entry.sessionPromise = promise;
+    this.sessions.set(channelId, entry);
   }
 
   private async runSession(channelId: string, entry: ChannelSessionEntry): Promise<void> {
     const { receiveFirstInput, replyAndReceiveInput } = createChannelTools({
       gatewayBaseUrl: this.gatewayBaseUrl,
       channelId,
+      abortSignal: entry.abortController.signal,
       onStatusChange: (status) => {
         entry.info.status = status;
         if (status === "processing") {
@@ -115,16 +130,19 @@ export class ChannelSessionManager {
   }
 
   async stopAll(): Promise<void> {
+    const promises: Promise<void>[] = [];
     for (const [, entry] of this.sessions) {
       entry.abortController.abort();
+      promises.push(entry.sessionPromise);
     }
-    // Wait a tick for sessions to clean up
-    await new Promise((r) => { setTimeout(r, 100); });
+    const timeout = new Promise<void>((r) => { setTimeout(r, 5000); });
+    await Promise.race([Promise.allSettled(promises), timeout]);
   }
 
   async checkStaleAndHandle(channelId: string, oldestInputId: string | undefined): Promise<"ok" | "flushed"> {
     const entry = this.sessions.get(channelId);
     if (entry === undefined) return "ok";
+    if (entry.restarting) return "ok";
     if (entry.info.status !== "processing") return "ok";
 
     const processingStartedAt = entry.info.processingStartedAt;
@@ -133,18 +151,17 @@ export class ChannelSessionManager {
     const elapsed = Date.now() - new Date(processingStartedAt).getTime();
     if (elapsed < this.staleTimeoutMs) return "ok";
 
-    // Stale processing detected
-    if (oldestInputId !== undefined && oldestInputId === entry.lastOldestInputId) {
+    // Don't restart if there are no pending inputs (agent may be legitimately finishing)
+    if (oldestInputId === undefined) return "ok";
+
+    if (oldestInputId === entry.lastOldestInputId) {
       entry.retryCount++;
     } else {
       entry.retryCount = 0;
-    }
-    if (oldestInputId !== undefined) {
       entry.lastOldestInputId = oldestInputId;
     }
 
     if (entry.retryCount > 1) {
-      // Same oldest input stuck after retry — flush and stop
       console.error(`[agent] channel ${channelId.slice(0, 8)} stuck after retry, flushing inputs`);
       this.stopSession(channelId);
       return "flushed";
@@ -152,10 +169,9 @@ export class ChannelSessionManager {
 
     // Restart session (first retry)
     console.error(`[agent] channel ${channelId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), restarting session`);
+    entry.restarting = true;
     this.stopSession(channelId);
-    // Wait for session to wind down, then restart
-    await new Promise((r) => { setTimeout(r, 200); });
-    this.sessions.delete(channelId);
+    await entry.sessionPromise.catch(() => {});
     this.startSession(channelId);
     return "ok";
   }

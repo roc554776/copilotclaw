@@ -77,18 +77,31 @@ export type ListenResult =
   | { kind: "server"; handle: AgentIpcServerHandle }
   | { kind: "already-running" };
 
+function createHandle(server: Server, socketPath: string, state: AgentIpcState): AgentIpcServerHandle {
+  return {
+    server,
+    socketPath,
+    state,
+    close: () => new Promise<void>((res) => {
+      server.close(() => {
+        try { unlinkSync(socketPath); } catch {}
+        res();
+      });
+    }),
+  };
+}
+
 export function listenIpc(
   socketPath: string,
   onStop: () => void,
   sessionManager?: ChannelSessionManager | null,
 ): Promise<ListenResult> {
-  return new Promise((resolve) => {
-    const state: AgentIpcState = {
-      startedAt: new Date().toISOString(),
-    };
+  const mgr = sessionManager ?? null;
+  const state: AgentIpcState = {
+    startedAt: new Date().toISOString(),
+  };
 
-    const mgr = sessionManager ?? null;
-
+  return new Promise((resolve, reject) => {
     const server = createServer((socket) => {
       handleConnection(socket, state, mgr, onStop);
     });
@@ -101,17 +114,14 @@ export function listenIpc(
         });
         probe.on("error", (probeErr: NodeJS.ErrnoException) => {
           if (probeErr.code === "ECONNREFUSED") {
+            // Stale socket — unlink and create a fresh server
             try { unlinkSync(socketPath); } catch {}
-            server.listen(socketPath, () => {
-              resolve({
-                kind: "server",
-                handle: {
-                  server, socketPath, state,
-                  close: () => new Promise<void>((res) => {
-                    server.close(() => { try { unlinkSync(socketPath); } catch {} res(); });
-                  }),
-                },
-              });
+            const freshServer = createServer((socket) => {
+              handleConnection(socket, state, mgr, onStop);
+            });
+            freshServer.on("error", (retryErr) => { reject(retryErr); });
+            freshServer.listen(socketPath, () => {
+              resolve({ kind: "server", handle: createHandle(freshServer, socketPath, state) });
             });
           } else {
             resolve({ kind: "already-running" });
@@ -119,19 +129,11 @@ export function listenIpc(
         });
         return;
       }
-      throw err;
+      reject(err);
     });
 
     server.listen(socketPath, () => {
-      resolve({
-        kind: "server",
-        handle: {
-          server, socketPath, state,
-          close: () => new Promise<void>((res) => {
-            server.close(() => { try { unlinkSync(socketPath); } catch {} res(); });
-          }),
-        },
-      });
+      resolve({ kind: "server", handle: createHandle(server, socketPath, state) });
     });
   });
 }

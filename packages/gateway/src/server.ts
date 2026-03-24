@@ -58,9 +58,16 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
     }
 
     if (fullPathname === "/api/stop" && method === "POST") {
+      const remoteAddr = req.socket.remoteAddress ?? "";
+      if (remoteAddr !== "127.0.0.1" && remoteAddr !== "::1" && remoteAddr !== "::ffff:127.0.0.1") {
+        json(res, 403, { error: "forbidden" });
+        return;
+      }
       json(res, 200, { status: "stopping" });
-      agentManager?.stopAgent().catch(() => {});
-      onStop();
+      res.once("finish", () => {
+        agentManager?.stopAgent().catch(() => {});
+        onStop();
+      });
       return;
     }
 
@@ -212,10 +219,12 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
         server,
         port: actualPort,
         store,
-        close: () => new Promise<void>((res, rej) => {
-          agentManager?.stopAgent().catch(() => {});
-          server.close((err) => { err ? rej(err) : res(); });
-        }),
+        close: async () => {
+          await agentManager?.stopAgent().catch(() => {});
+          await new Promise<void>((res, rej) => {
+            server.close((err) => { err ? rej(err) : res(); });
+          });
+        },
       });
     });
   });
