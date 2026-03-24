@@ -64,9 +64,9 @@ agent → [LLM 処理] → copilotclaw_reply_and_receive_input
 
 ## アーキテクチャ方針: Agent シングルトンと Gateway-Agent 分離
 
-### 方針: Gateway と Agent の独立プロセス化
+### 方針: 単一 Agent プロセスによるマルチチャンネル管理
 
-Gateway と Agent は独立したプロセスとして稼働する。Gateway 再起動時に Agent を道連れにしないためである。Agent は channel ID ごとに IPC socket（Unix domain socket）でシングルトン動作する。
+Agent は 1 プロセスで全チャンネルを管理する。チャンネルごとに独立した Copilot SDK セッションを作成する（1 セッションに複数チャンネルを流し込むのではない）。Gateway と Agent は独立プロセスとして稼働し、起動は常に gateway → agent。
 
 ### Agent IPC サーバー
 
@@ -74,11 +74,11 @@ VSCode の singleton パターン（`net.createServer().listen(socketPath)` → 
 
 ```
 Agent 起動
-  → IPC socket path を channel ID から決定的に生成
+  → IPC socket path を決定的に生成（プロセス単位、チャンネルごとではない）
   → net.createServer().listen(socketPath)
-    → 成功 → このプロセスが agent として稼働、IPC リクエストを受け付ける
+    → 成功 → IPC リクエスト受付 + gateway ポーリング開始
     → EADDRINUSE → net.createConnection(socketPath)
-      → 成功 → 既存 agent が稼働中、このプロセスは終了
+      → 成功 → 既存 agent 稼働中、このプロセスは終了
       → ECONNREFUSED → stale socket を unlink して再試行
 ```
 
@@ -88,35 +88,46 @@ IPC ソケット上で改行区切り JSON を送受信する。
 
 | メソッド | 応答 | 用途 |
 | :--- | :--- | :--- |
-| `status` | `{ status, startedAt, restartedAt? }` | 現在の状態を返す |
+| `status` | `{ startedAt, channels: { [channelId]: ChannelStatus } }` | 全チャンネルの状態を一括取得 |
+| `channel_status` (params: `{ channelId }`) | `ChannelStatus` | 個別チャンネルの状態を取得 |
 | `stop` | `{ ok: true }` | graceful shutdown |
-| `restart` | `{ ok: true }` | Copilot session を再作成して再開 |
 
-status の値:
+ChannelStatus:
 
-| 値 | 意味 |
-| :--- | :--- |
-| `starting` | 起動直後、Copilot session 未確立 |
-| `waiting` | user input をポーリングで待機中 |
-| `processing` | user input を LLM で処理中 |
+| フィールド | 型 | 意味 |
+| :--- | :--- | :--- |
+| `status` | `"starting" \| "waiting" \| "processing"` | セッションの状態 |
+| `startedAt` | `string` | セッション開始時刻 |
+| `processingStartedAt?` | `string` | processing 状態に入った時刻 |
+
+### Agent プロセスの内部動作
+
+```
+Agent プロセス起動
+  → IPC サーバー開始
+  → gateway ポーリングループ開始（全チャンネルの inputs/next を巡回）
+    → チャンネルに未処理 user input あり かつ セッション未起動 → セッション起動
+    → チャンネルセッションが processing のまま staleTimeout (default 10 min) 超過
+      → 同一チャンネルの最古 user input が前回と同じ → retryCount++
+        → retryCount > 1 → 当該チャンネルの user input を全て flush、セッション停止
+        → retryCount <= 1 → セッション再起動（1 回だけリトライ）
+      → 最古 user input が変わっている → retryCount リセット、セッション再起動
+```
 
 ### Gateway の Agent 管理
 
-Gateway は Agent を直接の子プロセスとしては持たず、IPC 経由で外から管理する。
+Gateway の責務は user input の管理、agent プロセスの ensure、チャットシステムの提供。Agent 内部のチャンネル管理には関与しない。
 
 ```
 Gateway: user input 受信時
-  → IPC で agent の status を取得
-    → 接続不可 → agent を detached spawn で起動、IPC で起動確認
-    → status = waiting / starting → 何もしない（agent が自分で poll する）
-    → status = processing かつ経過時間 > staleTimeout (default 10 min)
-      → IPC で restart を送信
-      → status 変化を確認
+  → IPC で agent プロセスの生存確認
+    → 接続不可 → agent を detached spawn で起動
+    → 接続可 → 何もしない（agent が自分で gateway をポーリングしてチャンネルセッションを起動する）
 ```
 
 ### IPC Socket パス
 
-`{{tmpdir}}/copilotclaw-agent-{{channelId}}.sock` を使用する。channel ID から決定的に導出されるため、gateway と agent が共通のパスを知ることができる。
+`{{tmpdir}}/copilotclaw-agent.sock` を使用する（プロセス単位、チャンネルごとではない）。
 
 ### Channel ツール
 

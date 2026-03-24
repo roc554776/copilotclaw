@@ -1,15 +1,20 @@
 import { createConnection } from "node:net";
 
-export interface AgentStatusResponse {
-  status: "starting" | "waiting" | "processing";
-  startedAt: string;
-  restartedAt?: string;
+export interface ChannelStatusResponse {
+  status: "starting" | "waiting" | "processing" | "not_running";
+  startedAt?: string;
+  processingStartedAt?: string;
 }
 
-function sendIpcRequest(socketPath: string, method: string, timeoutMs = 5000): Promise<Record<string, unknown>> {
+export interface AgentStatusResponse {
+  startedAt: string;
+  channels: Record<string, ChannelStatusResponse>;
+}
+
+function sendIpcRequest(socketPath: string, method: string, params?: Record<string, unknown>, timeoutMs = 5000): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath, () => {
-      socket.write(JSON.stringify({ method }) + "\n");
+      socket.write(JSON.stringify({ method, params }) + "\n");
     });
 
     let buffer = "";
@@ -50,15 +55,6 @@ export async function getAgentStatus(socketPath: string): Promise<AgentStatusRes
 export async function stopAgent(socketPath: string): Promise<boolean> {
   try {
     await sendIpcRequest(socketPath, "stop");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function restartAgent(socketPath: string): Promise<boolean> {
-  try {
-    await sendIpcRequest(socketPath, "restart");
     return true;
   } catch {
     return false;

@@ -59,10 +59,7 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
 
     if (fullPathname === "/api/stop" && method === "POST") {
       json(res, 200, { status: "stopping" });
-      if (agentManager !== null) {
-        const channelIds = store.listChannels().map((ch) => ch.id);
-        agentManager.stopAll(channelIds).catch(() => {});
-      }
+      agentManager?.stopAgent().catch(() => {});
       onStop();
       return;
     }
@@ -76,6 +73,11 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
     if (fullPathname === "/api/channels" && method === "POST") {
       const channel = store.createChannel();
       json(res, 201, channel);
+      return;
+    }
+
+    if (fullPathname === "/api/channels/pending" && method === "GET") {
+      json(res, 200, store.pendingCounts());
       return;
     }
 
@@ -100,9 +102,9 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
           json(res, 404, { error: "channel not found" });
           return;
         }
-        // Ensure agent is running for this channel
+        // Ensure agent process is running
         if (agentManager !== null) {
-          agentManager.ensureAgent(channelId).catch((err: unknown) => {
+          agentManager.ensureAgent().catch((err: unknown) => {
             console.error("[gateway] ensureAgent error:", err);
           });
         }
@@ -132,6 +134,22 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
           return;
         }
         json(res, 200, updated);
+        return;
+      }
+
+      if (action === "inputs/flush" && method === "POST") {
+        const count = store.flushInputs(channelId);
+        json(res, 200, { flushed: count });
+        return;
+      }
+
+      if (action === "inputs/peek" && method === "GET") {
+        const oldest = store.peekOldestInput(channelId);
+        if (oldest === undefined) {
+          json(res, 204, null);
+          return;
+        }
+        json(res, 200, oldest);
         return;
       }
 
@@ -195,10 +213,7 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
         port: actualPort,
         store,
         close: () => new Promise<void>((res, rej) => {
-          if (agentManager !== null) {
-            const channelIds = store.listChannels().map((ch) => ch.id);
-            agentManager.stopAll(channelIds).catch(() => {});
-          }
+          agentManager?.stopAgent().catch(() => {});
           server.close((err) => { err ? rej(err) : res(); });
         }),
       });

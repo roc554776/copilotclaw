@@ -53,15 +53,18 @@ Agent と human が gateway を介して対話する仕組み（channel）を提
 
 ### Req: Agent シングルトンと Gateway-Agent 分離
 
-Agent は channel ごとに IPC socket でシングルトン動作し、gateway とは独立したプロセスとして稼働する。
+Agent は単一プロセスで複数チャンネルのセッションを管理し、gateway とは独立したプロセスとして稼働する。
 
-- Agent は channel ID ごとに IPC socket（Unix domain socket）を持ち、同一 channel で多重起動しない
-- Agent は IPC 経由で外部から health check / status 取得 / 停止ができる
-  - status: 起動していない / 起動直後 / user input 待ち / user input 処理中
-  - prop: 起動時刻、再起動時刻
+- Agent は 1 プロセスで複数チャンネルを管理する。チャンネルごとに独立した Copilot SDK セッションを作成する
+- Agent プロセスは IPC socket（Unix domain socket）でシングルトン動作する
+- Agent は IPC 経由で外部から health check / 全チャンネルの status 一括取得 / 個別 channel status 取得 / 停止ができる
 - Gateway と agent は独立プロセスとして動作する（gateway 再起動時に agent を道連れにしない）
-- Gateway は agent を必要に応じて ensure（起動確認・起動）する
-- Gateway は agent が user input 処理中のまま既定の時間（デフォルト 10 分）を超過した場合、IPC 経由で再起動を促す
+- 起動は常に gateway → agent。agent が gateway を起動することはない
+- Gateway は agent プロセスを ensure（生存確認・なければ起動）するだけ
+- Agent プロセスの責務:
+  - gateway を定期ポーリングして各チャンネルの待機 user input を確認し、必要ならチャンネルセッションを起動
+  - チャンネルセッションが processing のまま既定の時間（デフォルト 10 分）を超過した場合は停止させる
+  - スタック検出: 同一チャンネルの最古 user input が変わらないまま 1 回リトライ後も残る場合は、当該チャンネルの user input を全て flush する
 - ゾンビプロセスを残さないこと
 
 ### Req: 自動テストの義務化

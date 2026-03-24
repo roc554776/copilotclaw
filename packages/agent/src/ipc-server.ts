@@ -1,12 +1,9 @@
 import { type Server, createConnection, createServer, type Socket } from "node:net";
 import { unlinkSync } from "node:fs";
-
-export type AgentStatus = "starting" | "waiting" | "processing";
+import type { ChannelSessionManager } from "./channel-session-manager.js";
 
 export interface AgentIpcState {
-  status: AgentStatus;
   startedAt: string;
-  restartedAt?: string;
 }
 
 export interface AgentIpcServerHandle {
@@ -16,9 +13,17 @@ export interface AgentIpcServerHandle {
   close: () => Promise<void>;
 }
 
-export type RestartHandler = () => void;
+interface IpcRequest {
+  method: string;
+  params?: Record<string, unknown>;
+}
 
-function handleConnection(socket: Socket, state: AgentIpcState, onStop: () => void, onRestart: RestartHandler): void {
+function handleConnection(
+  socket: Socket,
+  state: AgentIpcState,
+  sessionManager: ChannelSessionManager | null,
+  onStop: () => void,
+): void {
   let buffer = "";
 
   socket.on("data", (data: Buffer) => {
@@ -29,24 +34,34 @@ function handleConnection(socket: Socket, state: AgentIpcState, onStop: () => vo
     for (const line of lines) {
       if (line.trim() === "") continue;
       try {
-        const req = JSON.parse(line) as { method: string };
+        const req = JSON.parse(line) as IpcRequest;
         switch (req.method) {
-          case "status":
+          case "status": {
+            const channels = sessionManager?.getChannelStatuses() ?? {};
             socket.write(JSON.stringify({
-              status: state.status,
               startedAt: state.startedAt,
-              restartedAt: state.restartedAt,
+              channels,
             }) + "\n");
             break;
+          }
+          case "channel_status": {
+            const channelId = req.params?.["channelId"] as string | undefined;
+            if (channelId === undefined) {
+              socket.write(JSON.stringify({ error: "missing channelId" }) + "\n");
+              break;
+            }
+            const info = sessionManager?.getChannelStatus(channelId);
+            if (info === undefined) {
+              socket.write(JSON.stringify({ status: "not_running" }) + "\n");
+            } else {
+              socket.write(JSON.stringify(info) + "\n");
+            }
+            break;
+          }
           case "stop":
             socket.write(JSON.stringify({ ok: true }) + "\n");
             socket.end();
             onStop();
-            break;
-          case "restart":
-            socket.write(JSON.stringify({ ok: true }) + "\n");
-            socket.end();
-            onRestart();
             break;
           default:
             socket.write(JSON.stringify({ error: "unknown method" }) + "\n");
@@ -65,48 +80,40 @@ export type ListenResult =
 export function listenIpc(
   socketPath: string,
   onStop: () => void,
-  onRestart: RestartHandler,
+  sessionManager?: ChannelSessionManager | null,
 ): Promise<ListenResult> {
   return new Promise((resolve) => {
     const state: AgentIpcState = {
-      status: "starting",
       startedAt: new Date().toISOString(),
     };
 
+    const mgr = sessionManager ?? null;
+
     const server = createServer((socket) => {
-      handleConnection(socket, state, onStop, onRestart);
+      handleConnection(socket, state, mgr, onStop);
     });
 
     server.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "EADDRINUSE") {
-        // Try to connect to verify it's alive
         const probe = createConnection(socketPath, () => {
-          // Connected — existing agent is alive
           probe.end();
           resolve({ kind: "already-running" });
         });
         probe.on("error", (probeErr: NodeJS.ErrnoException) => {
           if (probeErr.code === "ECONNREFUSED") {
-            // Stale socket — unlink and retry once
             try { unlinkSync(socketPath); } catch {}
             server.listen(socketPath, () => {
               resolve({
                 kind: "server",
                 handle: {
-                  server,
-                  socketPath,
-                  state,
+                  server, socketPath, state,
                   close: () => new Promise<void>((res) => {
-                    server.close(() => {
-                      try { unlinkSync(socketPath); } catch {}
-                      res();
-                    });
+                    server.close(() => { try { unlinkSync(socketPath); } catch {} res(); });
                   }),
                 },
               });
             });
           } else {
-            // Unexpected error — treat as already running
             resolve({ kind: "already-running" });
           }
         });
@@ -119,14 +126,9 @@ export function listenIpc(
       resolve({
         kind: "server",
         handle: {
-          server,
-          socketPath,
-          state,
+          server, socketPath, state,
           close: () => new Promise<void>((res) => {
-            server.close(() => {
-              try { unlinkSync(socketPath); } catch {}
-              res();
-            });
+            server.close(() => { try { unlinkSync(socketPath); } catch {} res(); });
           }),
         },
       });

@@ -1,22 +1,23 @@
 # Agent Singleton (raw requirement)
 
-- agent 自体も channel を与えられたら、シングルトンで動作するように変更する
+- agent はチャンネルごとに 1 プロセスではなく、1 プロセスで複数チャンネルを管理する
+  - copilot sdk でチャンネルごとにセッションを作る（1 セッションに複数チャンネルの user input を流し込むのではない）
   - vscode と同様に IPC socket を使ってシングルトンで動作させる
-    - reference と vscode のコードを参考にする
   - 外部から停止もさせられるようにする
   - ゾンビ化しないように注意する
 - gateway と agent のアーキテクチャについて
   - gateway と agent は独立で動作させる
     - 理由: gateway だけを再起動させたい場合もあるが、その際に agent は再起動させたくないため
+  - 起動は常に gateway → agent。agent が gateway を起動することはない
   - agent は IPC で外から health check / status 取得できるようにする
-    - prop
-      - 起動/再起動開始時刻
-    - status
-      - 起動していない
-      - 起動直後
-      - user input を待っている状態
-      - user input を処理中
-  - gateway は agent を外から管理し、
-    - user input が発生したときなど、必要に応じて起動（ensure）する
-    - user input を処理中のまま既定の時間（デフォルト 10 分とか。将来設定ファイルで設定できる。）が経過している場合は、agent に IPC で再起動を促す
-    - status 等の変化を確認し、再起動の完了を確認する
+    - 複数チャンネル（セッション）のステータスを同時取得できる
+    - 個別にも取得できる
+    - prop: 起動時刻
+    - channel session status: 起動していない / 起動直後 / user input 待ち / user input 処理中
+  - gateway は agent プロセスを ensure するだけ
+    - gateway の責務: user input の管理、agent プロセスの管理、チャットシステムの提供
+  - agent プロセスの責務
+    - user input をポーリングで確認し、待機 user input のチャンネルごとの個数を取得し、必要ならチャンネルセッションを起動
+    - チャンネルセッションが user input 処理中のまま既定の時間（デフォルト 10 分）が経過した場合は停止させる
+      - 再起動・停止を無制限に繰り返さないようにする
+      - 当該チャンネルの user input の最も古いメッセージが同じまま残り続けているなら、1 回リトライしたら、当該チャンネルの user input は全て処理済み扱いで flush する
