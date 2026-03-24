@@ -1,4 +1,4 @@
-import { PORT, startServer } from "./server.js";
+import { DEFAULT_PORT, startServer } from "./server.js";
 
 const HEALTH_RETRY_COUNT = 5;
 const HEALTH_RETRY_INTERVAL_MS = 1000;
@@ -9,7 +9,7 @@ function log(message: string): void {
 
 async function checkHealth(): Promise<"healthy" | "unhealthy" | "port-free"> {
   try {
-    const res = await fetch(`http://localhost:${PORT}/healthz`);
+    const res = await fetch(`http://localhost:${DEFAULT_PORT}/healthz`);
     if (res.ok) return "healthy";
     return "unhealthy";
   } catch {
@@ -25,12 +25,12 @@ async function main(): Promise<void> {
   const initialStatus = await checkHealth();
 
   if (initialStatus === "healthy") {
-    log(`already running on port ${PORT}`);
+    log(`already running on port ${DEFAULT_PORT}`);
     return;
   }
 
   if (initialStatus === "unhealthy") {
-    log(`port ${PORT} is occupied but unhealthy, retrying...`);
+    log(`port ${DEFAULT_PORT} is occupied but unhealthy, retrying...`);
     for (let attempt = 0; attempt < HEALTH_RETRY_COUNT; attempt++) {
       await sleep(HEALTH_RETRY_INTERVAL_MS);
       const status = await checkHealth();
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
       }
       log(`retry ${attempt + 1}/${HEALTH_RETRY_COUNT}...`);
     }
-    throw new Error(`port ${PORT} is occupied but not healthy after ${HEALTH_RETRY_COUNT} retries`);
+    throw new Error(`port ${DEFAULT_PORT} is occupied but not healthy after ${HEALTH_RETRY_COUNT} retries`);
   }
 
   await startServer();
