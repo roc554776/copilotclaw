@@ -4,11 +4,14 @@ const REPLY_TOOL_NAME = "copilotclaw_reply_and_receive_input";
 
 const REPLY_INSTRUCTION = `\n\n[SYSTEM] You MUST use the ${REPLY_TOOL_NAME} tool to reply to the user. Do NOT respond with plain text.`;
 
+export type AgentStatusChange = "waiting" | "processing";
+
 export interface ChannelToolDeps {
   gatewayBaseUrl: string;
   channelId: string;
   pollIntervalMs?: number;
   fetch?: typeof globalThis.fetch;
+  onStatusChange?: (status: AgentStatusChange) => void;
 }
 
 interface NextInputResponse {
@@ -55,7 +58,9 @@ export function createChannelTools(deps: ChannelToolDeps) {
       required: [],
     },
     handler: async () => {
+      deps.onStatusChange?.("waiting");
       const inputs = await pollNextInputs(deps);
+      deps.onStatusChange?.("processing");
       const { lastInputId, combined } = combineMessages(inputs);
       currentInputId = lastInputId;
       return { userMessage: combined + REPLY_INSTRUCTION };
@@ -76,7 +81,9 @@ export function createChannelTools(deps: ChannelToolDeps) {
       if (currentInputId !== undefined) {
         await postReply(deps, currentInputId, args.message);
       }
+      deps.onStatusChange?.("waiting");
       const inputs = await pollNextInputs(deps);
+      deps.onStatusChange?.("processing");
       const { lastInputId, combined } = combineMessages(inputs);
       currentInputId = lastInputId;
       return { userMessage: combined + REPLY_INSTRUCTION };

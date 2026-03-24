@@ -1,5 +1,7 @@
 # 要求定義（Requirements）
 
+<!-- NOTE: このファイルが大きくなったら、トピックごとに別ファイルへ分割すること -->
+
 本ドキュメントは、顧客の生の要望（raw requirements）を整理し、プロジェクトとして達成すべき要求を明確化したものである。
 
 ## 背景
@@ -45,10 +47,22 @@ Agent と human が gateway を介して対話する仕組み（channel）を提
 - Agent は channel ID に紐付き、gateway の API を通じてその channel の user input を受け取り reply を返す
 - Agent は session が idle になっても自動的に停止せず、常に次の user input を待ち続ける
 - カスタムツール名は `copilotclaw_` プレフィクスで統一する
-- channel に未処理の user input があり、対応する agent がなければ gateway が agent を子プロセスとして自動起動する
 - 同一 channel に未処理の user input が複数ある場合、agent は一括で取得する
 - Gateway 起動時にデフォルト channel を 1 つ作成する
 - Dashboard は複数タブで複数 channel を扱えるインターフェースとする
+
+### Req: Agent シングルトンと Gateway-Agent 分離
+
+Agent は channel ごとに IPC socket でシングルトン動作し、gateway とは独立したプロセスとして稼働する。
+
+- Agent は channel ID ごとに IPC socket（Unix domain socket）を持ち、同一 channel で多重起動しない
+- Agent は IPC 経由で外部から health check / status 取得 / 停止ができる
+  - status: 起動していない / 起動直後 / user input 待ち / user input 処理中
+  - prop: 起動時刻、再起動時刻
+- Gateway と agent は独立プロセスとして動作する（gateway 再起動時に agent を道連れにしない）
+- Gateway は agent を必要に応じて ensure（起動確認・起動）する
+- Gateway は agent が user input 処理中のまま既定の時間（デフォルト 10 分）を超過した場合、IPC 経由で再起動を促す
+- ゾンビプロセスを残さないこと
 
 ### Req: 自動テストの義務化
 

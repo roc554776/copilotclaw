@@ -1,5 +1,7 @@
 # 要件提案（Proposal）
 
+<!-- NOTE: このファイルが大きくなったら、トピックごとに別ファイルへ分割すること -->
+
 本ドキュメントは、要求定義に基づき、CopilotClaw プロジェクトとしてどのように要求を実現するかの提案（要件）を示す。
 
 ## プロダクトコンセプト
@@ -45,12 +47,12 @@ Agent と human は gateway の API を介して対話する。Agent は Copilot
 
 ### Multi-Channel アーキテクチャ
 
-各 channel は独立した input queue と会話履歴を持つ。channel に未処理の user input が投稿されると、gateway がその channel に対応する agent を子プロセスとして自動起動する。
+各 channel は独立した input queue と会話履歴を持つ。
 
 ```
 human → dashboard tab (POST /api/channels/{{channelId}}/inputs) → channel queue
                                                                        ↓
-                                              gateway: agent がなければ子プロセスとして起動
+                                              gateway: agent を ensure（IPC で生存確認、なければ起動）
                                                                        ↓
 agent ← copilotclaw_receive_first_input ← (POST /api/channels/{{channelId}}/inputs/next)
 agent → [LLM 処理] → copilotclaw_reply_and_receive_input
@@ -59,6 +61,62 @@ agent → [LLM 処理] → copilotclaw_reply_and_receive_input
                          ↓                              ↓
               dashboard に表示           次の user input を受け取り（複数なら一括）
 ```
+
+## アーキテクチャ方針: Agent シングルトンと Gateway-Agent 分離
+
+### 方針: Gateway と Agent の独立プロセス化
+
+Gateway と Agent は独立したプロセスとして稼働する。Gateway 再起動時に Agent を道連れにしないためである。Agent は channel ID ごとに IPC socket（Unix domain socket）でシングルトン動作する。
+
+### Agent IPC サーバー
+
+VSCode の singleton パターン（`net.createServer().listen(socketPath)` → EADDRINUSE で既存検出）を採用する。
+
+```
+Agent 起動
+  → IPC socket path を channel ID から決定的に生成
+  → net.createServer().listen(socketPath)
+    → 成功 → このプロセスが agent として稼働、IPC リクエストを受け付ける
+    → EADDRINUSE → net.createConnection(socketPath)
+      → 成功 → 既存 agent が稼働中、このプロセスは終了
+      → ECONNREFUSED → stale socket を unlink して再試行
+```
+
+IPC ソケット上で改行区切り JSON を送受信する。
+
+### Agent IPC プロトコル
+
+| メソッド | 応答 | 用途 |
+| :--- | :--- | :--- |
+| `status` | `{ status, startedAt, restartedAt? }` | 現在の状態を返す |
+| `stop` | `{ ok: true }` | graceful shutdown |
+| `restart` | `{ ok: true }` | Copilot session を再作成して再開 |
+
+status の値:
+
+| 値 | 意味 |
+| :--- | :--- |
+| `starting` | 起動直後、Copilot session 未確立 |
+| `waiting` | user input をポーリングで待機中 |
+| `processing` | user input を LLM で処理中 |
+
+### Gateway の Agent 管理
+
+Gateway は Agent を直接の子プロセスとしては持たず、IPC 経由で外から管理する。
+
+```
+Gateway: user input 受信時
+  → IPC で agent の status を取得
+    → 接続不可 → agent を detached spawn で起動、IPC で起動確認
+    → status = waiting / starting → 何もしない（agent が自分で poll する）
+    → status = processing かつ経過時間 > staleTimeout (default 10 min)
+      → IPC で restart を送信
+      → status 変化を確認
+```
+
+### IPC Socket パス
+
+`{{tmpdir}}/copilotclaw-agent-{{channelId}}.sock` を使用する。channel ID から決定的に導出されるため、gateway と agent が共通のパスを知ることができる。
 
 ### Channel ツール
 

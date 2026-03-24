@@ -17,6 +17,7 @@ export interface SessionLoopOptions {
   maxTurns: number;
   onMessage?: (content: string) => void;
   log?: (message: string) => void;
+  shouldStop?: () => boolean;
 }
 
 export async function runSessionLoop(options: SessionLoopOptions): Promise<{ turnCount: number }> {
@@ -27,6 +28,7 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<{ tur
     maxTurns,
     onMessage = () => {},
     log = () => {},
+    shouldStop = () => false,
   } = options;
 
   let turnCount = 0;
@@ -50,6 +52,12 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<{ tur
         },
         onIdle: () => {
           if (settled) return;
+
+          if (shouldStop()) {
+            log("stop requested externally");
+            settle(() => { resolve(); });
+            return;
+          }
 
           turnCount++;
           if (turnCount > maxTurns) {

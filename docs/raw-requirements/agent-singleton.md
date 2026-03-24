@@ -1,0 +1,22 @@
+# Agent Singleton (raw requirement)
+
+- agent 自体も channel を与えられたら、シングルトンで動作するように変更する
+  - vscode と同様に IPC socket を使ってシングルトンで動作させる
+    - reference と vscode のコードを参考にする
+  - 外部から停止もさせられるようにする
+  - ゾンビ化しないように注意する
+- gateway と agent のアーキテクチャについて
+  - gateway と agent は独立で動作させる
+    - 理由: gateway だけを再起動させたい場合もあるが、その際に agent は再起動させたくないため
+  - agent は IPC で外から health check / status 取得できるようにする
+    - prop
+      - 起動/再起動開始時刻
+    - status
+      - 起動していない
+      - 起動直後
+      - user input を待っている状態
+      - user input を処理中
+  - gateway は agent を外から管理し、
+    - user input が発生したときなど、必要に応じて起動（ensure）する
+    - user input を処理中のまま既定の時間（デフォルト 10 分とか。将来設定ファイルで設定できる。）が経過している場合は、agent に IPC で再起動を促す
+    - status 等の変化を確認し、再起動の完了を確認する

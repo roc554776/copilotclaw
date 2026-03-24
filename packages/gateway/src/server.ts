@@ -59,7 +59,10 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
 
     if (fullPathname === "/api/stop" && method === "POST") {
       json(res, 200, { status: "stopping" });
-      agentManager?.killAll();
+      if (agentManager !== null) {
+        const channelIds = store.listChannels().map((ch) => ch.id);
+        agentManager.stopAll(channelIds).catch(() => {});
+      }
       onStop();
       return;
     }
@@ -97,9 +100,11 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
           json(res, 404, { error: "channel not found" });
           return;
         }
-        // Auto-spawn agent if none running for this channel
-        if (agentManager !== null && !agentManager.hasAgent(channelId)) {
-          agentManager.spawnAgent(channelId);
+        // Ensure agent is running for this channel
+        if (agentManager !== null) {
+          agentManager.ensureAgent(channelId).catch((err: unknown) => {
+            console.error("[gateway] ensureAgent error:", err);
+          });
         }
         json(res, 201, input);
         return;
@@ -190,7 +195,10 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
         port: actualPort,
         store,
         close: () => new Promise<void>((res, rej) => {
-          agentManager?.killAll();
+          if (agentManager !== null) {
+            const channelIds = store.listChannels().map((ch) => ch.id);
+            agentManager.stopAll(channelIds).catch(() => {});
+          }
           server.close((err) => { err ? rej(err) : res(); });
         }),
       });
