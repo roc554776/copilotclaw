@@ -6,10 +6,12 @@ import { getAgentSocketPath } from "./ipc-paths.js";
 
 const MIN_AGENT_VERSION = "0.1.0";
 
-function semverSatisfies(version: string, minVersion: string): boolean {
-  const parse = (v: string) => v.split(".").map(Number);
+export function semverSatisfies(version: string, minVersion: string): boolean {
+  // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
+  const parse = (v: string) => v.replace(/-.*$/, "").split(".").map(Number);
   const [aMaj = 0, aMin = 0, aPat = 0] = parse(version);
   const [bMaj = 0, bMin = 0, bPat = 0] = parse(minVersion);
+  if ([aMaj, aMin, aPat, bMaj, bMin, bPat].some(Number.isNaN)) return false;
   if (aMaj !== bMaj) return aMaj > bMaj;
   if (aMin !== bMin) return aMin > bMin;
   return aPat >= bPat;

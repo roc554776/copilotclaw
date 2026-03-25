@@ -37,7 +37,7 @@ const DEFAULT_STALE_TIMEOUT_MS = 10 * 60 * 1000;
 export class AgentSessionManager {
   private readonly sessions = new Map<string, AgentSessionEntry>();
   private readonly channelBindings = new Map<string, string>(); // channelId → sessionId
-  private readonly restartCounts = new Map<string, number>(); // sessionId → count
+  private readonly restartCounts = new Map<string, number>(); // channelId → count (persists across session restarts)
   private readonly gatewayBaseUrl: string;
   private readonly staleTimeoutMs: number;
   private generationCounter = 0;
@@ -102,11 +102,12 @@ export class AgentSessionManager {
       const current = this.sessions.get(sessionId);
       if (current !== undefined && current.generation === generation) {
         this.sessions.delete(sessionId);
-        this.restartCounts.delete(sessionId);
         if (boundChannelId !== undefined) {
           // Only unbind if still bound to this session
           if (this.channelBindings.get(boundChannelId) === sessionId) {
             this.channelBindings.delete(boundChannelId);
+            // Channel is fully unbound — reset its restart count
+            this.restartCounts.delete(boundChannelId);
           }
         }
       }
@@ -147,9 +148,8 @@ export class AgentSessionManager {
         onPostToolUse: async () => {
           // Check if channel has pending user inputs
           try {
-            const fetchOpts: RequestInit = {};
             if (signal.aborted) return;
-            if (!signal.aborted) fetchOpts.signal = signal;
+            const fetchOpts: RequestInit = { signal };
             const res = await fetch(`${gatewayBaseUrl}/api/channels/${channelId}/inputs/peek`, fetchOpts);
             if (res.status === 200) {
               return {
@@ -223,21 +223,22 @@ export class AgentSessionManager {
     // Don't restart if there are no pending inputs (agent may be legitimately finishing)
     if (oldestInputId === undefined) return "ok";
 
-    // Track restart count at manager level (survives session restarts)
-    const restarts = this.restartCounts.get(sessionId) ?? 0;
+    // Track restart count by channelId so it survives session restarts
     const boundChannelId = entry.info.boundChannelId;
+    const countKey = boundChannelId ?? sessionId;
+    const restarts = this.restartCounts.get(countKey) ?? 0;
 
     if (restarts >= 1) {
       // Already restarted once and still stuck — flush and give up
       console.error(`[agent] session ${sessionId.slice(0, 8)} stuck after ${restarts} restart(s), flushing inputs`);
       this.stopSession(sessionId);
-      this.restartCounts.delete(sessionId);
+      this.restartCounts.delete(countKey);
       return "flushed";
     }
 
     // First stale detection — restart session
     console.error(`[agent] session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), restarting session`);
-    this.restartCounts.set(sessionId, restarts + 1);
+    this.restartCounts.set(countKey, restarts + 1);
     entry.restarting = true;
     this.stopSession(sessionId);
     await entry.sessionPromise.catch(() => {});

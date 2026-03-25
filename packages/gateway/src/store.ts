@@ -123,8 +123,9 @@ export class Store {
   listMessages(channelId: string, limit = 5): Message[] {
     const msgs = this.messages.get(channelId);
     if (msgs === undefined) return [];
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 5;
     // Return latest messages in reverse chronological order
-    return msgs.slice(-limit).reverse();
+    return msgs.slice(-safeLimit).reverse();
   }
 
   pendingCounts(): Record<string, number> {
