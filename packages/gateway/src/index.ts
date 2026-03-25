@@ -55,9 +55,22 @@ async function main(): Promise<void> {
 
   if (initialStatus === "unhealthy") {
     log(`port ${DEFAULT_PORT} is occupied but unhealthy, retrying...`);
-    if (await waitForHealthy()) {
-      log("became healthy");
-      return;
+    for (let i = 0; i < HEALTH_RETRY_COUNT; i++) {
+      await sleep(HEALTH_RETRY_INTERVAL_MS);
+      const status = await checkHealth();
+      if (status === "healthy") {
+        log("became healthy");
+        return;
+      }
+      if (status === "port-free") {
+        log("port freed, starting daemon...");
+        spawnDaemon();
+        if (await waitForHealthy()) {
+          log(`running on http://localhost:${DEFAULT_PORT}`);
+          return;
+        }
+        throw new Error("daemon failed to start");
+      }
     }
     throw new Error(`port ${DEFAULT_PORT} is occupied but not healthy after ${HEALTH_RETRY_COUNT} retries`);
   }

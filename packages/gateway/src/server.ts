@@ -5,12 +5,25 @@ import { Store } from "./store.js";
 
 export const DEFAULT_PORT = 19741;
 
+const MAX_BODY_SIZE = 1_048_576; // 1 MB
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => { chunks.push(chunk); });
-    req.on("end", () => { resolve(Buffer.concat(chunks).toString("utf-8")); });
-    req.on("error", reject);
+    let totalSize = 0;
+    let limitExceeded = false;
+    req.on("data", (chunk: Buffer) => {
+      totalSize += chunk.length;
+      if (totalSize > MAX_BODY_SIZE) {
+        limitExceeded = true;
+        req.destroy();
+        reject(new Error("request body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => { if (!limitExceeded) resolve(Buffer.concat(chunks).toString("utf-8")); });
+    req.on("error", (err) => { if (!limitExceeded) reject(err); });
   });
 }
 

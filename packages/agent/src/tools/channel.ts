@@ -102,9 +102,10 @@ export function createChannelTools(deps: ChannelToolDeps) {
       required: ["message"],
     },
     handler: async (args: { message: string }) => {
-      if (currentInputId !== undefined) {
-        await postReply(deps, currentInputId, args.message);
+      if (currentInputId === undefined) {
+        throw new Error("replyAndReceiveInput called before receiveFirstInput");
       }
+      await postReply(deps, currentInputId, args.message);
       deps.onStatusChange?.("waiting");
       const inputs = await pollNextInputs(deps);
       deps.onStatusChange?.("processing");

@@ -17,8 +17,6 @@ interface ChannelSessionEntry {
   abortController: AbortController;
   sessionPromise: Promise<void>;
   generation: number;
-  retryCount: number;
-  lastOldestInputId?: string;
   restarting: boolean;
 }
 
@@ -31,6 +29,7 @@ const DEFAULT_STALE_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class ChannelSessionManager {
   private readonly sessions = new Map<string, ChannelSessionEntry>();
+  private readonly staleRetryState = new Map<string, { lastOldestInputId: string; retryCount: number }>();
   private readonly gatewayBaseUrl: string;
   private readonly staleTimeoutMs: number;
   private generationCounter = 0;
@@ -70,7 +69,6 @@ export class ChannelSessionManager {
       abortController,
       sessionPromise: Promise.resolve(),
       generation,
-      retryCount: 0,
       restarting: false,
     };
 
@@ -81,6 +79,7 @@ export class ChannelSessionManager {
       const current = this.sessions.get(channelId);
       if (current !== undefined && current.generation === generation) {
         this.sessions.delete(channelId);
+        this.staleRetryState.delete(channelId);
       }
       client.stop().catch(() => {});
     });
@@ -135,8 +134,12 @@ export class ChannelSessionManager {
       entry.abortController.abort();
       promises.push(entry.sessionPromise);
     }
-    const timeout = new Promise<void>((r) => { setTimeout(r, 5000); });
-    await Promise.race([Promise.allSettled(promises), timeout]);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((r) => { timeoutHandle = setTimeout(r, 5000); });
+    await Promise.race([
+      Promise.allSettled(promises).finally(() => { clearTimeout(timeoutHandle); }),
+      timeout,
+    ]);
   }
 
   async checkStaleAndHandle(channelId: string, oldestInputId: string | undefined): Promise<"ok" | "flushed"> {
@@ -154,16 +157,20 @@ export class ChannelSessionManager {
     // Don't restart if there are no pending inputs (agent may be legitimately finishing)
     if (oldestInputId === undefined) return "ok";
 
-    if (oldestInputId === entry.lastOldestInputId) {
-      entry.retryCount++;
+    // Track retry state at manager level (survives session restarts)
+    const retryState = this.staleRetryState.get(channelId);
+    if (retryState !== undefined && retryState.lastOldestInputId === oldestInputId) {
+      retryState.retryCount++;
     } else {
-      entry.retryCount = 0;
-      entry.lastOldestInputId = oldestInputId;
+      this.staleRetryState.set(channelId, { lastOldestInputId: oldestInputId, retryCount: 1 });
     }
 
-    if (entry.retryCount > 1) {
+    const currentRetry = this.staleRetryState.get(channelId)!;
+
+    if (currentRetry.retryCount > 1) {
       console.error(`[agent] channel ${channelId.slice(0, 8)} stuck after retry, flushing inputs`);
       this.stopSession(channelId);
+      this.staleRetryState.delete(channelId);
       return "flushed";
     }
 

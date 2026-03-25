@@ -23,7 +23,8 @@ function sendIpcRequest(socketPath: string, method: string, params?: Record<stri
       const newlineIdx = buffer.indexOf("\n");
       if (newlineIdx !== -1) {
         const line = buffer.slice(0, newlineIdx);
-        socket.end();
+        socket.destroy();
+        clearTimeout(timer);
         try {
           resolve(JSON.parse(line) as Record<string, unknown>);
         } catch {

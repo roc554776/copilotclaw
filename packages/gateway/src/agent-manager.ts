@@ -22,12 +22,11 @@ export class AgentManager {
 
   async ensureAgent(): Promise<void> {
     if (this.spawning) return;
-    const socketPath = getAgentSocketPath();
-    const status = await getAgentStatus(socketPath);
-    if (status !== null) return;
-
     this.spawning = true;
     try {
+      const socketPath = getAgentSocketPath();
+      const status = await getAgentStatus(socketPath);
+      if (status !== null) return;
       this.spawnAgent();
     } finally {
       // Reset after grace period for socket to be bound

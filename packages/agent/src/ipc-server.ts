@@ -26,6 +26,8 @@ function handleConnection(
 ): void {
   let buffer = "";
 
+  socket.on("error", () => { /* suppress client disconnect errors */ });
+
   socket.on("data", (data: Buffer) => {
     buffer += data.toString();
     const lines = buffer.split("\n");
@@ -110,11 +112,13 @@ export function listenIpc(
       if (err.code === "EADDRINUSE") {
         const probe = createConnection(socketPath, () => {
           probe.end();
+          server.close();
           resolve({ kind: "already-running" });
         });
         probe.on("error", (probeErr: NodeJS.ErrnoException) => {
           if (probeErr.code === "ECONNREFUSED") {
-            // Stale socket — unlink and create a fresh server
+            // Stale socket — close original server, unlink and create a fresh one
+            server.close();
             try { unlinkSync(socketPath); } catch {}
             const freshServer = createServer((socket) => {
               handleConnection(socket, state, mgr, onStop);
