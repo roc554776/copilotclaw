@@ -1,7 +1,7 @@
 import { createConnection } from "node:net";
 
 export interface AgentSessionStatusResponse {
-  status: "starting" | "waiting" | "processing" | "not_running";
+  status: "starting" | "waiting" | "processing" | "stopped" | "not_running";
   startedAt?: string;
   processingStartedAt?: string;
   boundChannelId?: string;

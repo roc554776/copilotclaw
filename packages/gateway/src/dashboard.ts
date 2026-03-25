@@ -25,10 +25,19 @@ function renderTab(channel: Channel, isActive: boolean): string {
   return `<a class="${cls}" href="/?channel=${escapeHtml(channel.id)}">${escapeHtml(label)}</a>`;
 }
 
-export function renderDashboard(channels: Channel[], inputs: UserInput[], activeChannelId: string | undefined): string {
+export interface DashboardAgentStatus {
+  version?: string;
+  sessionStatus?: string;
+}
+
+export function renderDashboard(channels: Channel[], inputs: UserInput[], activeChannelId: string | undefined, agentStatus?: DashboardAgentStatus): string {
   const messages = inputs.map(renderMessage).join("\n");
   const tabs = channels.map((ch) => renderTab(ch, ch.id === activeChannelId)).join("\n");
   const channelId = activeChannelId ?? "";
+
+  const agentVersion = agentStatus?.version ? escapeHtml(agentStatus.version) : "—";
+  const sessionState = agentStatus?.sessionStatus ? escapeHtml(agentStatus.sessionStatus) : "—";
+  const statusBar = `<div id="status-bar">gateway: running | agent: v${agentVersion} | session: ${sessionState}</div>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -60,9 +69,11 @@ export function renderDashboard(channels: Channel[], inputs: UserInput[], active
     #input-area button:hover { background: #2ea043; }
     #input-area button:disabled { opacity: 0.5; cursor: default; }
     .empty { color: #484f58; text-align: center; margin-top: 2rem; }
+    #status-bar { padding: 0.3rem 1rem; background: #161b22; border-bottom: 1px solid #30363d; font-size: 0.75rem; color: #8b949e; }
   </style>
 </head>
 <body>
+  ${statusBar}
   <div id="tabs">
     ${tabs}
     <button id="new-tab">+</button>

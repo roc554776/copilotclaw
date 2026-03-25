@@ -4,7 +4,7 @@ import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
 import { createChannelTools } from "./tools/channel.js";
 
-export type AgentSessionStatus = "starting" | "waiting" | "processing";
+export type AgentSessionStatus = "starting" | "waiting" | "processing" | "stopped";
 
 export interface AgentSessionInfo {
   status: AgentSessionStatus;
@@ -95,8 +95,18 @@ export class AgentSessionManager {
       this.channelBindings.set(boundChannelId, sessionId);
     }
 
-    const promise = this.runSession(entry).catch((err: unknown) => {
+    const promise = this.runSession(entry).then(() => {
+      // Session ended normally (idle) — this is unexpected, mark as stopped
+      if (!entry.abortController.signal.aborted) {
+        entry.info.status = "stopped";
+        this.notifyChannelSessionStopped(boundChannelId);
+      }
+    }).catch((err: unknown) => {
       console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
+      if (!entry.abortController.signal.aborted) {
+        entry.info.status = "stopped";
+        this.notifyChannelSessionStopped(boundChannelId);
+      }
     }).finally(() => {
       // Only delete if this is still the current generation
       const current = this.sessions.get(sessionId);
@@ -252,6 +262,16 @@ export class AgentSessionManager {
       this.startSession({ boundChannelId });
     }
     return "ok";
+  }
+
+  private notifyChannelSessionStopped(channelId: string | undefined): void {
+    if (channelId === undefined) return;
+    const message = "[SYSTEM] Agent session stopped unexpectedly. A new session will start when you send a message.";
+    fetch(`${this.gatewayBaseUrl}/api/channels/${channelId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "agent", message }),
+    }).catch(() => {});
   }
 
   /** Get the sessionId bound to a channel, if any */

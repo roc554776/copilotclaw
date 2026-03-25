@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentStatus, stopAgent } from "./ipc-client.js";
+import { type AgentStatusResponse, getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 
 const MIN_AGENT_VERSION = "0.1.0";
@@ -34,18 +34,26 @@ export class AgentManager {
     this.agentScript = options.agentScript ?? join(thisDir, "..", "..", "agent", "dist", "index.js");
   }
 
-  async ensureAgent(): Promise<void> {
+  async ensureAgent(options?: { forceRestart?: boolean }): Promise<void> {
     if (this.spawning) return;
     this.spawning = true;
     try {
       const socketPath = getAgentSocketPath();
       const status = await getAgentStatus(socketPath);
       if (status !== null) {
-        if (status.version === undefined) {
-          throw new Error("agent is too old (no version reported)");
-        }
-        if (!semverSatisfies(status.version, MIN_AGENT_VERSION)) {
-          throw new Error(`agent version ${status.version} is below minimum ${MIN_AGENT_VERSION}`);
+        const versionTooOld = status.version === undefined || !semverSatisfies(status.version, MIN_AGENT_VERSION);
+        if (versionTooOld) {
+          if (options?.forceRestart) {
+            console.error(`[gateway] agent version ${status.version ?? "unknown"} is below minimum ${MIN_AGENT_VERSION}, force-restarting`);
+            await stopAgent(socketPath);
+            this.spawnAgent();
+            return;
+          }
+          throw new Error(
+            status.version === undefined
+              ? "agent is too old (no version reported)"
+              : `agent version ${status.version} is below minimum ${MIN_AGENT_VERSION}`,
+          );
         }
         return;
       }
@@ -68,6 +76,11 @@ export class AgentManager {
     });
     child.unref();
     console.error(`[gateway] spawned agent process (pid=${child.pid})`);
+  }
+
+  async getStatus(): Promise<AgentStatusResponse | null> {
+    const socketPath = getAgentSocketPath();
+    return getAgentStatus(socketPath);
   }
 
   async stopAgent(): Promise<void> {

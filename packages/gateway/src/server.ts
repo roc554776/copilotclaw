@@ -84,6 +84,15 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
       return;
     }
 
+    if (fullPathname === "/api/status" && method === "GET") {
+      const agentStatus = agentManager !== null ? await agentManager.getStatus() : null;
+      json(res, 200, {
+        gateway: { status: "running" },
+        agent: agentStatus,
+      });
+      return;
+    }
+
     // Channel management
     if (fullPathname === "/api/channels" && method === "GET") {
       json(res, 200, store.listChannels());
@@ -205,7 +214,36 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
       const channels = store.listChannels();
       const selectedChannelId = params.get("channel") ?? channels[0]?.id;
       const inputs = selectedChannelId !== undefined ? store.listInputs(selectedChannelId) : [];
-      const html = renderDashboard(channels, inputs, selectedChannelId);
+
+      // Fetch agent status for dashboard status bar
+      let dashboardAgentStatus: import("./dashboard.js").DashboardAgentStatus | undefined;
+      if (agentManager !== null) {
+        try {
+          const agentInfo = await agentManager.getStatus();
+          if (agentInfo !== null) {
+            // Find session status for the active channel
+            let sessionStatus: string | undefined;
+            if (selectedChannelId !== undefined) {
+              for (const sess of Object.values(agentInfo.sessions)) {
+                if (sess.boundChannelId === selectedChannelId) {
+                  sessionStatus = sess.status;
+                  break;
+                }
+              }
+            }
+            dashboardAgentStatus = {
+              sessionStatus: sessionStatus ?? "no session",
+            };
+            if (agentInfo.version !== undefined) {
+              dashboardAgentStatus.version = agentInfo.version;
+            }
+          }
+        } catch {
+          // Agent not reachable — leave undefined
+        }
+      }
+
+      const html = renderDashboard(channels, inputs, selectedChannelId, dashboardAgentStatus);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
       return;

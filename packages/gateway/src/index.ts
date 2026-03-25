@@ -24,14 +24,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-function spawnDaemon(): void {
+function spawnDaemon(options?: { forceAgentRestart?: boolean }): void {
   const thisDir = dirname(fileURLToPath(import.meta.url));
   const daemonScript = join(thisDir, "daemon.js");
+
+  const env = { ...process.env };
+  if (options?.forceAgentRestart) {
+    env["COPILOTCLAW_FORCE_AGENT_RESTART"] = "1";
+  }
 
   const child = spawn(process.execPath, [daemonScript], {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env },
+    env,
   });
   child.unref();
 }
@@ -46,6 +51,12 @@ async function waitForHealthy(): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
+  const forceAgentRestart = process.argv.includes("--force-agent-restart");
+
+  if (forceAgentRestart) {
+    log("--force-agent-restart: will stop outdated agent on startup");
+  }
+
   const initialStatus = await checkHealth();
 
   if (initialStatus === "healthy") {
@@ -64,7 +75,7 @@ async function main(): Promise<void> {
       }
       if (status === "port-free") {
         log("port freed, starting daemon...");
-        spawnDaemon();
+        spawnDaemon({ forceAgentRestart });
         if (await waitForHealthy()) {
           log(`running on http://localhost:${DEFAULT_PORT}`);
           return;
@@ -76,7 +87,7 @@ async function main(): Promise<void> {
   }
 
   log("starting gateway daemon...");
-  spawnDaemon();
+  spawnDaemon({ forceAgentRestart });
 
   if (await waitForHealthy()) {
     log(`running on http://localhost:${DEFAULT_PORT}`);

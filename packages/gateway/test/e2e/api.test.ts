@@ -184,6 +184,25 @@ describe("GET /", () => {
   });
 });
 
+describe("GET /api/status", () => {
+  it("returns gateway status and null agent when no agent manager", async () => {
+    const res = await fetch(`${baseUrl}/api/status`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { gateway: { status: string }; agent: null };
+    expect(body.gateway.status).toBe("running");
+    expect(body.agent).toBeNull();
+  });
+});
+
+describe("GET / (dashboard status bar)", () => {
+  it("shows status bar in dashboard HTML", async () => {
+    const res = await fetch(`${baseUrl}/`);
+    const html = await res.text();
+    expect(html).toContain("status-bar");
+    expect(html).toContain("gateway: running");
+  });
+});
+
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);
