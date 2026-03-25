@@ -1,4 +1,4 @@
-import type { Channel, UserInput } from "./store.js";
+import type { Channel, Message } from "./store.js";
 
 function escapeHtml(text: string): string {
   return text
@@ -8,15 +8,10 @@ function escapeHtml(text: string): string {
     .replaceAll('"', "&quot;");
 }
 
-function renderMessage(input: UserInput): string {
-  const userBubble = `<div class="msg user"><div class="bubble user-bubble">${escapeHtml(input.message)}</div><div class="time">${escapeHtml(input.createdAt)}</div></div>`;
-
-  if (input.reply === undefined) {
-    return userBubble + `<div class="msg agent"><div class="bubble agent-bubble pending">thinking…</div></div>`;
-  }
-
-  const agentBubble = `<div class="msg agent"><div class="bubble agent-bubble">${escapeHtml(input.reply.message)}</div><div class="time">${escapeHtml(input.reply.createdAt)}</div></div>`;
-  return userBubble + agentBubble;
+function renderChatMessage(msg: Message): string {
+  const side = msg.sender === "user" ? "user" : "agent";
+  const bubbleCls = msg.sender === "user" ? "user-bubble" : "agent-bubble";
+  return `<div class="msg ${side}"><div class="bubble ${bubbleCls}">${escapeHtml(msg.message)}</div><div class="time">${escapeHtml(msg.createdAt)}</div></div>`;
 }
 
 function renderTab(channel: Channel, isActive: boolean): string {
@@ -30,8 +25,8 @@ export interface DashboardAgentStatus {
   sessionStatus?: string;
 }
 
-export function renderDashboard(channels: Channel[], inputs: UserInput[], activeChannelId: string | undefined, agentStatus?: DashboardAgentStatus): string {
-  const messages = inputs.map(renderMessage).join("\n");
+export function renderDashboard(channels: Channel[], chatMessages: Message[], activeChannelId: string | undefined, agentStatus?: DashboardAgentStatus): string {
+  const messages = chatMessages.map(renderChatMessage).join("\n");
   const tabs = channels.map((ch) => renderTab(ch, ch.id === activeChannelId)).join("\n");
   const channelId = activeChannelId ?? "";
 

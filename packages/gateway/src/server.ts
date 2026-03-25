@@ -224,7 +224,8 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
     if (fullPathname === "/" && method === "GET") {
       const channels = store.listChannels();
       const selectedChannelId = params.get("channel") ?? channels[0]?.id;
-      const inputs = selectedChannelId !== undefined ? store.listInputs(selectedChannelId) : [];
+      // listMessages returns reverse-chronological; reverse for dashboard (oldest first)
+      const chatMessages = selectedChannelId !== undefined ? store.listMessages(selectedChannelId, 100).reverse() : [];
 
       // Fetch agent status for dashboard status bar
       let dashboardAgentStatus: import("./dashboard.js").DashboardAgentStatus | undefined;
@@ -254,7 +255,7 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
         }
       }
 
-      const html = renderDashboard(channels, inputs, selectedChannelId, dashboardAgentStatus);
+      const html = renderDashboard(channels, chatMessages, selectedChannelId, dashboardAgentStatus);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
       return;
