@@ -1,6 +1,7 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { AgentManager } from "./agent-manager.js";
-import { renderDashboard } from "./dashboard.js";
+import { BuiltinChatChannel } from "./builtin-chat-channel.js";
+import type { ChannelProvider } from "./channel-provider.js";
 import { Store } from "./store.js";
 import { WsBroadcaster } from "./ws.js";
 
@@ -57,13 +58,18 @@ export interface ServerDeps {
   onStop?: () => void;
   agentManager?: AgentManager | null;
   wsBroadcaster?: WsBroadcaster;
+  channelProviders?: ChannelProvider[];
 }
 
-function createRequestHandler(store: Store, onStop: () => void, agentManager: AgentManager | null, wsBroadcaster: WsBroadcaster) {
+function createRequestHandler(
+  store: Store,
+  onStop: () => void,
+  agentManager: AgentManager | null,
+  channelProviders: ChannelProvider[],
+) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
     const fullPathname = url?.split("?")[0] ?? "/";
-    // Parse query string for channel selection in dashboard
     const queryString = url?.split("?")[1] ?? "";
     const params = new URLSearchParams(queryString);
 
@@ -86,12 +92,6 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
       return;
     }
 
-    if (fullPathname === "/api/events" && method === "GET") {
-      const channelId = params.get("channel") ?? undefined;
-      wsBroadcaster.addClient(res, channelId);
-      return;
-    }
-
     if (fullPathname === "/api/status" && method === "GET") {
       const agentStatus = agentManager !== null ? await agentManager.getStatus() : null;
       json(res, 200, {
@@ -101,7 +101,7 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
       return;
     }
 
-    // Channel management
+    // Channel management (core — provider-agnostic)
     if (fullPathname === "/api/channels" && method === "GET") {
       json(res, 200, store.listChannels());
       return;
@@ -118,7 +118,7 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
       return;
     }
 
-    // Channel-scoped routes: /api/channels/:channelId/:action
+    // Channel-scoped routes (core — provider-agnostic)
     const route = parseChannelRoute(fullPathname);
     if (route !== undefined) {
       const { channelId, action } = route;
@@ -153,7 +153,10 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
             console.error("[gateway] ensureAgent error:", err);
           });
         }
-        wsBroadcaster.broadcast({ type: "new_message", channelId, data: msg });
+        // Notify all channel providers
+        for (const provider of channelProviders) {
+          provider.onMessage?.(channelId, sender, body["message"] as string);
+        }
         json(res, 201, msg);
         return;
       }
@@ -188,45 +191,10 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
       return;
     }
 
-    // Dashboard
-    if (fullPathname === "/" && method === "GET") {
-      const channels = store.listChannels();
-      const selectedChannelId = params.get("channel") ?? channels[0]?.id;
-      // listMessages returns reverse-chronological; reverse for dashboard (oldest first)
-      const chatMessages = selectedChannelId !== undefined ? store.listMessages(selectedChannelId, 100).reverse() : [];
-
-      // Fetch agent status for dashboard status bar
-      let dashboardAgentStatus: import("./dashboard.js").DashboardAgentStatus | undefined;
-      if (agentManager !== null) {
-        try {
-          const agentInfo = await agentManager.getStatus();
-          if (agentInfo !== null) {
-            // Find session status for the active channel
-            let sessionStatus: string | undefined;
-            if (selectedChannelId !== undefined) {
-              for (const sess of Object.values(agentInfo.sessions)) {
-                if (sess.boundChannelId === selectedChannelId) {
-                  sessionStatus = sess.status;
-                  break;
-                }
-              }
-            }
-            dashboardAgentStatus = {
-              sessionStatus: sessionStatus ?? "no session",
-            };
-            if (agentInfo.version !== undefined) {
-              dashboardAgentStatus.version = agentInfo.version;
-            }
-          }
-        } catch {
-          // Agent not reachable — leave undefined
-        }
-      }
-
-      const html = renderDashboard(channels, chatMessages, selectedChannelId, dashboardAgentStatus);
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
-      return;
+    // Delegate to channel providers (provider-specific routes like "/" dashboard, "/api/events" SSE)
+    for (const provider of channelProviders) {
+      const handled = await provider.handleRequest(req, res, params);
+      if (handled) return;
     }
 
     json(res, 404, { error: "not found" });
@@ -245,12 +213,17 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const port = options?.port ?? DEFAULT_PORT;
   const store = options?.store ?? new Store();
   const onStop = options?.onStop ?? (() => { process.exit(0); });
-  // agentManager: null means no agent spawning (for tests), undefined means create default
   const agentManager = options?.agentManager === null
     ? null
     : options?.agentManager ?? new AgentManager({ gatewayPort: port });
   const wsBroadcaster = options?.wsBroadcaster ?? new WsBroadcaster();
-  const handleRequest = createRequestHandler(store, onStop, agentManager, wsBroadcaster);
+
+  // Channel providers: use provided list or default to built-in chat
+  const channelProviders = options?.channelProviders ?? [
+    new BuiltinChatChannel({ store, agentManager, wsBroadcaster }),
+  ];
+
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {
@@ -277,7 +250,9 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
         store,
         wsBroadcaster,
         close: async () => {
-          wsBroadcaster.closeAll();
+          for (const provider of channelProviders) {
+            provider.close?.();
+          }
           await agentManager?.stopAgent().catch(() => {});
           await new Promise<void>((res, rej) => {
             server.close((err) => { err ? rej(err) : res(); });
