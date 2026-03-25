@@ -9,6 +9,8 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "stop": "node dist/stop.js",
+    "setup": "node dist/setup.js",
+    "update": "node dist/update.js",
     "dev": "tsc && node dist/index.js",
     "test": "vitest run",
     "test:unit": "vitest run test/unit",
