@@ -34,6 +34,31 @@ Agent attempts to stop
 - `src/platform/chat/common/chatHookService.ts` — `StopHookOutput` interface with `decision: 'block'`
 - `src/extension/intents/node/toolCallingLoop.ts` — `executeStopHook()`, `stopHookUserInitiated` flag, continuation logic
 
+## GitHub Copilot CLI Hooks
+
+The CLI reads hooks from `.github/hooks/hooks.json` in the working directory. Six event types are supported:
+
+| Hook | Can block? | Notes |
+|:---|:---|:---|
+| `sessionStart` | No | Output ignored |
+| `sessionEnd` | No | Output ignored |
+| `userPromptSubmitted` | No | Output ignored |
+| `preToolUse` | **Yes** | `permissionDecision`: `"allow"`, `"deny"`, `"ask"` |
+| `postToolUse` | No | Output ignored |
+| `errorOccurred` | No | Output ignored |
+
+**Stop hook does NOT exist in CLI.** Requested in [github/copilot-cli#1157](https://github.com/github/copilot-cli/issues/1157), still open as of March 2026.
+
+When using the SDK, the CLI subprocess still reads `.github/hooks/hooks.json` from the working directory.
+
+## SDK-CLI Hooks Architecture
+
+The SDK spawns the CLI as a child process and communicates via JSON-RPC (stdio or TCP).
+
+- **SDK hooks** (`onPreToolUse`, `onPostToolUse`, etc.) are in-process callbacks registered via `createSession({ hooks })`. The SDK sends a boolean `hooks: true/false` flag to the CLI to indicate hooks are present.
+- **CLI hooks** (`.github/hooks/hooks.json`) are shell commands executed by the CLI process directly.
+- These are **two separate hook systems**. SDK hooks and CLI hooks coexist but do not interact.
+
 ## Copilot SDK: No Stop Hook Block Available
 
 The SDK provides 6 hooks: `onSessionStart`, `onUserPromptSubmitted`, `onPreToolUse`, `onPostToolUse`, `onSessionEnd`, `onErrorOccurred`.
@@ -61,3 +86,15 @@ The current implementation uses `session.send({ prompt: continuePrompt, mode: "e
 - `disconnect/resumeSession` adds latency (disk I/O, session reconstruction)
 - Current tool-handler polling has lower latency but consumes premium requests on every idle cycle
 - `resumeSession()` itself does NOT consume premium requests (confirmed in SDK source)
+
+## Session Idle Timeout
+
+The CLI enforces a 30-minute idle timeout on sessions. This is a built-in CLI behavior and cannot be configured.
+
+```
+Last activity → 25 min: timeout_warning event → 30 min: session destroyed
+```
+
+- **What gets destroyed:** In-memory session resources on the CLI side
+- **What survives:** Session state on disk (conversation history, tool results, planning state, artifacts) — can be resumed via `client.resumeSession(sessionId)`
+- **Current copilotclaw impact:** Tool handler polling keeps the session active (tool is executing), so this timeout does not apply. If switching to disconnect/resumeSession, the session would be disconnected before timeout applies.
