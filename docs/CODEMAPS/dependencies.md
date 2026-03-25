@@ -9,6 +9,7 @@
 | `@github/copilot-sdk` | agent | LLM access via GitHub Copilot (mocked in tests) |
 | `node:http` | gateway | HTTP server (no framework) |
 | `node:net` | agent, gateway | IPC via Unix domain socket |
+| `node:crypto` | agent, gateway | randomUUID for session/message IDs |
 
 ## Dev
 

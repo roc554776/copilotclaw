@@ -6,6 +6,9 @@
   - gateway の status
   - agent のバージョン
   - agent session の状態（starting / waiting / processing / stopped など）
+- status バーをホバーまたはクリックしたら、gateway と agent の詳細ステータスを modal で表示する
+- dashboard の画面更新はリアルタイムであること（chat もステータスも）
+  - WebSocket 等のプッシュ型通信を使用する（現在の polling ではなく）
 
 ## 古い Agent の強制停止と再起動
 
