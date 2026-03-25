@@ -1,0 +1,17 @@
+Codemap Scan Report — 2026-03-25
+==================================
+
+Scanned packages: agent (7 src files), gateway (8 src files)
+Total source files: 15
+
+Diff from previous codemaps: ~0%
+All three codemaps (architecture.md, backend.md, dependencies.md) are current.
+
+No changes detected:
+- No new files added
+- No files removed
+- No new routes or IPC methods
+- No new dependencies
+- No architecture changes
+
+Staleness: all codemaps dated 2026-03-25 — fresh.

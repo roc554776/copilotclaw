@@ -1,8 +1,12 @@
 import { defineTool } from "@github/copilot-sdk";
 
-const REPLY_TOOL_NAME = "copilotclaw_reply_and_receive_input";
+const RECEIVE_INPUT_TOOL_NAME = "copilotclaw_receive_input";
 
-const REPLY_INSTRUCTION = `\n\n[SYSTEM] You MUST use the ${REPLY_TOOL_NAME} tool to reply to the user. Do NOT respond with plain text.`;
+const DEFAULT_KEEPALIVE_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutes
+
+const RECEIVE_INSTRUCTION = `\n\n[SYSTEM] You MUST use ${RECEIVE_INPUT_TOOL_NAME} to wait for the next user input after you finish your work. Do NOT stop without calling this tool.`;
+
+const KEEPALIVE_INSTRUCTION = `[SYSTEM] No user input received (keepalive cycle). Call ${RECEIVE_INPUT_TOOL_NAME} immediately to continue waiting. Do NOT stop.`;
 
 export type AgentStatusChange = "waiting" | "processing";
 
@@ -10,6 +14,7 @@ export interface ChannelToolDeps {
   gatewayBaseUrl: string;
   channelId: string;
   pollIntervalMs?: number;
+  keepaliveTimeoutMs?: number;
   fetch?: typeof globalThis.fetch;
   abortSignal?: AbortSignal;
   onStatusChange?: (status: AgentStatusChange) => void;
@@ -18,6 +23,14 @@ export interface ChannelToolDeps {
 interface NextInputResponse {
   id: string;
   message: string;
+}
+
+interface MessageResponse {
+  id: string;
+  channelId: string;
+  sender: "user" | "agent";
+  message: string;
+  createdAt: string;
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -31,12 +44,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 async function pollNextInputs(deps: ChannelToolDeps): Promise<NextInputResponse[]> {
   const fetchFn = deps.fetch ?? globalThis.fetch;
   const interval = deps.pollIntervalMs ?? 5000;
+  const keepaliveTimeout = deps.keepaliveTimeoutMs ?? DEFAULT_KEEPALIVE_TIMEOUT_MS;
   const signal = deps.abortSignal;
   const fetchOpts: RequestInit = { method: "POST" };
   if (signal !== undefined) fetchOpts.signal = signal;
+  const startTime = Date.now();
 
   for (;;) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (Date.now() - startTime >= keepaliveTimeout) return [];
     const res = await fetchFn(
       `${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/inputs/next`,
       fetchOpts,
@@ -49,33 +65,39 @@ async function pollNextInputs(deps: ChannelToolDeps): Promise<NextInputResponse[
   }
 }
 
-function combineMessages(inputs: NextInputResponse[]): { lastInputId: string; combined: string } {
-  if (inputs.length === 0) {
-    return { lastInputId: "", combined: "" };
-  }
-  const combined = inputs.map((i) => i.message).join("\n\n");
-  return { lastInputId: inputs[inputs.length - 1]!.id, combined };
-}
-
-async function postReply(deps: ChannelToolDeps, inputId: string, message: string): Promise<void> {
-  const fetchFn = deps.fetch ?? globalThis.fetch;
-  const opts: RequestInit = {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ inputId, message }),
-  };
-  if (deps.abortSignal !== undefined) opts.signal = deps.abortSignal;
-  const res = await fetchFn(`${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/replies`, opts);
-  if (!res.ok) {
-    throw new Error(`reply failed: ${res.status} ${res.statusText}`);
-  }
+function combineMessages(inputs: NextInputResponse[]): string {
+  return inputs.map((i) => i.message).join("\n\n");
 }
 
 export function createChannelTools(deps: ChannelToolDeps) {
-  let currentInputId: string | undefined;
+  const sendMessage = defineTool("copilotclaw_send_message", {
+    description: "Send a message to the channel. Use this to report progress or reply to the user. Returns immediately.",
+    parameters: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "The message to send" },
+      },
+      required: ["message"],
+    },
+    handler: async (args: { message: string }) => {
+      const fetchFn = deps.fetch ?? globalThis.fetch;
+      const opts: RequestInit = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sender: "agent", message: args.message }),
+      };
+      if (deps.abortSignal !== undefined) opts.signal = deps.abortSignal;
+      const res = await fetchFn(`${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/messages`, opts);
+      if (!res.ok) {
+        throw new Error(`send_message failed: ${res.status} ${res.statusText}`);
+      }
+      return { status: "sent" };
+    },
+    skipPermission: true,
+  });
 
-  const receiveFirstInput = defineTool("copilotclaw_receive_first_input", {
-    description: "Call this tool at session initialization to receive the first user input from the channel.",
+  const receiveInput = defineTool(RECEIVE_INPUT_TOOL_NAME, {
+    description: "Wait for user input from the channel. Blocks until input arrives or keepalive timeout. Call this after finishing your work to wait for the next user message.",
     parameters: {
       type: "object",
       properties: {},
@@ -84,37 +106,42 @@ export function createChannelTools(deps: ChannelToolDeps) {
     handler: async () => {
       deps.onStatusChange?.("waiting");
       const inputs = await pollNextInputs(deps);
+      if (inputs.length === 0) {
+        return { userMessage: KEEPALIVE_INSTRUCTION };
+      }
       deps.onStatusChange?.("processing");
-      const { lastInputId, combined } = combineMessages(inputs);
-      currentInputId = lastInputId;
-      return { userMessage: combined + REPLY_INSTRUCTION };
+      const combined = combineMessages(inputs);
+      return { userMessage: combined + RECEIVE_INSTRUCTION };
     },
     skipPermission: true,
   });
 
-  const replyAndReceiveInput = defineTool(REPLY_TOOL_NAME, {
-    description: "Reply to the user's message and wait for the next user input from the channel.",
+  const listMessages = defineTool("copilotclaw_list_messages", {
+    description: "List recent messages in the channel. Returns messages in reverse chronological order with sender information.",
     parameters: {
       type: "object",
       properties: {
-        message: { type: "string", description: "The reply message to send to the user" },
+        limit: { type: "number", description: "Maximum number of messages to return (default: 5)" },
       },
-      required: ["message"],
+      required: [],
     },
-    handler: async (args: { message: string }) => {
-      if (currentInputId === undefined) {
-        throw new Error("replyAndReceiveInput called before receiveFirstInput");
+    handler: async (args: { limit?: number }) => {
+      const fetchFn = deps.fetch ?? globalThis.fetch;
+      const limit = args.limit ?? 5;
+      const fetchOpts: RequestInit = {};
+      if (deps.abortSignal !== undefined) fetchOpts.signal = deps.abortSignal;
+      const res = await fetchFn(
+        `${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/messages?limit=${limit}`,
+        fetchOpts,
+      );
+      if (!res.ok) {
+        throw new Error(`list_messages failed: ${res.status} ${res.statusText}`);
       }
-      await postReply(deps, currentInputId, args.message);
-      deps.onStatusChange?.("waiting");
-      const inputs = await pollNextInputs(deps);
-      deps.onStatusChange?.("processing");
-      const { lastInputId, combined } = combineMessages(inputs);
-      currentInputId = lastInputId;
-      return { userMessage: combined + REPLY_INSTRUCTION };
+      const messages = await res.json() as MessageResponse[];
+      return { messages };
     },
     skipPermission: true,
   });
 
-  return { receiveFirstInput, replyAndReceiveInput };
+  return { sendMessage, receiveInput, listMessages };
 }

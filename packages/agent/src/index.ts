@@ -1,4 +1,4 @@
-import { ChannelSessionManager } from "./channel-session-manager.js";
+import { AgentSessionManager } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { listenIpc } from "./ipc-server.js";
 
@@ -38,7 +38,7 @@ async function main(): Promise<void> {
   const socketPath = getAgentSocketPath();
   let stopRequested = false;
 
-  const sessionManager = new ChannelSessionManager({
+  const sessionManager = new AgentSessionManager({
     gatewayBaseUrl: GATEWAY_URL,
   });
 
@@ -65,17 +65,19 @@ async function main(): Promise<void> {
       const pending = await fetchPendingCounts(GATEWAY_URL);
 
       for (const [channelId, count] of Object.entries(pending)) {
-        if (count > 0 && !sessionManager.hasSession(channelId)) {
+        if (count > 0 && !sessionManager.hasSessionForChannel(channelId)) {
           log(`starting session for channel ${channelId.slice(0, 8)} (${count} pending inputs)`);
-          sessionManager.startSession(channelId);
+          sessionManager.startSession({ boundChannelId: channelId });
         }
       }
 
       // Check for stale sessions
-      const channelStatuses = sessionManager.getChannelStatuses();
-      for (const channelId of Object.keys(channelStatuses)) {
+      const sessionStatuses = sessionManager.getSessionStatuses();
+      for (const [sessionId, info] of Object.entries(sessionStatuses)) {
+        const channelId = info.boundChannelId;
+        if (channelId === undefined) continue;
         const oldestInputId = await peekOldestInput(GATEWAY_URL, channelId);
-        const action = await sessionManager.checkStaleAndHandle(channelId, oldestInputId);
+        const action = await sessionManager.checkStaleAndHandle(sessionId, oldestInputId);
         if (action === "flushed") {
           await flushChannelInputs(GATEWAY_URL, channelId);
         }

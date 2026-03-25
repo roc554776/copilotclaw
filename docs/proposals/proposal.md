@@ -49,17 +49,17 @@ Agent と human は gateway の API を介して対話する。Agent は Copilot
 
 各 channel は独立した input queue と会話履歴を持つ。
 
+
 ```
 human → dashboard tab (POST /api/channels/{{channelId}}/inputs) → channel queue
                                                                        ↓
                                               gateway: agent を ensure（IPC で生存確認、なければ起動）
                                                                        ↓
-agent ← copilotclaw_receive_first_input ← (POST /api/channels/{{channelId}}/inputs/next)
-agent → [LLM 処理] → copilotclaw_reply_and_receive_input
-                         ↓                              ↓
-    POST /api/channels/{{channelId}}/replies    POST /api/channels/{{channelId}}/inputs/next
-                         ↓                              ↓
-              dashboard に表示           次の user input を受け取り（複数なら一括）
+agent ← copilotclaw_receive_input ← (POST /api/channels/{{channelId}}/inputs/next)
+agent → [LLM 処理] → copilotclaw_send_message で途中報告（即時 return）
+                         ↓
+    POST /api/channels/{{channelId}}/messages → dashboard に表示
+agent → copilotclaw_send_message で最終回答 → copilotclaw_receive_input で次の入力を待機
 ```
 
 ## アーキテクチャ方針: Agent シングルトンと Gateway-Agent 分離
@@ -88,17 +88,48 @@ IPC ソケット上で改行区切り JSON を送受信する。
 
 | メソッド | 応答 | 用途 |
 | :--- | :--- | :--- |
-| `status` | `{ startedAt, channels: { [channelId]: ChannelStatus } }` | 全チャンネルの状態を一括取得 |
-| `channel_status` (params: `{ channelId }`) | `ChannelStatus` | 個別チャンネルの状態を取得 |
+| `status` | `{ version, startedAt, sessions: { [sessionId]: AgentSessionInfo } }` | 全 agent session の状態を一括取得（version を含む） |
+| `session_status` (params: `{ sessionId }`) | `AgentSessionInfo` | 個別 agent session の状態を取得 |
 | `stop` | `{ ok: true }` | graceful shutdown |
 
-ChannelStatus:
+AgentSessionInfo:
 
 | フィールド | 型 | 意味 |
 | :--- | :--- | :--- |
 | `status` | `"starting" \| "waiting" \| "processing" \| "not_running"` | セッションの状態 |
 | `startedAt` | `string` | セッション開始時刻 |
 | `processingStartedAt?` | `string` | processing 状態に入った時刻 |
+| `boundChannelId?` | `string` | 紐づいている channel の ID |
+
+### Agent バージョン互換性
+
+
+Agent は自身のバージョン（セマンティックバージョニング）を持ち、IPC `status` レスポンスの `version` フィールドで返す。
+
+Gateway は必要とする agent の最低バージョン（`MIN_AGENT_VERSION`）を定義する。Agent の ensure 時にバージョンを確認し、以下の場合はエラーとする:
+- Agent のバージョンが `MIN_AGENT_VERSION` 未満
+- Agent が `version` フィールドを返さない（バージョン未対応の古い agent）
+
+```
+Gateway: agent ensure
+  → IPC status 取得
+  → version フィールドなし → エラー（agent が古すぎる）
+  → version < MIN_AGENT_VERSION → エラー（互換性なし）
+  → version >= MIN_AGENT_VERSION → 正常
+```
+
+### Agent 手動停止コマンド
+
+
+Gateway と同様に、agent にも CLI からの停止コマンドを提供する。
+
+```
+copilotclaw agent stop
+  → IPC で agent に stop リクエスト送信
+  → agent が graceful shutdown
+```
+
+`packages/agent/src/stop.ts` として実装し、package.json の scripts に `stop` を追加する。
 
 ### Agent プロセスの内部動作
 
@@ -132,46 +163,84 @@ Gateway: user input 受信時
 
 ### 方針: Channel と Agent Session の分離
 
-現在は channel と Copilot SDK session が 1:1 で直接対応しているが、この関係を切り離す。「agent session」を channel から独立した概念として導入し、agent process が管理する。
+Agent session を channel から独立した概念として導入し、agent process が管理する。
 
-- Agent session は Copilot SDK の session に対応する
-- Channel には agent session が必要に応じて紐づく
-- 将来的に channel に紐づかない agent session も想定する（例: バックグラウンドタスク用）
+- Agent session は Copilot SDK の session に対応し、独自の sessionId を持つ
+- Channel には最大 1 つの agent session が紐づく
+- Agent session には最大 1 つの channel が紐づく
+- Channel に未処理のユーザー input があるが agent session がない場合、agent session が開始され channel と紐づく
+- Channel のユーザー input が全て処理されても agent session は終了せずに生かし続ける（agent session は高価なので壊さない）- Channel に紐づかない agent session も存在しうる（まだ実装はないが）
 
 ### Session Keepalive 方針
 
-CLI の 30 分 idle timeout を回避するため、`copilotclaw_*` tool の内部で input をポーリングしながら待機する。tool が実行中の間はセッションは active 扱いとなり timeout しない。
+`client.send()` は session の開始時以外には使わない（コスト最小化の原則）。CLI の 30 分 idle timeout を回避するため、`copilotclaw_receive_input` tool の内部で input をポーリングしながら待機する。tool が実行中の間はセッションは active 扱いとなり timeout しない。
 
 ```
-Agent session 起動
-  → copilotclaw_* tool を実行（tool 内で input をポーリング待機）
-  → timeout 接近（例: 25 分経過）
-    → input なしで tool を返す（空の結果）
-    → idle 発生 → 即座に copilotclaw_* tool を再実行するよう強く指示
-    → tool 内で再びポーリング待機
+Agent session 起動（session.send を 1 回だけ使用）
+  → LLM が copilotclaw_receive_input を呼ぶ（tool 内で input をポーリング待機）
+  → timeout 接近（25 分経過）
+    → input なしで tool を返す（空の結果 + 再呼び出し指示）
+    → LLM が再び copilotclaw_receive_input を呼ぶ（session.send 不要）
   → input 到着
-    → tool が input を返す → LLM が処理 → reply
-    → 次の copilotclaw_* tool を実行（ループ）
+    → tool が input を返す → LLM が処理
+    → copilotclaw_send_message で途中報告（即時 return、何度でも呼べる）
+    → 処理完了 → copilotclaw_send_message で最終回答
+    → copilotclaw_receive_input で次の入力を待機
+  → 作業中に新着通知（onPostToolUse hook の additionalContext）
+    → LLM が copilotclaw_receive_input を呼んで user input を取得
 ```
 
 この方式により:
+- `session.send()` は session 開始時の 1 回のみ（以降は LLM が自律的に tool を呼び続ける）
 - セッションは tool 実行中として生かし続けられる
-- 空返し + 再実行指示のサイクルでプレミアムリクエストは消費されるが、30 分に 1 回程度に抑えられる
-- input が来たときは即座に処理できる（tool 内ポーリングのため低レイテンシ）
+- `copilotclaw_send_message` は即時 return なので、作業を中断せずに状況報告できる
+- 新着 user input は `onPostToolUse` hook の `additionalContext` で LLM に通知される
 
 ### Channel ツール
 
 カスタムツール名は `copilotclaw_` プレフィクスで統一する。
 
-| ツール名 | 用途 |
-| :--- | :--- |
-| `copilotclaw_receive_first_input` | セッション初期化時に最初の user input をポーリングで受け取る |
-| `copilotclaw_reply_and_receive_input` | reply を送信後、次の user input をポーリングで受け取る |
+| ツール名 | 用途 | 戻り |
+| :--- | :--- | :--- |
+| `copilotclaw_send_message` | channel にメッセージを送信する | 即時 return |
+| `copilotclaw_receive_input` | channel の未処理 user input をポーリングで受け取る | input 到着 or keepalive timeout で return |
+| `copilotclaw_list_messages` | channel の過去メッセージを取得する | 即時 return |
 
-- 両ツールとも channel ID スコープで動作する（agent 起動時に channel ID が渡される）
-- 受け取った user input に「`copilotclaw_reply_and_receive_input` で reply すること」という指示を付加して返す
-- Agent は session idle 時に常にブロックされ、`copilotclaw_reply_and_receive_input` の呼び出しを指示される
+#### copilotclaw_send_message
+
+- パラメータ: `{ message: string }`
+- channel にメッセージを POST し、即座に return する
+- 作業途中の状況報告に使用する（ポーリングを伴わないため、作業フローをブロックしない）
+
+#### copilotclaw_receive_input
+
+- パラメータ: なし
+- channel の未処理 user input をポーリングで待機する（keepalive timeout: 25 分）
 - 同一 channel に未処理の user input が複数ある場合、一括取得して連結して返す
+- keepalive timeout 到達時は空の結果を返し、即座に再呼び出しを指示する
+- session が idle になるのはこの tool の keepalive timeout 時のみ（`session.send()` によるプレミアムリクエスト消費は約 30 分に 1 回）
+
+#### copilotclaw_list_messages
+
+- パラメータ: `{ limit?: number }`（デフォルト: 5）
+- channel の過去メッセージを最新順に取得する
+- 各メッセージに sender（`"user"` or `"agent"`）を付与する
+
+### Post Tool Use Hook による新着通知
+
+
+channel に紐づく agent session では、SDK の `onPostToolUse` hook を登録する。
+
+```
+任意の tool 実行完了
+  → onPostToolUse 発火
+  → 当該 channel に未読の user input があるか gateway に確認
+  → 未読あり → additionalContext に通知を追加:
+    「新しい user input があります。copilotclaw_receive_input で即時確認してください。」
+  → 未読なし → 何もしない
+```
+
+channel に紐づく agent session の起動時プロンプトには、「tool の response の additionalContext で新着通知がされる可能性がある」ことを含める。
 
 ### Gateway の起動フロー
 
@@ -201,7 +270,7 @@ CLI (copilotclaw gateway start)
 | `/api/channels/{{channelId}}/inputs/next` | POST | channel のキューから未処理 user input を一括取得（なければ即時空応答） |
 | `/api/channels/{{channelId}}/inputs/peek` | GET | channel の最古の未処理 user input を取得（非破壊的） |
 | `/api/channels/{{channelId}}/inputs/flush` | POST | channel の全 user input をクリア（スタック回復時に使用） |
-| `/api/channels/{{channelId}}/replies` | POST | channel の user input に対して reply を投稿 |
+| `/api/channels/{{channelId}}/messages` | GET | channel のメッセージ一覧（sender 付き、最新順、`?limit=N`） || `/api/channels/{{channelId}}/messages` | POST | channel にメッセージを投稿（agent からの送信用） || `/api/channels/{{channelId}}/replies` | POST | channel の user input に対して reply を投稿（後方互換、将来廃止予定） |
 | `/api/stop` | POST | gateway を停止する |
 | `/` | GET | dashboard（channel タブ切り替え + チャット UI） |
 
@@ -209,7 +278,8 @@ CLI (copilotclaw gateway start)
 
 - Channel: `{ id, createdAt }`
 - UserInput: `{ id, channelId, message, createdAt, reply?: { message, createdAt } }`
-- 各 channel が独立した未取得 UserInput の FIFO キューを持つ
+- Message: `{ id, channelId, sender: "user" | "agent", message, createdAt }`- 各 channel が独立した未取得 UserInput の FIFO キューを持つ
+- Message は channel の全メッセージ（user input と agent メッセージ）を時系列で保持する
 
 ## 機能要件
 
@@ -295,12 +365,19 @@ CLI (copilotclaw gateway start)
 - Observability スタック一式（OTel Collector → Loki / Tempo / Prometheus → Grafana）
 - Copilot Hooks によるイベントログ記録
 - Grafana ダッシュボード（Copilot Token Usage）
-- Copilot SDK を用いた Agent（session idle loop による停止制御を含む）
+- Copilot SDK を用いた Agent（session keepalive による停止制御を含む）
 - pnpm monorepo 構造（tsconfig strictest 相当の設定）
 - Gateway サーバー（インメモリ Store、API、チャット UI dashboard、冪等起動）
 - Channel 機能の初版（gateway 経由の agent-user 対話、`copilotclaw_` プレフィクスのカスタムツール）
 - 自動テスト基盤（Vitest、mock session、mock fetch による agent テスト）
 
 **今後の課題:**
+- Agent バージョン互換性チェック（IPC `status` に `version` 追加、gateway 側で最低バージョン検証）
+- Agent 手動停止コマンド（`packages/agent/src/stop.ts`）
+- Channel ツール統廃合（`copilotclaw_send_message` / `copilotclaw_receive_input` / `copilotclaw_list_messages`）
+- `onPostToolUse` hook による新着 user input 通知
+- `session.send()` 排除（session 開始時のみに限定）
+- Gateway の Messages API（`GET/POST /api/channels/{{channelId}}/messages`）
+- 作業中表示の改善（dashboard UI）
 - コーディング支援ツール群（ファイル操作・シェル実行・検索・Git）の実装
 - Observability スタックの独立リポジトリへの分離（`.example` パターンの導入を含む）

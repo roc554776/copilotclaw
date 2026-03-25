@@ -125,4 +125,66 @@ describe("Store", () => {
       expect(store.listInputs(ch2)).toHaveLength(1);
     });
   });
+
+  describe("addMessage", () => {
+    it("adds a message with sender and returns it", () => {
+      const msg = store.addMessage(channelId, "agent", "hello from agent");
+      expect(msg).toBeDefined();
+      expect(msg!.sender).toBe("agent");
+      expect(msg!.message).toBe("hello from agent");
+      expect(msg!.channelId).toBe(channelId);
+    });
+
+    it("returns undefined for non-existent channel", () => {
+      expect(store.addMessage("nonexistent", "agent", "hi")).toBeUndefined();
+    });
+  });
+
+  describe("listMessages", () => {
+    it("returns empty array when no messages", () => {
+      expect(store.listMessages(channelId)).toEqual([]);
+    });
+
+    it("includes user input messages automatically", () => {
+      store.addInput(channelId, "user says hi");
+      const msgs = store.listMessages(channelId);
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0]?.sender).toBe("user");
+      expect(msgs[0]?.message).toBe("user says hi");
+    });
+
+    it("includes agent messages", () => {
+      store.addMessage(channelId, "agent", "agent reply");
+      const msgs = store.listMessages(channelId);
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0]?.sender).toBe("agent");
+    });
+
+    it("includes reply messages", () => {
+      const input = store.addInput(channelId, "question");
+      store.addReply(input!.id, "answer");
+      const msgs = store.listMessages(channelId);
+      expect(msgs).toHaveLength(2);
+      // Latest first (reverse chronological)
+      expect(msgs[0]?.sender).toBe("agent");
+      expect(msgs[1]?.sender).toBe("user");
+    });
+
+    it("respects limit and returns latest messages first", () => {
+      store.addMessage(channelId, "user", "msg-1");
+      store.addMessage(channelId, "agent", "msg-2");
+      store.addMessage(channelId, "user", "msg-3");
+      store.addMessage(channelId, "agent", "msg-4");
+      store.addMessage(channelId, "user", "msg-5");
+
+      const msgs = store.listMessages(channelId, 3);
+      expect(msgs).toHaveLength(3);
+      expect(msgs[0]?.message).toBe("msg-5");
+      expect(msgs[2]?.message).toBe("msg-3");
+    });
+
+    it("returns empty for non-existent channel", () => {
+      expect(store.listMessages("nonexistent")).toEqual([]);
+    });
+  });
 });

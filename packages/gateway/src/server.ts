@@ -157,6 +157,29 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
         return;
       }
 
+      if (action === "messages" && method === "GET") {
+        const limitParam = params.get("limit");
+        const limit = limitParam !== null ? parseInt(limitParam, 10) : 5;
+        json(res, 200, store.listMessages(channelId, Number.isFinite(limit) ? limit : 5));
+        return;
+      }
+
+      if (action === "messages" && method === "POST") {
+        const body = parseJson(await readBody(req));
+        if (!isRecord(body) || typeof body["message"] !== "string") {
+          json(res, 400, { error: "missing 'message' field" });
+          return;
+        }
+        const sender = body["sender"] === "user" ? "user" as const : "agent" as const;
+        const msg = store.addMessage(channelId, sender, body["message"] as string);
+        if (msg === undefined) {
+          json(res, 404, { error: "channel not found" });
+          return;
+        }
+        json(res, 201, msg);
+        return;
+      }
+
       if (action === "inputs/flush" && method === "POST") {
         const count = store.flushInputs(channelId);
         json(res, 200, { flushed: count });

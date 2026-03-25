@@ -5,22 +5,22 @@
 ## System Overview
 
 ```
-┌─────────────┐  HTTP   ┌─────────────┐  IPC (.sock)  ┌──────────────────────┐
-│   Browser    │◄──────►│   Gateway    │─────────────►│       Agent          │
-│  (dashboard) │        │  (daemon)    │               │  (single process)    │
-└─────────────┘        └──────┬──────┘               │  ┌──────────────┐   │
-                              │                       │  │ Ch Session A │   │
-                              │ HTTP poll             │  │ Ch Session B │   │
-                              │◄──────────────────────│  │ Ch Session … │   │
-                              │                       │  └──────────────┘   │
-                              │                       └────────┬─────────────┘
-                                                              │
-                                                       Copilot SDK
-                                                       (mocked in tests)
+┌─────────────┐  HTTP   ┌─────────────┐  IPC (.sock)  ┌─────────────────────────────┐
+│   Browser    │◄──────►│   Gateway    │─────────────►│           Agent             │
+│  (dashboard) │        │  (daemon)    │               │  ┌───────────────────────┐  │
+└─────────────┘        └──────┬──────┘               │  │ AgentSessionManager   │  │
+                              │                       │  │  sessions: sessionId→… │  │
+                              │ HTTP poll             │  │  bindings: chId→sessId │  │
+                              │◄──────────────────────│  └───────────────────────┘  │
+                              │                       └────────────┬────────────────┘
+                                                                   │
+                                                            Copilot SDK
+                                                            (mocked in tests)
 ```
 
 - **Gateway**: singleton daemon on port 19741, manages channels and user inputs
-- **Agent**: single process managing all channels, each with its own Copilot SDK session
+- **Agent**: single process, manages agent sessions independently of channels
+- **Agent Session**: wraps a Copilot SDK session with its own sessionId, optionally bound to a channel
 
 ## Process Model
 
@@ -28,7 +28,15 @@
 - Agent: single process, singleton via Unix domain socket (`copilotclaw-agent.sock`)
 - Gateway → Agent: IPC (status/stop), detached spawn to ensure alive
 - Agent → Gateway: HTTP API poll (pending counts, drain inputs, post replies, peek/flush)
-- Agent internally manages channel sessions: starts on pending input, stops on stale timeout
+- Agent manages agent sessions (each with own sessionId), binds them to channels on demand
+- Sessions start when channel has pending input, stop on stale timeout
+
+## Session Keepalive
+
+- `copilotclaw_*` tool handlers block for up to 25 min polling gateway for input (keepalive timeout)
+- Tool execution keeps Copilot SDK session active (CLI idle timeout = 30 min)
+- On keepalive timeout: tool returns empty keepalive instruction → idle fires → `session.send()` consumes 1 premium request → tool re-invoked
+- Premium request consumption: ~1 per 30 min (idle), plus 1 per user interaction cycle
 
 ## Key Constraints
 

@@ -36,7 +36,7 @@ afterEach(async () => {
 });
 
 describe("IPC server", () => {
-  it("starts and responds to status with startedAt and empty channels", async () => {
+  it("starts and responds to status with version, startedAt, and empty sessions", async () => {
     const path = randomSocketPath();
     const result = await listenIpc(path, () => {});
     expect(result.kind).toBe("server");
@@ -44,8 +44,9 @@ describe("IPC server", () => {
     cleanup = () => result.handle.close();
 
     const status = await sendIpcRequest(path, "status");
+    expect(status["version"]).toBeTruthy();
     expect(status["startedAt"]).toBeTruthy();
-    expect(status["channels"]).toEqual({});
+    expect(status["sessions"]).toEqual({});
   });
 
   it("handles stop request", async () => {
@@ -60,24 +61,24 @@ describe("IPC server", () => {
     expect(onStop).toHaveBeenCalled();
   });
 
-  it("responds to channel_status for non-existent channel", async () => {
+  it("responds to session_status for non-existent session", async () => {
     const path = randomSocketPath();
     const result = await listenIpc(path, () => {});
     if (result.kind !== "server") return;
     cleanup = () => result.handle.close();
 
-    const res = await sendIpcRequest(path, "channel_status", { channelId: "nonexistent" });
+    const res = await sendIpcRequest(path, "session_status", { sessionId: "nonexistent" });
     expect(res["status"]).toBe("not_running");
   });
 
-  it("returns error for channel_status without channelId", async () => {
+  it("returns error for session_status without sessionId", async () => {
     const path = randomSocketPath();
     const result = await listenIpc(path, () => {});
     if (result.kind !== "server") return;
     cleanup = () => result.handle.close();
 
-    const res = await sendIpcRequest(path, "channel_status");
-    expect(res["error"]).toBe("missing channelId");
+    const res = await sendIpcRequest(path, "session_status");
+    expect(res["error"]).toBe("missing sessionId");
   });
 
   it("detects already-running instance", async () => {

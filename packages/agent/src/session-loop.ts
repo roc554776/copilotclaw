@@ -13,25 +13,19 @@ export interface SessionLike {
 export interface SessionLoopOptions {
   session: SessionLike;
   initialPrompt: string;
-  continuePrompt: string;
-  maxTurns: number;
   onMessage?: (content: string) => void;
   log?: (message: string) => void;
   shouldStop?: () => boolean;
 }
 
-export async function runSessionLoop(options: SessionLoopOptions): Promise<{ turnCount: number }> {
+export async function runSessionLoop(options: SessionLoopOptions): Promise<void> {
   const {
     session,
     initialPrompt,
-    continuePrompt,
-    maxTurns,
     onMessage = () => {},
     log = () => {},
     shouldStop = () => false,
   } = options;
-
-  let turnCount = 0;
 
   try {
     const done = new Promise<void>((resolve, reject) => {
@@ -52,38 +46,17 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<{ tur
         },
         onIdle: () => {
           if (settled) return;
-
-          if (shouldStop()) {
-            log("stop requested externally");
-            settle(() => { resolve(); });
-            return;
-          }
-
-          turnCount++;
-          if (turnCount >= maxTurns) {
-            log(`reached max turns (${maxTurns}), stopping`);
-            settle(() => { resolve(); });
-            return;
-          }
-
-          log(`turn #${turnCount}, sending continue prompt`);
-          session
-            .send({
-              prompt: continuePrompt,
-              mode: "enqueue",
-            })
-            .catch((err: unknown) => {
-              settle(() => {
-                reject(err instanceof Error ? err : new Error(String(err)));
-              });
-            });
+          // Session ended — LLM decided to stop calling tools.
+          // Do NOT send continuePrompt (session.send costs a premium request).
+          log("session idle — LLM stopped calling tools");
+          settle(() => { resolve(); });
         },
       });
     });
 
     if (shouldStop()) {
       log("stop requested before initial send");
-      return { turnCount };
+      return;
     }
     await session.send({ prompt: initialPrompt });
     await done;
@@ -94,6 +67,4 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<{ tur
       log(`disconnect error (suppressed): ${String(disconnectErr)}`);
     }
   }
-
-  return { turnCount };
 }

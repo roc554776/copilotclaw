@@ -1,6 +1,13 @@
 import { type Server, createConnection, createServer, type Socket } from "node:net";
 import { unlinkSync } from "node:fs";
-import type { ChannelSessionManager } from "./channel-session-manager.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { AgentSessionManager } from "./agent-session-manager.js";
+
+const thisDir = dirname(fileURLToPath(import.meta.url));
+const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string };
+const AGENT_VERSION = pkgJson.version;
 
 export interface AgentIpcState {
   startedAt: string;
@@ -21,7 +28,7 @@ interface IpcRequest {
 function handleConnection(
   socket: Socket,
   state: AgentIpcState,
-  sessionManager: ChannelSessionManager | null,
+  sessionManager: AgentSessionManager | null,
   onStop: () => void,
 ): void {
   let buffer = "";
@@ -39,20 +46,21 @@ function handleConnection(
         const req = JSON.parse(line) as IpcRequest;
         switch (req.method) {
           case "status": {
-            const channels = sessionManager?.getChannelStatuses() ?? {};
+            const sessions = sessionManager?.getSessionStatuses() ?? {};
             socket.write(JSON.stringify({
+              version: AGENT_VERSION,
               startedAt: state.startedAt,
-              channels,
+              sessions,
             }) + "\n");
             break;
           }
-          case "channel_status": {
-            const channelId = req.params?.["channelId"] as string | undefined;
-            if (channelId === undefined) {
-              socket.write(JSON.stringify({ error: "missing channelId" }) + "\n");
+          case "session_status": {
+            const sessionId = req.params?.["sessionId"] as string | undefined;
+            if (sessionId === undefined) {
+              socket.write(JSON.stringify({ error: "missing sessionId" }) + "\n");
               break;
             }
-            const info = sessionManager?.getChannelStatus(channelId);
+            const info = sessionManager?.getSessionStatus(sessionId);
             if (info === undefined) {
               socket.write(JSON.stringify({ status: "not_running" }) + "\n");
             } else {
@@ -107,7 +115,7 @@ function createHandle(server: Server, socketPath: string, state: AgentIpcState):
 export function listenIpc(
   socketPath: string,
   onStop: () => void,
-  sessionManager?: ChannelSessionManager | null,
+  sessionManager?: AgentSessionManager | null,
 ): Promise<ListenResult> {
   const mgr = sessionManager ?? null;
   const state: AgentIpcState = {

@@ -17,7 +17,8 @@
       "WebSearch",
       "Bash(mise --version)",
       "Bash(pnpm run:*)",
-      "Bash(python3 .claude/skills/fetch-codebase/scripts/fetch-codebase.py *)"
+      "Bash(python3 .claude/skills/fetch-codebase/scripts/fetch-codebase.py *)",
+      "mcp__serena__get_current_config"
     ]
   }
 }

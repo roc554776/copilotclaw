@@ -14,6 +14,14 @@ export interface UserInput {
   reply?: Reply;
 }
 
+export interface Message {
+  id: string;
+  channelId: string;
+  sender: "user" | "agent";
+  message: string;
+  createdAt: string;
+}
+
 export interface Channel {
   id: string;
   createdAt: string;
@@ -23,6 +31,7 @@ export class Store {
   private readonly channels = new Map<string, Channel>();
   private readonly inputs = new Map<string, UserInput>();
   private readonly queues = new Map<string, string[]>();
+  private readonly messages = new Map<string, Message[]>(); // channelId → messages
 
   createChannel(): Channel {
     const channel: Channel = {
@@ -31,6 +40,7 @@ export class Store {
     };
     this.channels.set(channel.id, channel);
     this.queues.set(channel.id, []);
+    this.messages.set(channel.id, []);
     return channel;
   }
 
@@ -54,6 +64,13 @@ export class Store {
     };
     this.inputs.set(input.id, input);
     this.queues.get(channelId)!.push(input.id);
+    this.messages.get(channelId)!.push({
+      id: randomUUID(),
+      channelId,
+      sender: "user",
+      message,
+      createdAt: input.createdAt,
+    });
     return input;
   }
 
@@ -77,11 +94,37 @@ export class Store {
   addReply(inputId: string, message: string): UserInput | undefined {
     const input = this.inputs.get(inputId);
     if (input === undefined) return undefined;
-    input.reply = {
+    const createdAt = new Date().toISOString();
+    input.reply = { message, createdAt };
+    this.messages.get(input.channelId)?.push({
+      id: randomUUID(),
+      channelId: input.channelId,
+      sender: "agent",
+      message,
+      createdAt,
+    });
+    return input;
+  }
+
+  addMessage(channelId: string, sender: "user" | "agent", message: string): Message | undefined {
+    const msgs = this.messages.get(channelId);
+    if (msgs === undefined) return undefined;
+    const msg: Message = {
+      id: randomUUID(),
+      channelId,
+      sender,
       message,
       createdAt: new Date().toISOString(),
     };
-    return input;
+    msgs.push(msg);
+    return msg;
+  }
+
+  listMessages(channelId: string, limit = 5): Message[] {
+    const msgs = this.messages.get(channelId);
+    if (msgs === undefined) return [];
+    // Return latest messages in reverse chronological order
+    return msgs.slice(-limit).reverse();
   }
 
   pendingCounts(): Record<string, number> {

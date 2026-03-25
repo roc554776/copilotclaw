@@ -4,6 +4,17 @@ import { fileURLToPath } from "node:url";
 import { getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 
+const MIN_AGENT_VERSION = "0.1.0";
+
+function semverSatisfies(version: string, minVersion: string): boolean {
+  const parse = (v: string) => v.split(".").map(Number);
+  const [aMaj = 0, aMin = 0, aPat = 0] = parse(version);
+  const [bMaj = 0, bMin = 0, bPat = 0] = parse(minVersion);
+  if (aMaj !== bMaj) return aMaj > bMaj;
+  if (aMin !== bMin) return aMin > bMin;
+  return aPat >= bPat;
+}
+
 export interface AgentManagerOptions {
   gatewayPort: number;
   agentScript?: string;
@@ -27,7 +38,15 @@ export class AgentManager {
     try {
       const socketPath = getAgentSocketPath();
       const status = await getAgentStatus(socketPath);
-      if (status !== null) return;
+      if (status !== null) {
+        if (status.version === undefined) {
+          throw new Error("agent is too old (no version reported)");
+        }
+        if (!semverSatisfies(status.version, MIN_AGENT_VERSION)) {
+          throw new Error(`agent version ${status.version} is below minimum ${MIN_AGENT_VERSION}`);
+        }
+        return;
+      }
       this.spawnAgent();
     } finally {
       if (this.spawningTimer !== undefined) clearTimeout(this.spawningTimer);
