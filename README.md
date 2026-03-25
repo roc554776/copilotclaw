@@ -15,29 +15,32 @@ cd copilotclaw
 mise install
 pnpm install
 pnpm run build
+npm install -g .
 ```
+
+After installation, the `copilotclaw` command is available globally.
 
 ### Initialize workspace
 
 ```sh
-pnpm --filter @copilotclaw/gateway run setup
+copilotclaw setup
 ```
 
 This creates `~/.copilotclaw/` with the data directory for persistent storage.
 
 ## Usage
 
-### Start the gateway
+### Start
 
 ```sh
-pnpm --filter @copilotclaw/gateway run start
+copilotclaw start
 ```
 
 The gateway starts as a background daemon on http://localhost:19741. Channel and message data is persisted to `~/.copilotclaw/data/store.json` and survives restarts.
 
 ### Chat
 
-Open http://localhost:19741 in your browser. The gateway automatically starts the agent process, which handles user messages and replies via the Copilot SDK.
+Open http://localhost:19741 in your browser.
 
 - Type a message and press Send (or Enter)
 - Use the "+" button to create additional channels for parallel conversations
@@ -47,14 +50,14 @@ Open http://localhost:19741 in your browser. The gateway automatically starts th
 ### Stop
 
 ```sh
-pnpm --filter @copilotclaw/gateway run stop    # Stop gateway and agent
-pnpm --filter @copilotclaw/agent run stop      # Stop agent only
+copilotclaw stop          # Stop gateway and agent
+copilotclaw agent stop    # Stop agent only
 ```
 
 ### Update
 
 ```sh
-pnpm --filter @copilotclaw/gateway run update
+copilotclaw update
 ```
 
 Pulls the latest code from the upstream repository, installs dependencies, and rebuilds. Restart the gateway and agent after updating.
@@ -62,15 +65,23 @@ Pulls the latest code from the upstream repository, installs dependencies, and r
 For local development, set a file URL as the upstream:
 
 ```sh
-COPILOTCLAW_UPSTREAM=file:///path/to/local/repo pnpm --filter @copilotclaw/gateway run update
+COPILOTCLAW_UPSTREAM=file:///path/to/local/repo copilotclaw update
 ```
 
 ### Force-restart outdated agent
 
-If the agent process is running an older version incompatible with the gateway:
-
 ```sh
-pnpm --filter @copilotclaw/gateway run start -- --force-agent-restart
+copilotclaw start --force-agent-restart
+```
+
+## Commands
+
+```
+copilotclaw setup                Initialize workspace (~/.copilotclaw/)
+copilotclaw start [options]      Start the gateway daemon
+copilotclaw stop                 Stop the gateway and agent
+copilotclaw update               Update copilotclaw (git pull + build)
+copilotclaw agent stop           Stop the agent process only
 ```
 
 ## Data

@@ -1,6 +1,11 @@
 {
+  "name": "copilotclaw",
+  "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.26.2",
+  "bin": {
+    "copilotclaw": "bin/copilotclaw.mjs"
+  },
   "scripts": {
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",

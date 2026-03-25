@@ -51,7 +51,7 @@ async function waitForHealthy(): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  const forceAgentRestart = process.argv.includes("--force-agent-restart");
+  const forceAgentRestart = process.argv.includes("--force-agent-restart") || process.env["COPILOTCLAW_FORCE_AGENT_RESTART_FLAG"] === "1";
 
   if (forceAgentRestart) {
     log("--force-agent-restart: will stop outdated agent on startup");
