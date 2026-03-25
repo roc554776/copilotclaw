@@ -60,7 +60,7 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<{ tur
           }
 
           turnCount++;
-          if (turnCount > maxTurns) {
+          if (turnCount >= maxTurns) {
             log(`reached max turns (${maxTurns}), stopping`);
             settle(() => { resolve(); });
             return;
@@ -81,6 +81,10 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<{ tur
       });
     });
 
+    if (shouldStop()) {
+      log("stop requested before initial send");
+      return { turnCount };
+    }
     await session.send({ prompt: initialPrompt });
     await done;
   } finally {

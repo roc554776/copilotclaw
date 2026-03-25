@@ -22,6 +22,39 @@ function createMockFetch(responses: Array<{ status: number; body: unknown }>) {
 
 const REPLY_TOOL_INSTRUCTION = "copilotclaw_reply_and_receive_input";
 
+describe("channel tools — abort signal", () => {
+  it("aborts polling when abort signal fires", async () => {
+    const controller = new AbortController();
+    let fetchCallCount = 0;
+
+    const fetchFn = async (_url: string | URL | Request, init?: RequestInit) => {
+      fetchCallCount++;
+      if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      // Return 204 (no input) to keep polling
+      return { status: 204, ok: true, json: async () => null, text: async () => "null" } as Response;
+    };
+
+    const { receiveFirstInput } = createChannelTools({
+      gatewayBaseUrl: "http://localhost:9999",
+      channelId: "ch-abc",
+      pollIntervalMs: 10,
+      fetch: fetchFn as typeof globalThis.fetch,
+      abortSignal: controller.signal,
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+
+    // Abort after a short delay
+    setTimeout(() => { controller.abort(); }, 50);
+
+    await expect(
+      receiveFirstInput.handler({}, invocation),
+    ).rejects.toThrow("Abort");
+
+    expect(fetchCallCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("channel tools", () => {
   describe("copilotclaw_receive_first_input", () => {
     it("polls channel-scoped /inputs/next until 200 and returns combined messages", async () => {
@@ -85,6 +118,20 @@ describe("channel tools", () => {
 
       expect(result.userMessage).toContain("second");
       expect(result.userMessage).toContain(REPLY_TOOL_INSTRUCTION);
+    });
+
+    it("throws when called before receiveFirstInput", async () => {
+      const { fetchFn } = createMockFetch([]);
+      const { replyAndReceiveInput } = createChannelTools({
+        gatewayBaseUrl: "http://localhost:9999",
+        channelId: "ch-abc",
+        fetch: fetchFn as typeof globalThis.fetch,
+      });
+
+      const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+      await expect(
+        replyAndReceiveInput.handler({ message: "reply" }, invocation),
+      ).rejects.toThrow("replyAndReceiveInput called before receiveFirstInput");
     });
 
     it("has correct tool name and required parameters", () => {

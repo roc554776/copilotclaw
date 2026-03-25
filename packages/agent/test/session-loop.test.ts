@@ -32,12 +32,11 @@ describe("runSessionLoop", () => {
     expect(session.sendCalls[1]?.prompt).toBe("continue");
     expect(session.sendCalls[1]?.mode).toBe("enqueue");
     expect(session.sendCalls[2]?.prompt).toBe("continue");
-    expect(session.sendCalls[3]?.prompt).toBe("continue");
-    // 4th idle exceeds maxTurns=3, stops
-    expect(result.turnCount).toBe(4);
+    // maxTurns=3: stops after 3 idles (init + 2 continues)
+    expect(result.turnCount).toBe(3);
   });
 
-  it("stops at maxTurns", async () => {
+  it("stops at maxTurns=1", async () => {
     const session = createMockSession();
     const result = await runSessionLoop({
       session,
@@ -46,9 +45,9 @@ describe("runSessionLoop", () => {
       maxTurns: 1,
     });
 
-    // turn 1: idle after init -> send continue
-    // turn 2: idle after continue -> exceeds maxTurns=1
-    expect(result.turnCount).toBe(2);
+    // turnCount=1 on first idle, >= maxTurns, stops
+    expect(result.turnCount).toBe(1);
+    expect(session.sendCalls).toHaveLength(1); // only initial prompt sent
   });
 
   it("delivers assistant messages via onMessage callback", async () => {
@@ -125,5 +124,19 @@ describe("runSessionLoop", () => {
     });
 
     expect(logs.some((l) => l.includes("disconnect error"))).toBe(true);
+  });
+
+  it("stops before initial send when shouldStop returns true", async () => {
+    const session = createMockSession();
+    const result = await runSessionLoop({
+      session,
+      initialPrompt: "init",
+      continuePrompt: "continue",
+      maxTurns: 10,
+      shouldStop: () => true,
+    });
+
+    expect(result.turnCount).toBe(0);
+    expect(session.sendCalls).toHaveLength(0);
   });
 });
