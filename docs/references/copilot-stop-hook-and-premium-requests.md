@@ -72,20 +72,21 @@ The SDK provides 6 hooks: `onSessionStart`, `onUserPromptSubmitted`, `onPreToolU
 
 The current implementation uses `session.send({ prompt: continuePrompt, mode: "enqueue" })` on every idle event to keep the agent alive. Each `session.send()` consumes a premium request.
 
-## Future Improvement Candidates
+## resumeSession Behavior
 
-### disconnect/resumeSession Pattern
+`client.resumeSession(sessionId)` restores session state from disk and returns an idle session object. It does NOT automatically resume processing.
 
-- On idle: `session.disconnect()` (saves session state to disk, no premium cost)
-- Agent process polls gateway for new input
-- On input: `client.resumeSession(sessionId)` (loads state from disk, no premium cost) + `session.send()` (premium cost)
-- Premium requests consumed only when actual user input arrives
+- `session.send()` is required to trigger new work after resume
+- `session.idle` event does not fire automatically on resume
+- In-memory queued items are lost on disconnect (queue is not persisted)
 
-### Trade-offs
+## Current Design and Future Considerations
 
-- `disconnect/resumeSession` adds latency (disk I/O, session reconstruction)
-- Current tool-handler polling has lower latency but consumes premium requests on every idle cycle
-- `resumeSession()` itself does NOT consume premium requests (confirmed in SDK source)
+The current implementation uses `session.send()` on every idle event, consuming a premium request each time. This is known to be suboptimal.
+
+The disconnect/resumeSession pattern (disconnect on idle, resume + send on new input) would require a `session.send()` per user input, which is also not cost-effective.
+
+Future improvement will require a fundamentally different approach. Both the current idle-loop pattern and the disconnect/resumeSession pattern have premium request cost issues that make them unsuitable as long-term solutions.
 
 ## Session Idle Timeout
 
