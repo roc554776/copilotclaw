@@ -40,6 +40,15 @@ Construct understanding from actual code, documentation, and investigation — n
 
 When a change introduces, modifies, or removes a design constraint or policy, explicitly document its Intent (the logical necessity and reasons behind the choice) in the relevant documentation. This includes adding new features or capabilities — if a feature embodies a new design decision or constraint, its Intent must be documented even if no existing documentation was modified. A change to the Mechanism alone is not complete if its Intent is absent from the corresponding documentation.
 
+## Document-First Workflow
+
+Always update documentation (raw-requirements, requirements, proposals) before making code changes. Code changes without preceding documentation updates are not acceptable.
+
+## Codebase Reference
+
+- `docs/CODEMAPS/` contains token-lean architecture maps. Read before exploring unfamiliar areas of the codebase. Update after every completed task that changes structure, routes, files, or dependencies.
+- `CONTRIBUTING.md` contains development rules including testing constraints.
+
 ## Documentation
 
 - Unless otherwise specified, create document files at `{{repo_root}}/tmp/scratchpad/{{subpath}}/*.md`. `{{subpath}}` is mandatory.

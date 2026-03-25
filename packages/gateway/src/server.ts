@@ -5,12 +5,25 @@ import { Store } from "./store.js";
 
 export const DEFAULT_PORT = 19741;
 
+const MAX_BODY_SIZE = 1_048_576; // 1 MB
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => { chunks.push(chunk); });
-    req.on("end", () => { resolve(Buffer.concat(chunks).toString("utf-8")); });
-    req.on("error", reject);
+    let totalSize = 0;
+    let limitExceeded = false;
+    req.on("data", (chunk: Buffer) => {
+      totalSize += chunk.length;
+      if (totalSize > MAX_BODY_SIZE) {
+        limitExceeded = true;
+        req.destroy();
+        reject(new Error("request body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => { if (!limitExceeded) resolve(Buffer.concat(chunks).toString("utf-8")); });
+    req.on("error", (err) => { if (!limitExceeded) reject(err); });
   });
 }
 
@@ -58,9 +71,16 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
     }
 
     if (fullPathname === "/api/stop" && method === "POST") {
+      const remoteAddr = req.socket.remoteAddress ?? "";
+      if (remoteAddr !== "127.0.0.1" && remoteAddr !== "::1" && remoteAddr !== "::ffff:127.0.0.1") {
+        json(res, 403, { error: "forbidden" });
+        return;
+      }
       json(res, 200, { status: "stopping" });
-      agentManager?.killAll();
-      onStop();
+      res.once("finish", () => {
+        agentManager?.stopAgent().catch(() => {});
+        onStop();
+      });
       return;
     }
 
@@ -73,6 +93,11 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
     if (fullPathname === "/api/channels" && method === "POST") {
       const channel = store.createChannel();
       json(res, 201, channel);
+      return;
+    }
+
+    if (fullPathname === "/api/channels/pending" && method === "GET") {
+      json(res, 200, store.pendingCounts());
       return;
     }
 
@@ -97,9 +122,11 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
           json(res, 404, { error: "channel not found" });
           return;
         }
-        // Auto-spawn agent if none running for this channel
-        if (agentManager !== null && !agentManager.hasAgent(channelId)) {
-          agentManager.spawnAgent(channelId);
+        // Ensure agent process is running
+        if (agentManager !== null) {
+          agentManager.ensureAgent().catch((err: unknown) => {
+            console.error("[gateway] ensureAgent error:", err);
+          });
         }
         json(res, 201, input);
         return;
@@ -127,6 +154,22 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
           return;
         }
         json(res, 200, updated);
+        return;
+      }
+
+      if (action === "inputs/flush" && method === "POST") {
+        const count = store.flushInputs(channelId);
+        json(res, 200, { flushed: count });
+        return;
+      }
+
+      if (action === "inputs/peek" && method === "GET") {
+        const oldest = store.peekOldestInput(channelId);
+        if (oldest === undefined) {
+          json(res, 204, null);
+          return;
+        }
+        json(res, 200, oldest);
         return;
       }
 
@@ -189,10 +232,12 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
         server,
         port: actualPort,
         store,
-        close: () => new Promise<void>((res, rej) => {
-          agentManager?.killAll();
-          server.close((err) => { err ? rej(err) : res(); });
-        }),
+        close: async () => {
+          await agentManager?.stopAgent().catch(() => {});
+          await new Promise<void>((res, rej) => {
+            server.close((err) => { err ? rej(err) : res(); });
+          });
+        },
       });
     });
   });

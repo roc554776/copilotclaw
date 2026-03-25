@@ -1,5 +1,7 @@
 # 要求定義（Requirements）
 
+<!-- NOTE: このファイルが大きくなったら、トピックごとに別ファイルへ分割すること -->
+
 本ドキュメントは、顧客の生の要望（raw requirements）を整理し、プロジェクトとして達成すべき要求を明確化したものである。
 
 ## 背景
@@ -45,10 +47,25 @@ Agent と human が gateway を介して対話する仕組み（channel）を提
 - Agent は channel ID に紐付き、gateway の API を通じてその channel の user input を受け取り reply を返す
 - Agent は session が idle になっても自動的に停止せず、常に次の user input を待ち続ける
 - カスタムツール名は `copilotclaw_` プレフィクスで統一する
-- channel に未処理の user input があり、対応する agent がなければ gateway が agent を子プロセスとして自動起動する
 - 同一 channel に未処理の user input が複数ある場合、agent は一括で取得する
 - Gateway 起動時にデフォルト channel を 1 つ作成する
 - Dashboard は複数タブで複数 channel を扱えるインターフェースとする
+
+### Req: Agent シングルトンと Gateway-Agent 分離
+
+Agent は単一プロセスで複数チャンネルのセッションを管理し、gateway とは独立したプロセスとして稼働する。
+
+- Agent は 1 プロセスで複数チャンネルを管理する。チャンネルごとに独立した Copilot SDK セッションを作成する
+- Agent プロセスは IPC socket（Unix domain socket）でシングルトン動作する
+- Agent は IPC 経由で外部から health check / 全チャンネルの status 一括取得 / 個別 channel status 取得 / 停止ができる
+- Gateway と agent は独立プロセスとして動作する（gateway 再起動時に agent を道連れにしない）
+- 起動は常に gateway → agent。agent が gateway を起動することはない
+- Gateway は agent プロセスを ensure（生存確認・なければ起動）するだけ
+- Agent プロセスの責務:
+  - gateway を定期ポーリングして各チャンネルの待機 user input を確認し、必要ならチャンネルセッションを起動
+  - チャンネルセッションが processing のまま既定の時間（デフォルト 10 分）を超過した場合は停止させる
+  - スタック検出: 同一チャンネルの最古 user input が変わらないまま 1 回リトライ後も残る場合は、当該チャンネルの user input を全て flush する
+- ゾンビプロセスを残さないこと
 
 ### Req: 自動テストの義務化
 

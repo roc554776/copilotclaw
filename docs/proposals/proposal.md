@@ -1,5 +1,7 @@
 # 要件提案（Proposal）
 
+<!-- NOTE: このファイルが大きくなったら、トピックごとに別ファイルへ分割すること -->
+
 本ドキュメントは、要求定義に基づき、CopilotClaw プロジェクトとしてどのように要求を実現するかの提案（要件）を示す。
 
 ## プロダクトコンセプト
@@ -45,12 +47,12 @@ Agent と human は gateway の API を介して対話する。Agent は Copilot
 
 ### Multi-Channel アーキテクチャ
 
-各 channel は独立した input queue と会話履歴を持つ。channel に未処理の user input が投稿されると、gateway がその channel に対応する agent を子プロセスとして自動起動する。
+各 channel は独立した input queue と会話履歴を持つ。
 
 ```
 human → dashboard tab (POST /api/channels/{{channelId}}/inputs) → channel queue
                                                                        ↓
-                                              gateway: agent がなければ子プロセスとして起動
+                                              gateway: agent を ensure（IPC で生存確認、なければ起動）
                                                                        ↓
 agent ← copilotclaw_receive_first_input ← (POST /api/channels/{{channelId}}/inputs/next)
 agent → [LLM 処理] → copilotclaw_reply_and_receive_input
@@ -59,6 +61,103 @@ agent → [LLM 処理] → copilotclaw_reply_and_receive_input
                          ↓                              ↓
               dashboard に表示           次の user input を受け取り（複数なら一括）
 ```
+
+## アーキテクチャ方針: Agent シングルトンと Gateway-Agent 分離
+
+### 方針: 単一 Agent プロセスによるマルチチャンネル管理
+
+Agent は 1 プロセスで全チャンネルを管理する。チャンネルごとに独立した Copilot SDK セッションを作成する（1 セッションに複数チャンネルを流し込むのではない）。Gateway と Agent は独立プロセスとして稼働し、起動は常に gateway → agent。
+
+### Agent IPC サーバー
+
+VSCode の singleton パターン（`net.createServer().listen(socketPath)` → EADDRINUSE で既存検出）を採用する。
+
+```
+Agent 起動
+  → IPC socket path を決定的に生成（プロセス単位、チャンネルごとではない）
+  → net.createServer().listen(socketPath)
+    → 成功 → IPC リクエスト受付 + gateway ポーリング開始
+    → EADDRINUSE → net.createConnection(socketPath)
+      → 成功 → 既存 agent 稼働中、このプロセスは終了
+      → ECONNREFUSED → stale socket を unlink して再試行
+```
+
+IPC ソケット上で改行区切り JSON を送受信する。
+
+### Agent IPC プロトコル
+
+| メソッド | 応答 | 用途 |
+| :--- | :--- | :--- |
+| `status` | `{ startedAt, channels: { [channelId]: ChannelStatus } }` | 全チャンネルの状態を一括取得 |
+| `channel_status` (params: `{ channelId }`) | `ChannelStatus` | 個別チャンネルの状態を取得 |
+| `stop` | `{ ok: true }` | graceful shutdown |
+
+ChannelStatus:
+
+| フィールド | 型 | 意味 |
+| :--- | :--- | :--- |
+| `status` | `"starting" \| "waiting" \| "processing" \| "not_running"` | セッションの状態 |
+| `startedAt` | `string` | セッション開始時刻 |
+| `processingStartedAt?` | `string` | processing 状態に入った時刻 |
+
+### Agent プロセスの内部動作
+
+```
+Agent プロセス起動
+  → IPC サーバー開始
+  → gateway ポーリングループ開始（GET /api/channels/pending で各チャンネルの pending 数を確認）
+    → チャンネルに未処理 user input あり かつ セッション未起動 → セッション起動
+    → チャンネルセッションが processing のまま staleTimeout (default 10 min) 超過
+      → restartCount == 0 → セッション再起動（1 回だけリトライ）、restartCount を 1 に
+      → restartCount >= 1 → 当該チャンネルの user input を全て flush、セッション停止
+      → 再起動成功後は restartCount をリセット
+```
+
+### Gateway の Agent 管理
+
+Gateway の責務は user input の管理、agent プロセスの ensure、チャットシステムの提供。Agent 内部のチャンネル管理には関与しない。
+
+```
+Gateway: user input 受信時
+  → IPC で agent プロセスの生存確認
+    → 接続不可 → agent を detached spawn で起動
+    → 接続可 → 何もしない（agent が自分で gateway をポーリングしてチャンネルセッションを起動する）
+```
+
+### IPC Socket パス
+
+`{{tmpdir}}/copilotclaw-agent.sock` を使用する（プロセス単位、チャンネルごとではない）。
+
+## アーキテクチャ方針: Agent Session
+
+### 方針: Channel と Agent Session の分離
+
+現在は channel と Copilot SDK session が 1:1 で直接対応しているが、この関係を切り離す。「agent session」を channel から独立した概念として導入し、agent process が管理する。
+
+- Agent session は Copilot SDK の session に対応する
+- Channel には agent session が必要に応じて紐づく
+- 将来的に channel に紐づかない agent session も想定する（例: バックグラウンドタスク用）
+
+### Session Keepalive 方針
+
+CLI の 30 分 idle timeout を回避するため、`copilotclaw_*` tool の内部で input をポーリングしながら待機する。tool が実行中の間はセッションは active 扱いとなり timeout しない。
+
+```
+Agent session 起動
+  → copilotclaw_* tool を実行（tool 内で input をポーリング待機）
+  → timeout 接近（例: 25 分経過）
+    → input なしで tool を返す（空の結果）
+    → idle 発生 → 即座に copilotclaw_* tool を再実行するよう強く指示
+    → tool 内で再びポーリング待機
+  → input 到着
+    → tool が input を返す → LLM が処理 → reply
+    → 次の copilotclaw_* tool を実行（ループ）
+```
+
+この方式により:
+- セッションは tool 実行中として生かし続けられる
+- 空返し + 再実行指示のサイクルでプレミアムリクエストは消費されるが、30 分に 1 回程度に抑えられる
+- input が来たときは即座に処理できる（tool 内ポーリングのため低レイテンシ）
 
 ### Channel ツール
 
@@ -97,8 +196,11 @@ CLI (copilotclaw gateway start)
 | `/healthz` | GET | ヘルスチェック |
 | `/api/channels` | GET | channel 一覧 |
 | `/api/channels` | POST | 新しい channel を作成 |
+| `/api/channels/pending` | GET | 各チャンネルの未処理 user input 数を取得 |
 | `/api/channels/{{channelId}}/inputs` | POST | channel に user input を投稿（キューに追加）。対応 agent がなければ自動起動 |
 | `/api/channels/{{channelId}}/inputs/next` | POST | channel のキューから未処理 user input を一括取得（なければ即時空応答） |
+| `/api/channels/{{channelId}}/inputs/peek` | GET | channel の最古の未処理 user input を取得（非破壊的） |
+| `/api/channels/{{channelId}}/inputs/flush` | POST | channel の全 user input をクリア（スタック回復時に使用） |
 | `/api/channels/{{channelId}}/replies` | POST | channel の user input に対して reply を投稿 |
 | `/api/stop` | POST | gateway を停止する |
 | `/` | GET | dashboard（channel タブ切り替え + チャット UI） |

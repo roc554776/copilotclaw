@@ -84,6 +84,31 @@ export class Store {
     return input;
   }
 
+  pendingCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const [channelId, queue] of this.queues) {
+      counts[channelId] = queue.length;
+    }
+    return counts;
+  }
+
+  peekOldestInput(channelId: string): UserInput | undefined {
+    const queue = this.queues.get(channelId);
+    if (queue === undefined || queue.length === 0) return undefined;
+    return this.inputs.get(queue[0]!);
+  }
+
+  flushInputs(channelId: string): number {
+    const queue = this.queues.get(channelId);
+    if (queue === undefined) return 0;
+    const count = queue.length;
+    for (const id of queue) {
+      this.inputs.delete(id);
+    }
+    queue.length = 0;
+    return count;
+  }
+
   listInputs(channelId: string): UserInput[] {
     return [...this.inputs.values()]
       .filter((i) => i.channelId === channelId)
