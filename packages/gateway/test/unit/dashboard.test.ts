@@ -50,4 +50,23 @@ describe("renderDashboard", () => {
     const html = renderDashboard([channel], [], "ch-1");
     expect(html).toContain("new-tab");
   });
+
+  it("renders processing indicator hidden by default", () => {
+    const html = renderDashboard([channel], [], "ch-1");
+    expect(html).toContain("processing-indicator");
+    expect(html).toContain("typing-dots");
+    // Element should have class="msg agent" (no "visible")
+    expect(html).toContain('id="processing-indicator" class="msg agent"');
+  });
+
+  it("renders processing indicator visible when session is processing", () => {
+    const html = renderDashboard([channel], [], "ch-1", { sessionStatus: "processing" });
+    expect(html).toContain('id="processing-indicator" class="msg agent visible"');
+  });
+
+  it("renders processing indicator hidden when session is waiting", () => {
+    const html = renderDashboard([channel], [], "ch-1", { sessionStatus: "waiting" });
+    expect(html).toContain('id="processing-indicator" class="msg agent"');
+    expect(html).not.toContain('id="processing-indicator" class="msg agent visible"');
+  });
 });

@@ -78,6 +78,13 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     .ws-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
     .ws-connected { background: #3fb950; }
     .ws-disconnected { background: #f85149; }
+    #processing-indicator { display: none; align-self: flex-start; }
+    #processing-indicator.visible { display: flex; }
+    .typing-dots { display: flex; gap: 0.3rem; padding: 0.6rem 1rem; background: #21262d; border-radius: 1rem; border-bottom-left-radius: 0.25rem; align-items: center; }
+    .typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: #8b949e; animation: typing 1.4s infinite; }
+    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes typing { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-4px); } }
   </style>
 </head>
 <body>
@@ -97,6 +104,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
   </div>
   <div id="chat">
     ${messages || '<div class="empty">Send a message to start the conversation.</div>'}
+    <div id="processing-indicator" class="msg agent${sessionState === "processing" ? " visible" : ""}"><div class="typing-dots"><span></span><span></span><span></span></div></div>
   </div>
   <div id="input-area">
     <textarea id="msg" placeholder="Type a message…" rows="1"></textarea>
@@ -114,6 +122,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     const statusModalOverlay = document.getElementById("status-modal-overlay");
     const statusModalContent = document.getElementById("status-modal-content");
     const wsDot = document.getElementById("ws-dot");
+    const processingIndicator = document.getElementById("processing-indicator");
 
     function escHtml(s) {
       return String(s)
@@ -143,12 +152,19 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     }
     connectSSE();
 
-    // --- Status Bar ---
+    // --- Status Bar + Processing Indicator ---
     function updateStatusBar(data) {
       if (!data) return;
       const agentVer = data.agentVersion || "—";
       const sessStatus = data.sessionStatus || "—";
       statusText.textContent = "gateway: running | agent: v" + agentVer + " | session: " + sessStatus;
+      // Show/hide processing indicator
+      if (sessStatus === "processing") {
+        processingIndicator.classList.add("visible");
+        chat.scrollTop = chat.scrollHeight;
+      } else {
+        processingIndicator.classList.remove("visible");
+      }
     }
 
     // Poll status periodically (lightweight, supplements WS)

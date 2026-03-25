@@ -9,6 +9,8 @@
 - status バーをホバーまたはクリックしたら、gateway と agent の詳細ステータスを modal で表示する
 - dashboard の画面更新はリアルタイムであること（chat もステータスも）
   - WebSocket 等のプッシュ型通信を使用する（現在の polling ではなく）
+- agent session が processing のとき、chat UI 上でそれが分かるようにしたい
+  - チャット UI でよくある「送信中...」のようなアニメーション付き表示を、processing 中に表示する
 
 ## 古い Agent の強制停止と再起動
 
