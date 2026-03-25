@@ -26,10 +26,11 @@
 
 - Gateway: CLI spawns daemon (detached), CLI exits immediately
 - Agent: single process, singleton via Unix domain socket (`copilotclaw-agent.sock`)
-- Gateway → Agent: IPC (status/stop), detached spawn to ensure alive, version check on startup
-- Agent → Gateway: HTTP API poll (pending counts, drain inputs, post messages, peek/flush)
-- Agent manages agent sessions (each with own sessionId), binds them to channels on demand
-- Sessions start when channel has pending input, stop on stale timeout or abort
+- Gateway start → agent process ensure: IPC status + version check, spawn if absent
+- Gateway stop → gateway only (agent process NOT stopped)
+- Agent → Gateway: HTTP API poll (pending counts, drain pending, post messages, peek/flush)
+- Agent process manages agent sessions: polls gateway for pending, starts session when found
+- User message POST does NOT trigger agent process ensure (agent polls on its own)
 
 ## Session Keepalive
 
@@ -46,8 +47,10 @@
 
 ## Key Constraints
 
-- Gateway and agent are independent processes (gateway restart does not kill agent)
+- Gateway and agent are independent processes (gateway stop does NOT stop agent)
 - Startup direction: always gateway → agent (agent never starts gateway)
-- Agent version check: gateway enforces minimum agent version on ensureAgent; force-restart on mismatch
+- Agent process ensure: gateway start time only (NOT on user message POST)
+- Agent session ensure: agent process responsibility (polls gateway for pending)
+- Agent version check: gateway enforces minimum agent version at start; force-restart on mismatch
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip

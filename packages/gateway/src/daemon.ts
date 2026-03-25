@@ -10,12 +10,12 @@ async function main(): Promise<void> {
   const store = new Store({ persistPath: getStoreFilePath() });
   const agentManager = new AgentManager({ gatewayPort: DEFAULT_PORT });
 
-  if (forceAgentRestart) {
-    try {
-      await agentManager.ensureAgent({ forceRestart: true });
-    } catch (err: unknown) {
-      console.error("[gateway] force-agent-restart failed:", err);
-    }
+  // Always ensure agent process on gateway start (version check + spawn if absent)
+  try {
+    await agentManager.ensureAgent({ forceRestart: forceAgentRestart });
+  } catch (err: unknown) {
+    console.error("[gateway] agent ensure failed:", err);
+    // Gateway starts anyway — agent can be started manually later
   }
 
   await startServer({ store, agentManager });

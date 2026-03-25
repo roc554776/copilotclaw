@@ -86,7 +86,7 @@ function createRequestHandler(
       }
       json(res, 200, { status: "stopping" });
       res.once("finish", () => {
-        agentManager?.stopAgent().catch(() => {});
+        // Agent process is NOT stopped — it is independent and keeps sessions alive
         onStop();
       });
       return;
@@ -147,12 +147,8 @@ function createRequestHandler(
           json(res, 404, { error: "channel not found" });
           return;
         }
-        // Ensure agent process is running when user sends a message
-        if (sender === "user" && agentManager !== null) {
-          agentManager.ensureAgent().catch((err: unknown) => {
-            console.error("[gateway] ensureAgent error:", err);
-          });
-        }
+        // Agent process ensure is done at gateway start, not per-message.
+        // Agent session ensure is the agent process's responsibility (it polls for pending).
         // Notify all channel providers
         for (const provider of channelProviders) {
           provider.onMessage?.(channelId, sender, msg.message);
@@ -253,7 +249,7 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
           for (const provider of channelProviders) {
             provider.close?.();
           }
-          await agentManager?.stopAgent().catch(() => {});
+          // Agent process is NOT stopped — independent process
           await new Promise<void>((res, rej) => {
             server.close((err) => { err ? rej(err) : res(); });
           });

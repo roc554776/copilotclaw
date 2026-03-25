@@ -33,7 +33,7 @@ src/update.ts        — `copilotclaw update` CLI: git pull + pnpm build self-up
 src/workspace.ts     — workspace paths: ~/.copilotclaw/ root, data/, store.json; ensureWorkspace()
 src/store.ts         — persistent store (Channel, Message, per-channel pending queue); JSON file via atomic rename
 src/dashboard.ts     — HTML renderer (status bar, chat bubbles, channel tabs, input form)
-src/agent-manager.ts — IPC-based agent ensure (spawn, version check, force-restart)
+src/agent-manager.ts — IPC-based agent process ensure at gateway start (spawn, version check, force-restart)
 src/ipc-client.ts    — IPC client (status/stop to agent process)
 src/ipc-paths.ts     — socket path: ${tmpdir}/copilotclaw-agent.sock
 ```

@@ -17,7 +17,7 @@ const USAGE = `Usage: copilotclaw <command> [options]
 Commands:
   setup                Initialize workspace (~/.copilotclaw/)
   start [options]      Start the gateway daemon
-  stop                 Stop the gateway and agent
+  stop                 Stop the gateway (agent keeps running)
   update               Update copilotclaw (git pull + build)
   agent stop           Stop the agent process only
 
