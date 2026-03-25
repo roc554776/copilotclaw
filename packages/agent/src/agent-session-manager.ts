@@ -106,8 +106,12 @@ export class AgentSessionManager {
           // Only unbind if still bound to this session
           if (this.channelBindings.get(boundChannelId) === sessionId) {
             this.channelBindings.delete(boundChannelId);
-            // Channel is fully unbound — reset its restart count
-            this.restartCounts.delete(boundChannelId);
+            // Only reset the restart count when the session ended normally (not during a
+            // controlled restart). The restarting flag is set before stopSession() is called
+            // so the finally block can distinguish the two cases.
+            if (!current.restarting) {
+              this.restartCounts.delete(boundChannelId);
+            }
           }
         }
       }
