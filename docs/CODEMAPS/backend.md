@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-25 | Files scanned: 17 | Token estimate: ~800 -->
+<!-- Generated: 2026-03-26 | Files scanned: 21 | Token estimate: ~900 -->
 
 # Backend
 
@@ -25,14 +25,25 @@ GET  /                                     → 200 HTML dashboard (status bar + 
 
 ```
 src/server.ts        — HTTP server, route handler, startServer(), dashboard agent status
-src/daemon.ts        — daemon entry point
+src/daemon.ts        — daemon entry point (ensureWorkspace + Store init + startServer)
 src/index.ts         — CLI entry point (health check → detached spawn → exit)
 src/stop.ts          — POST /api/stop CLI
-src/store.ts         — in-memory data (Channel, Message, per-channel pending queue, pendingCounts, flush)
+src/setup.ts         — `copilotclaw setup` CLI: create workspace directories
+src/update.ts        — `copilotclaw update` CLI: git pull + pnpm build self-update (COPILOTCLAW_UPSTREAM for file URL)
+src/workspace.ts     — workspace paths: ~/.copilotclaw/ root, data/, store.json; ensureWorkspace()
+src/store.ts         — persistent store (Channel, Message, per-channel pending queue); JSON file via atomic rename
 src/dashboard.ts     — HTML renderer (status bar, chat bubbles, channel tabs, input form)
 src/agent-manager.ts — IPC-based agent ensure (spawn, version check, force-restart)
 src/ipc-client.ts    — IPC client (status/stop to agent process)
 src/ipc-paths.ts     — socket path: ${tmpdir}/copilotclaw-agent.sock
+```
+
+### Workspace Layout
+
+```
+~/.copilotclaw/
+  data/
+    store.json    — persisted channels + messages + pending queues (atomic write via .tmp rename)
 ```
 
 ## Agent (packages/agent)

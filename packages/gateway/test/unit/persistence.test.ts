@@ -1,7 +1,7 @@
-import { unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Store } from "../../src/store.js";
 
 function tempPath(): string {
@@ -13,8 +13,10 @@ const cleanupPaths: string[] = [];
 afterEach(() => {
   for (const p of cleanupPaths) {
     try { unlinkSync(p); } catch {}
+    try { unlinkSync(`${p}.tmp`); } catch {}
   }
   cleanupPaths.length = 0;
+  vi.restoreAllMocks();
 });
 
 describe("Store persistence", () => {
@@ -90,12 +92,26 @@ describe("Store persistence", () => {
     cleanupPaths.push(path);
   });
 
-  it("handles corrupt file gracefully", () => {
+  it("handles corrupt file gracefully and logs a warning", () => {
     const path = tempPath();
     cleanupPaths.push(path);
     writeFileSync(path, "not valid json{{{", "utf-8");
 
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const store = new Store({ persistPath: path });
     expect(store.listChannels()).toEqual([]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("WARNING"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining(path));
+  });
+
+  it("uses atomic write (no leftover .tmp file after save)", () => {
+    const path = tempPath();
+    cleanupPaths.push(path);
+
+    const store = new Store({ persistPath: path });
+    store.createChannel();
+
+    expect(existsSync(path)).toBe(true);
+    expect(existsSync(`${path}.tmp`)).toBe(false);
   });
 });

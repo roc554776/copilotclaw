@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 
 export interface Message {
   id: string;
@@ -66,8 +66,12 @@ export class Store {
         if (!this.messages.has(ch.id)) this.messages.set(ch.id, []);
         if (!this.pendingQueues.has(ch.id)) this.pendingQueues.set(ch.id, []);
       }
-    } catch {
-      // File doesn't exist or is corrupt — start fresh
+    } catch (err: unknown) {
+      // ENOENT = first run; anything else = corrupt file
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.error(`[store] WARNING: could not load ${this.persistPath} (${String(err)}) — starting fresh`);
+      }
     }
   }
 
@@ -78,7 +82,10 @@ export class Store {
       messages: Object.fromEntries(this.messages),
       pendingQueues: Object.fromEntries(this.pendingQueues),
     };
-    writeFileSync(this.persistPath, JSON.stringify(snapshot, null, 2), "utf-8");
+    // Atomic write: write to a temp file then rename to avoid partial-write corruption
+    const tmp = `${this.persistPath}.tmp`;
+    writeFileSync(tmp, JSON.stringify(snapshot, null, 2), "utf-8");
+    renameSync(tmp, this.persistPath);
   }
 
   createChannel(): Channel {
