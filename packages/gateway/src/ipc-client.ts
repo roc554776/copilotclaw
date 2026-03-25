@@ -1,14 +1,16 @@
 import { createConnection } from "node:net";
 
-export interface ChannelStatusResponse {
-  status: "starting" | "waiting" | "processing" | "not_running";
+export interface AgentSessionStatusResponse {
+  status: "starting" | "waiting" | "processing" | "stopped" | "not_running";
   startedAt?: string;
   processingStartedAt?: string;
+  boundChannelId?: string;
 }
 
 export interface AgentStatusResponse {
+  version?: string;
   startedAt: string;
-  channels: Record<string, ChannelStatusResponse>;
+  sessions: Record<string, AgentSessionStatusResponse>;
 }
 
 function sendIpcRequest(socketPath: string, method: string, params?: Record<string, unknown>, timeoutMs = 5000): Promise<Record<string, unknown>> {

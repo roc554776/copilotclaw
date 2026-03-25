@@ -1,17 +1,12 @@
 /// <reference types="node" />
 import { randomUUID } from "node:crypto";
 
-export interface Reply {
-  message: string;
-  createdAt: string;
-}
-
-export interface UserInput {
+export interface Message {
   id: string;
   channelId: string;
+  sender: "user" | "agent";
   message: string;
   createdAt: string;
-  reply?: Reply;
 }
 
 export interface Channel {
@@ -21,8 +16,9 @@ export interface Channel {
 
 export class Store {
   private readonly channels = new Map<string, Channel>();
-  private readonly inputs = new Map<string, UserInput>();
-  private readonly queues = new Map<string, string[]>();
+  private readonly messages = new Map<string, Message[]>(); // channelId → all messages
+  private readonly pendingQueues = new Map<string, string[]>(); // channelId → pending message IDs (FIFO)
+  private readonly messageIndex = new Map<string, Message>(); // messageId → Message (for pending lookup)
 
   createChannel(): Channel {
     const channel: Channel = {
@@ -30,7 +26,8 @@ export class Store {
       createdAt: new Date().toISOString(),
     };
     this.channels.set(channel.id, channel);
-    this.queues.set(channel.id, []);
+    this.messages.set(channel.id, []);
+    this.pendingQueues.set(channel.id, []);
     return channel;
   }
 
@@ -44,74 +41,77 @@ export class Store {
     );
   }
 
-  addInput(channelId: string, message: string): UserInput | undefined {
-    if (!this.channels.has(channelId)) return undefined;
-    const input: UserInput = {
+  addMessage(channelId: string, sender: "user" | "agent", message: string): Message | undefined {
+    const msgs = this.messages.get(channelId);
+    if (msgs === undefined) return undefined;
+    const msg: Message = {
       id: randomUUID(),
       channelId,
+      sender,
       message,
       createdAt: new Date().toISOString(),
     };
-    this.inputs.set(input.id, input);
-    this.queues.get(channelId)!.push(input.id);
-    return input;
+    msgs.push(msg);
+    // User messages go to the pending queue for agent processing
+    if (sender === "user") {
+      this.pendingQueues.get(channelId)!.push(msg.id);
+      this.messageIndex.set(msg.id, msg);
+    }
+    return msg;
   }
 
-  drainInputs(channelId: string): UserInput[] {
-    const queue = this.queues.get(channelId);
+  listMessages(channelId: string, limit = 5): Message[] {
+    const msgs = this.messages.get(channelId);
+    if (msgs === undefined) return [];
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 5;
+    return msgs.slice(-safeLimit).reverse();
+  }
+
+  /** Drain all pending user messages from the queue (destructive) */
+  drainPending(channelId: string): Message[] {
+    const queue = this.pendingQueues.get(channelId);
     if (queue === undefined) return [];
-    const results: UserInput[] = [];
+    const results: Message[] = [];
     while (queue.length > 0) {
       const id = queue.shift()!;
-      const input = this.inputs.get(id);
-      if (input !== undefined) results.push(input);
+      const msg = this.messageIndex.get(id);
+      if (msg !== undefined) {
+        results.push(msg);
+        this.messageIndex.delete(id);
+      }
     }
     return results;
   }
 
-  hasQueuedInputs(channelId: string): boolean {
-    const queue = this.queues.get(channelId);
-    return queue !== undefined && queue.length > 0;
-  }
-
-  addReply(inputId: string, message: string): UserInput | undefined {
-    const input = this.inputs.get(inputId);
-    if (input === undefined) return undefined;
-    input.reply = {
-      message,
-      createdAt: new Date().toISOString(),
-    };
-    return input;
-  }
-
-  pendingCounts(): Record<string, number> {
-    const counts: Record<string, number> = {};
-    for (const [channelId, queue] of this.queues) {
-      counts[channelId] = queue.length;
-    }
-    return counts;
-  }
-
-  peekOldestInput(channelId: string): UserInput | undefined {
-    const queue = this.queues.get(channelId);
+  /** Peek at the oldest pending user message without removing it */
+  peekOldestPending(channelId: string): Message | undefined {
+    const queue = this.pendingQueues.get(channelId);
     if (queue === undefined || queue.length === 0) return undefined;
-    return this.inputs.get(queue[0]!);
+    return this.messageIndex.get(queue[0]!);
   }
 
-  flushInputs(channelId: string): number {
-    const queue = this.queues.get(channelId);
+  /** Flush all pending user messages (for stale recovery) */
+  flushPending(channelId: string): number {
+    const queue = this.pendingQueues.get(channelId);
     if (queue === undefined) return 0;
     const count = queue.length;
     for (const id of queue) {
-      this.inputs.delete(id);
+      this.messageIndex.delete(id);
     }
     queue.length = 0;
     return count;
   }
 
-  listInputs(channelId: string): UserInput[] {
-    return [...this.inputs.values()]
-      .filter((i) => i.channelId === channelId)
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  pendingCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const [channelId, queue] of this.pendingQueues) {
+      counts[channelId] = queue.length;
+    }
+    return counts;
+  }
+
+  hasPending(channelId: string): boolean {
+    const queue = this.pendingQueues.get(channelId);
+    return queue !== undefined && queue.length > 0;
   }
 }

@@ -2,6 +2,7 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import { AgentManager } from "./agent-manager.js";
 import { renderDashboard } from "./dashboard.js";
 import { Store } from "./store.js";
+import { WsBroadcaster } from "./ws.js";
 
 export const DEFAULT_PORT = 19741;
 
@@ -55,9 +56,10 @@ export interface ServerDeps {
   store?: Store;
   onStop?: () => void;
   agentManager?: AgentManager | null;
+  wsBroadcaster?: WsBroadcaster;
 }
 
-function createRequestHandler(store: Store, onStop: () => void, agentManager: AgentManager | null) {
+function createRequestHandler(store: Store, onStop: () => void, agentManager: AgentManager | null, wsBroadcaster: WsBroadcaster) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
     const fullPathname = url?.split("?")[0] ?? "/";
@@ -80,6 +82,21 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
       res.once("finish", () => {
         agentManager?.stopAgent().catch(() => {});
         onStop();
+      });
+      return;
+    }
+
+    if (fullPathname === "/api/events" && method === "GET") {
+      const channelId = params.get("channel") ?? undefined;
+      wsBroadcaster.addClient(res, channelId);
+      return;
+    }
+
+    if (fullPathname === "/api/status" && method === "GET") {
+      const agentStatus = agentManager !== null ? await agentManager.getStatus() : null;
+      json(res, 200, {
+        gateway: { status: "running" },
+        agent: agentStatus,
       });
       return;
     }
@@ -111,65 +128,59 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
         return;
       }
 
-      if (action === "inputs" && method === "POST") {
+      if (action === "messages" && method === "GET") {
+        const limitParam = params.get("limit");
+        const limit = limitParam !== null ? parseInt(limitParam, 10) : 5;
+        json(res, 200, store.listMessages(channelId, Number.isFinite(limit) ? limit : 5));
+        return;
+      }
+
+      if (action === "messages" && method === "POST") {
         const body = parseJson(await readBody(req));
         if (!isRecord(body) || typeof body["message"] !== "string") {
           json(res, 400, { error: "missing 'message' field" });
           return;
         }
-        const input = store.addInput(channelId, body["message"] as string);
-        if (input === undefined) {
+        const sender = body["sender"] === "user" ? "user" as const : "agent" as const;
+        const msg = store.addMessage(channelId, sender, body["message"] as string);
+        if (msg === undefined) {
           json(res, 404, { error: "channel not found" });
           return;
         }
-        // Ensure agent process is running
-        if (agentManager !== null) {
+        // Ensure agent process is running when user sends a message
+        if (sender === "user" && agentManager !== null) {
           agentManager.ensureAgent().catch((err: unknown) => {
             console.error("[gateway] ensureAgent error:", err);
           });
         }
-        json(res, 201, input);
+        wsBroadcaster.broadcast({ type: "new_message", channelId, data: msg });
+        json(res, 201, msg);
         return;
       }
 
-      if (action === "inputs/next" && method === "POST") {
-        const inputs = store.drainInputs(channelId);
-        if (inputs.length === 0) {
+      if (action === "messages/pending" && method === "POST") {
+        const pending = store.drainPending(channelId);
+        if (pending.length === 0) {
           json(res, 204, null);
           return;
         }
-        json(res, 200, inputs);
+        json(res, 200, pending);
         return;
       }
 
-      if (action === "replies" && method === "POST") {
-        const body = parseJson(await readBody(req));
-        if (!isRecord(body) || typeof body["inputId"] !== "string" || typeof body["message"] !== "string") {
-          json(res, 400, { error: "missing 'inputId' or 'message' field" });
-          return;
-        }
-        const updated = store.addReply(body["inputId"] as string, body["message"] as string);
-        if (updated === undefined) {
-          json(res, 404, { error: "input not found" });
-          return;
-        }
-        json(res, 200, updated);
-        return;
-      }
-
-      if (action === "inputs/flush" && method === "POST") {
-        const count = store.flushInputs(channelId);
-        json(res, 200, { flushed: count });
-        return;
-      }
-
-      if (action === "inputs/peek" && method === "GET") {
-        const oldest = store.peekOldestInput(channelId);
+      if (action === "messages/pending/peek" && method === "GET") {
+        const oldest = store.peekOldestPending(channelId);
         if (oldest === undefined) {
           json(res, 204, null);
           return;
         }
         json(res, 200, oldest);
+        return;
+      }
+
+      if (action === "messages/pending/flush" && method === "POST") {
+        const count = store.flushPending(channelId);
+        json(res, 200, { flushed: count });
         return;
       }
 
@@ -181,8 +192,38 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
     if (fullPathname === "/" && method === "GET") {
       const channels = store.listChannels();
       const selectedChannelId = params.get("channel") ?? channels[0]?.id;
-      const inputs = selectedChannelId !== undefined ? store.listInputs(selectedChannelId) : [];
-      const html = renderDashboard(channels, inputs, selectedChannelId);
+      // listMessages returns reverse-chronological; reverse for dashboard (oldest first)
+      const chatMessages = selectedChannelId !== undefined ? store.listMessages(selectedChannelId, 100).reverse() : [];
+
+      // Fetch agent status for dashboard status bar
+      let dashboardAgentStatus: import("./dashboard.js").DashboardAgentStatus | undefined;
+      if (agentManager !== null) {
+        try {
+          const agentInfo = await agentManager.getStatus();
+          if (agentInfo !== null) {
+            // Find session status for the active channel
+            let sessionStatus: string | undefined;
+            if (selectedChannelId !== undefined) {
+              for (const sess of Object.values(agentInfo.sessions)) {
+                if (sess.boundChannelId === selectedChannelId) {
+                  sessionStatus = sess.status;
+                  break;
+                }
+              }
+            }
+            dashboardAgentStatus = {
+              sessionStatus: sessionStatus ?? "no session",
+            };
+            if (agentInfo.version !== undefined) {
+              dashboardAgentStatus.version = agentInfo.version;
+            }
+          }
+        } catch {
+          // Agent not reachable — leave undefined
+        }
+      }
+
+      const html = renderDashboard(channels, chatMessages, selectedChannelId, dashboardAgentStatus);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
       return;
@@ -196,6 +237,7 @@ export interface ServerHandle {
   server: Server;
   port: number;
   store: Store;
+  wsBroadcaster: WsBroadcaster;
   close: () => Promise<void>;
 }
 
@@ -207,7 +249,8 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const agentManager = options?.agentManager === null
     ? null
     : options?.agentManager ?? new AgentManager({ gatewayPort: port });
-  const handleRequest = createRequestHandler(store, onStop, agentManager);
+  const wsBroadcaster = options?.wsBroadcaster ?? new WsBroadcaster();
+  const handleRequest = createRequestHandler(store, onStop, agentManager, wsBroadcaster);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {
@@ -232,7 +275,9 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
         server,
         port: actualPort,
         store,
+        wsBroadcaster,
         close: async () => {
+          wsBroadcaster.closeAll();
           await agentManager?.stopAgent().catch(() => {});
           await new Promise<void>((res, rej) => {
             server.close((err) => { err ? rej(err) : res(); });

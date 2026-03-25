@@ -70,7 +70,9 @@ The SDK provides 6 hooks: `onSessionStart`, `onUserPromptSubmitted`, `onPreToolU
 
 ## Current copilotclaw Behavior
 
-The current implementation uses `session.send({ prompt: continuePrompt, mode: "enqueue" })` on every idle event to keep the agent alive. Each `session.send()` consumes a premium request.
+`copilotclaw_*` tool の内部で gateway への input ポーリングを最大 25 分間ブロックする（keepalive timeout）。tool 実行中はセッションが active 扱いとなり CLI の idle timeout が発生しない。25 分経過で input がなければ tool は空の keepalive 結果を返し、idle イベントが発火 → `session.send(continuePrompt)` → プレミアムリクエスト 1 回消費 → 再び tool がポーリング開始。これにより消費頻度は約 30 分に 1 回に抑えられる。
+
+既存の `runSessionLoop` の idle → continuePrompt パターンは引き続き使用するが、idle の発火頻度が毎ターンから約 25 分に 1 回に減少する。
 
 ## resumeSession Behavior
 
@@ -79,16 +81,6 @@ The current implementation uses `session.send({ prompt: continuePrompt, mode: "e
 - `session.send()` is required to trigger new work after resume
 - `session.idle` event does not fire automatically on resume
 - In-memory queued items are lost on disconnect (queue is not persisted)
-
-## Current Design and Future Considerations
-
-The current implementation uses `session.send()` on every idle event, consuming a premium request each time. This is known to be suboptimal.
-
-The disconnect/resumeSession pattern (disconnect on idle, resume + send on new input) would require a `session.send()` per user input, which is also not cost-effective.
-
-### Planned approach: Tool-internal polling with keepalive
-
-Agent session を channel から分離し、`copilotclaw_*` tool の内部で input をポーリング待機する。tool 実行中はセッションが active 扱いとなり idle timeout しない。timeout 接近時（約 25 分）に空返し → 即座に tool 再実行を指示するサイクルで、プレミアムリクエスト消費を約 30 分に 1 回に抑える。詳細は `docs/proposals/proposal.md` の「Agent Session」セクションを参照。
 
 ## Session Idle Timeout
 
@@ -100,4 +92,4 @@ Last activity → 25 min: timeout_warning event → 30 min: session destroyed
 
 - **What gets destroyed:** In-memory session resources on the CLI side
 - **What survives:** Session state on disk (conversation history, tool results, planning state, artifacts) — can be resumed via `client.resumeSession(sessionId)`
-- **Current copilotclaw impact:** Tool handler polling keeps the session active (tool is executing), so this timeout does not apply. If switching to disconnect/resumeSession, the session would be disconnected before timeout applies.
+- **Current copilotclaw impact:** Tool handler polling keeps the session active (tool is executing), so this timeout does not apply. Keepalive timeout（25 分）で tool が空返しした際に idle が発生するが、即座に `session.send()` → tool 再実行で 30 分の timeout には到達しない。

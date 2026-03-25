@@ -31,98 +31,147 @@ describe("Store", () => {
     });
   });
 
-  describe("addInput", () => {
-    it("returns a UserInput with id, channelId, message, and createdAt", () => {
-      const input = store.addInput(channelId, "hello");
-      expect(input).toBeDefined();
-      expect(input!.id).toBeTruthy();
-      expect(input!.channelId).toBe(channelId);
-      expect(input!.message).toBe("hello");
-      expect(input!.reply).toBeUndefined();
+  describe("addMessage", () => {
+    it("returns a Message with id, channelId, sender, and createdAt", () => {
+      const msg = store.addMessage(channelId, "user", "hello");
+      expect(msg).toBeDefined();
+      expect(msg!.id).toBeTruthy();
+      expect(msg!.channelId).toBe(channelId);
+      expect(msg!.sender).toBe("user");
+      expect(msg!.message).toBe("hello");
     });
 
     it("returns undefined for non-existent channel", () => {
-      expect(store.addInput("nonexistent", "hello")).toBeUndefined();
+      expect(store.addMessage("nonexistent", "user", "hello")).toBeUndefined();
     });
 
     it("generates unique ids", () => {
-      const a = store.addInput(channelId, "a");
-      const b = store.addInput(channelId, "b");
+      const a = store.addMessage(channelId, "user", "a");
+      const b = store.addMessage(channelId, "user", "b");
       expect(a!.id).not.toBe(b!.id);
+    });
+
+    it("adds user messages to pending queue", () => {
+      store.addMessage(channelId, "user", "pending msg");
+      expect(store.hasPending(channelId)).toBe(true);
+    });
+
+    it("does not add agent messages to pending queue", () => {
+      store.addMessage(channelId, "agent", "agent msg");
+      expect(store.hasPending(channelId)).toBe(false);
     });
   });
 
-  describe("drainInputs", () => {
+  describe("drainPending", () => {
     it("returns empty array when queue is empty", () => {
-      expect(store.drainInputs(channelId)).toEqual([]);
+      expect(store.drainPending(channelId)).toEqual([]);
     });
 
-    it("returns all queued inputs at once in FIFO order", () => {
-      store.addInput(channelId, "first");
-      store.addInput(channelId, "second");
-      store.addInput(channelId, "third");
+    it("returns all pending user messages in FIFO order", () => {
+      store.addMessage(channelId, "user", "first");
+      store.addMessage(channelId, "user", "second");
+      store.addMessage(channelId, "user", "third");
 
-      const drained = store.drainInputs(channelId);
+      const drained = store.drainPending(channelId);
       expect(drained).toHaveLength(3);
       expect(drained[0]?.message).toBe("first");
       expect(drained[1]?.message).toBe("second");
       expect(drained[2]?.message).toBe("third");
     });
 
-    it("drains each input only once", () => {
-      store.addInput(channelId, "once");
-      store.drainInputs(channelId);
-      expect(store.drainInputs(channelId)).toEqual([]);
+    it("drains each message only once", () => {
+      store.addMessage(channelId, "user", "once");
+      store.drainPending(channelId);
+      expect(store.drainPending(channelId)).toEqual([]);
     });
 
     it("keeps channels independent", () => {
       const ch2 = store.createChannel().id;
-      store.addInput(channelId, "ch1-msg");
-      store.addInput(ch2, "ch2-msg");
+      store.addMessage(channelId, "user", "ch1-msg");
+      store.addMessage(ch2, "user", "ch2-msg");
 
-      const drained1 = store.drainInputs(channelId);
+      const drained1 = store.drainPending(channelId);
       expect(drained1).toHaveLength(1);
       expect(drained1[0]?.message).toBe("ch1-msg");
 
-      const drained2 = store.drainInputs(ch2);
+      const drained2 = store.drainPending(ch2);
       expect(drained2).toHaveLength(1);
       expect(drained2[0]?.message).toBe("ch2-msg");
     });
-  });
 
-  describe("addReply", () => {
-    it("attaches a reply to an existing input", () => {
-      const input = store.addInput(channelId, "question");
-      const updated = store.addReply(input!.id, "answer");
-      expect(updated?.reply?.message).toBe("answer");
-      expect(updated?.reply?.createdAt).toBeTruthy();
-    });
-
-    it("returns undefined for non-existent input id", () => {
-      expect(store.addReply("nonexistent", "reply")).toBeUndefined();
+    it("does not drain agent messages", () => {
+      store.addMessage(channelId, "agent", "not pending");
+      store.addMessage(channelId, "user", "pending");
+      const drained = store.drainPending(channelId);
+      expect(drained).toHaveLength(1);
+      expect(drained[0]?.sender).toBe("user");
     });
   });
 
-  describe("listInputs", () => {
-    it("returns empty array when no inputs for channel", () => {
-      expect(store.listInputs(channelId)).toEqual([]);
+  describe("peekOldestPending", () => {
+    it("returns undefined when no pending messages", () => {
+      expect(store.peekOldestPending(channelId)).toBeUndefined();
     });
 
-    it("returns inputs for specific channel sorted by createdAt", () => {
-      store.addInput(channelId, "a");
-      store.addInput(channelId, "b");
-      const all = store.listInputs(channelId);
-      expect(all).toHaveLength(2);
-      expect(all[0]?.message).toBe("a");
-      expect(all[1]?.message).toBe("b");
+    it("returns the oldest pending user message without removing it", () => {
+      store.addMessage(channelId, "user", "oldest");
+      store.addMessage(channelId, "user", "newer");
+      const peeked = store.peekOldestPending(channelId);
+      expect(peeked?.message).toBe("oldest");
+      // Still in queue
+      expect(store.hasPending(channelId)).toBe(true);
+    });
+  });
+
+  describe("flushPending", () => {
+    it("removes all pending messages and returns count", () => {
+      store.addMessage(channelId, "user", "a");
+      store.addMessage(channelId, "user", "b");
+      const count = store.flushPending(channelId);
+      expect(count).toBe(2);
+      expect(store.hasPending(channelId)).toBe(false);
+    });
+  });
+
+  describe("listMessages", () => {
+    it("returns empty array when no messages", () => {
+      expect(store.listMessages(channelId)).toEqual([]);
     });
 
-    it("does not return inputs from other channels", () => {
+    it("includes both user and agent messages", () => {
+      store.addMessage(channelId, "user", "hello");
+      store.addMessage(channelId, "agent", "hi back");
+      const msgs = store.listMessages(channelId, 10);
+      expect(msgs).toHaveLength(2);
+    });
+
+    it("respects limit and returns latest messages first", () => {
+      store.addMessage(channelId, "user", "msg-1");
+      store.addMessage(channelId, "agent", "msg-2");
+      store.addMessage(channelId, "user", "msg-3");
+      store.addMessage(channelId, "agent", "msg-4");
+      store.addMessage(channelId, "user", "msg-5");
+
+      const msgs = store.listMessages(channelId, 3);
+      expect(msgs).toHaveLength(3);
+      expect(msgs[0]?.message).toBe("msg-5");
+      expect(msgs[2]?.message).toBe("msg-3");
+    });
+
+    it("returns empty for non-existent channel", () => {
+      expect(store.listMessages("nonexistent")).toEqual([]);
+    });
+  });
+
+  describe("pendingCounts", () => {
+    it("returns counts for all channels", () => {
       const ch2 = store.createChannel().id;
-      store.addInput(channelId, "ch1");
-      store.addInput(ch2, "ch2");
-      expect(store.listInputs(channelId)).toHaveLength(1);
-      expect(store.listInputs(ch2)).toHaveLength(1);
+      store.addMessage(channelId, "user", "a");
+      store.addMessage(channelId, "user", "b");
+      store.addMessage(ch2, "user", "c");
+      const counts = store.pendingCounts();
+      expect(counts[channelId]).toBe(2);
+      expect(counts[ch2]).toBe(1);
     });
   });
 });

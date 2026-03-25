@@ -19,35 +19,16 @@ function createMockSession(): SessionLike & { callbacks: SessionLoopCallbacks | 
 }
 
 describe("runSessionLoop", () => {
-  it("sends initial prompt and continue prompt on each idle", async () => {
+  it("sends initial prompt and resolves on idle without sending continuePrompt", async () => {
     const session = createMockSession();
-    const result = await runSessionLoop({
+    await runSessionLoop({
       session,
       initialPrompt: "init",
-      continuePrompt: "continue",
-      maxTurns: 3,
     });
 
+    // Only initial prompt sent — no continuePrompt on idle
+    expect(session.sendCalls).toHaveLength(1);
     expect(session.sendCalls[0]?.prompt).toBe("init");
-    expect(session.sendCalls[1]?.prompt).toBe("continue");
-    expect(session.sendCalls[1]?.mode).toBe("enqueue");
-    expect(session.sendCalls[2]?.prompt).toBe("continue");
-    // maxTurns=3: stops after 3 idles (init + 2 continues)
-    expect(result.turnCount).toBe(3);
-  });
-
-  it("stops at maxTurns=1", async () => {
-    const session = createMockSession();
-    const result = await runSessionLoop({
-      session,
-      initialPrompt: "init",
-      continuePrompt: "continue",
-      maxTurns: 1,
-    });
-
-    // turnCount=1 on first idle, >= maxTurns, stops
-    expect(result.turnCount).toBe(1);
-    expect(session.sendCalls).toHaveLength(1); // only initial prompt sent
   });
 
   it("delivers assistant messages via onMessage callback", async () => {
@@ -64,8 +45,6 @@ describe("runSessionLoop", () => {
     await runSessionLoop({
       session,
       initialPrompt: "init",
-      continuePrompt: "continue",
-      maxTurns: 1,
       onMessage: (content) => { messages.push(content); },
     });
 
@@ -84,8 +63,6 @@ describe("runSessionLoop", () => {
       runSessionLoop({
         session,
         initialPrompt: "init",
-        continuePrompt: "continue",
-        maxTurns: 10,
       }),
     ).rejects.toThrow("something broke");
   });
@@ -103,8 +80,6 @@ describe("runSessionLoop", () => {
     await runSessionLoop({
       session,
       initialPrompt: "init",
-      continuePrompt: "continue",
-      maxTurns: 10,
     }).catch(() => {});
 
     expect(disconnectSpy).toHaveBeenCalled();
@@ -118,8 +93,6 @@ describe("runSessionLoop", () => {
     await runSessionLoop({
       session,
       initialPrompt: "init",
-      continuePrompt: "continue",
-      maxTurns: 0,
       log: (msg) => { logs.push(msg); },
     });
 
@@ -128,15 +101,25 @@ describe("runSessionLoop", () => {
 
   it("stops before initial send when shouldStop returns true", async () => {
     const session = createMockSession();
-    const result = await runSessionLoop({
+    await runSessionLoop({
       session,
       initialPrompt: "init",
-      continuePrompt: "continue",
-      maxTurns: 10,
       shouldStop: () => true,
     });
 
-    expect(result.turnCount).toBe(0);
     expect(session.sendCalls).toHaveLength(0);
+  });
+
+  it("logs when LLM stops calling tools (idle)", async () => {
+    const session = createMockSession();
+    const logs: string[] = [];
+
+    await runSessionLoop({
+      session,
+      initialPrompt: "init",
+      log: (msg) => { logs.push(msg); },
+    });
+
+    expect(logs.some((l) => l.includes("idle"))).toBe(true);
   });
 });

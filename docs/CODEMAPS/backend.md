@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-25 | Files scanned: 15 | Token estimate: ~600 -->
+<!-- Generated: 2026-03-25 | Files scanned: 17 | Token estimate: ~800 -->
 
 # Backend
 
@@ -8,28 +8,29 @@
 
 ```
 GET  /healthz                              → 200 { status: "ok" }
-POST /api/stop                             → 200 { status: "stopping" } → stop agent → exit
+POST /api/stop                             → 200 { status: "stopping" } → stop agent → exit (localhost only)
+GET  /api/status                           → 200 { gateway: {status}, agent: AgentStatusResponse|null }
 GET  /api/channels                         → 200 Channel[]
 POST /api/channels                         → 201 Channel
 GET  /api/channels/pending                 → 200 { [channelId]: count }
-POST /api/channels/:channelId/inputs       → 201 UserInput (+ ensureAgent)
-POST /api/channels/:channelId/inputs/next  → 200 UserInput[] | 204 (drain all queued)
-GET  /api/channels/:channelId/inputs/peek  → 200 UserInput | 204 (oldest queued, non-destructive)
-POST /api/channels/:channelId/inputs/flush → 200 { flushed: count }
-POST /api/channels/:channelId/replies      → 200 UserInput (with reply attached)
-GET  /                                     → 200 HTML dashboard (channel tabs + chat UI)
+GET  /api/channels/:channelId/messages              → 200 Message[] (?limit=N, reverse-chronological)
+POST /api/channels/:channelId/messages              → 201 Message (sender: "user"|"agent", user messages go to pending queue + ensureAgent)
+POST /api/channels/:channelId/messages/pending      → 200 Message[] | 204 (drain all pending user messages)
+GET  /api/channels/:channelId/messages/pending/peek → 200 Message | 204 (oldest pending, non-destructive)
+POST /api/channels/:channelId/messages/pending/flush → 200 { flushed: count }
+GET  /                                     → 200 HTML dashboard (status bar + channel tabs + chat UI)
 ```
 
 ### Key Files
 
 ```
-src/server.ts        — HTTP server, route handler, startServer()
+src/server.ts        — HTTP server, route handler, startServer(), dashboard agent status
 src/daemon.ts        — daemon entry point
 src/index.ts         — CLI entry point (health check → detached spawn → exit)
 src/stop.ts          — POST /api/stop CLI
-src/store.ts         — in-memory data (Channel, UserInput, per-channel FIFO queue, pendingCounts, flush)
-src/dashboard.ts     — HTML renderer (chat bubbles, channel tabs, input form)
-src/agent-manager.ts — IPC-based agent ensure (spawn if not alive)
+src/store.ts         — in-memory data (Channel, Message, per-channel pending queue, pendingCounts, flush)
+src/dashboard.ts     — HTML renderer (status bar, chat bubbles, channel tabs, input form)
+src/agent-manager.ts — IPC-based agent ensure (spawn, version check, force-restart)
 src/ipc-client.ts    — IPC client (status/stop to agent process)
 src/ipc-paths.ts     — socket path: ${tmpdir}/copilotclaw-agent.sock
 ```
@@ -40,24 +41,37 @@ src/ipc-paths.ts     — socket path: ${tmpdir}/copilotclaw-agent.sock
 
 ```
 → {"method":"status"}
-← {"startedAt":"...","channels":{"ch-id":{"status":"waiting","startedAt":"..."}}}
+← {"version":"0.1.0","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id"}}}
 
-→ {"method":"channel_status","params":{"channelId":"ch-id"}}
-← {"status":"processing","startedAt":"...","processingStartedAt":"..."}
+→ {"method":"session_status","params":{"sessionId":"sess-id"}}
+← {"status":"processing","startedAt":"...","processingStartedAt":"...","boundChannelId":"ch-id"}
   (or {"status":"not_running"} if no session exists)
 
 → {"method":"stop"}
-← {"ok":true}  → graceful shutdown of all channel sessions
+← {"ok":true}  → graceful shutdown of all sessions
 ```
+
+### Copilot SDK Tools (tools/channel.ts)
+
+```
+copilotclaw_send_message(message)   — send a message to the channel (non-blocking)
+copilotclaw_receive_input()         — block polling for pending user messages (25 min keepalive timeout)
+copilotclaw_list_messages(limit?)   — list recent channel messages (reverse-chronological)
+```
+
+### SDK Hooks
+
+- `onPostToolUse` — peeks channel for pending user messages, injects additionalContext notification
 
 ### Key Files
 
 ```
-src/index.ts                   — singleton entry, gateway polling loop, stale detection
-src/channel-session-manager.ts — per-channel Copilot SDK session lifecycle
-src/ipc-server.ts              — Unix domain socket IPC server (status/channel_status/stop)
-src/ipc-paths.ts               — socket path generation
-src/session-loop.ts            — session idle loop (continuePrompt, shouldStop callback)
-src/copilot-session-adapter.ts — CopilotSession → SessionLike adapter
-src/tools/channel.ts           — copilotclaw_receive_first_input, copilotclaw_reply_and_receive_input
+src/index.ts                    — singleton entry, gateway polling loop, stale detection
+src/agent-session-manager.ts    — per-session lifecycle, channel binding, stale restart, stopped notification
+src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop), version reporting
+src/ipc-paths.ts                — socket path generation
+src/session-loop.ts             — session idle loop (subscribe/send/disconnect, no continuePrompt)
+src/copilot-session-adapter.ts  — CopilotSession → SessionLike adapter
+src/stop.ts                     — CLI stop command (IPC stop)
+src/tools/channel.ts            — send_message, receive_input, list_messages tools
 ```

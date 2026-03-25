@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
+    "stop": "node dist/stop.js",
     "test": "vitest run"
   },
   "engines": {

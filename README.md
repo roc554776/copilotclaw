@@ -27,7 +27,7 @@ The gateway starts as a background daemon on http://localhost:19741.
 
 ### Interact
 
-Open http://localhost:19741 in your browser, type a message, and press Send. The gateway automatically starts the agent process, which handles user input and replies via the Copilot SDK.
+Open http://localhost:19741 in your browser, type a message, and press Send. The gateway automatically starts the agent process, which handles user messages and replies via the Copilot SDK.
 
 Use the "+" button to create additional channels for parallel conversations.
 
