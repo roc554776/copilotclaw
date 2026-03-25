@@ -16,7 +16,8 @@
       "Bash(node dist/index.js)",
       "WebSearch",
       "Bash(mise --version)",
-      "Bash(pnpm run:*)"
+      "Bash(pnpm run:*)",
+      "Bash(python3 .claude/skills/fetch-codebase/scripts/fetch-codebase.py *)"
     ]
   }
 }

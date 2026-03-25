@@ -128,6 +128,37 @@ Gateway: user input 受信時
 
 `{{tmpdir}}/copilotclaw-agent.sock` を使用する（プロセス単位、チャンネルごとではない）。
 
+## アーキテクチャ方針: Agent Session
+
+### 方針: Channel と Agent Session の分離
+
+現在は channel と Copilot SDK session が 1:1 で直接対応しているが、この関係を切り離す。「agent session」を channel から独立した概念として導入し、agent process が管理する。
+
+- Agent session は Copilot SDK の session に対応する
+- Channel には agent session が必要に応じて紐づく
+- 将来的に channel に紐づかない agent session も想定する（例: バックグラウンドタスク用）
+
+### Session Keepalive 方針
+
+CLI の 30 分 idle timeout を回避するため、`copilotclaw_*` tool の内部で input をポーリングしながら待機する。tool が実行中の間はセッションは active 扱いとなり timeout しない。
+
+```
+Agent session 起動
+  → copilotclaw_* tool を実行（tool 内で input をポーリング待機）
+  → timeout 接近（例: 25 分経過）
+    → input なしで tool を返す（空の結果）
+    → idle 発生 → 即座に copilotclaw_* tool を再実行するよう強く指示
+    → tool 内で再びポーリング待機
+  → input 到着
+    → tool が input を返す → LLM が処理 → reply
+    → 次の copilotclaw_* tool を実行（ループ）
+```
+
+この方式により:
+- セッションは tool 実行中として生かし続けられる
+- 空返し + 再実行指示のサイクルでプレミアムリクエストは消費されるが、30 分に 1 回程度に抑えられる
+- input が来たときは即座に処理できる（tool 内ポーリングのため低レイテンシ）
+
 ### Channel ツール
 
 カスタムツール名は `copilotclaw_` プレフィクスで統一する。

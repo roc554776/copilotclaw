@@ -86,7 +86,9 @@ The current implementation uses `session.send()` on every idle event, consuming 
 
 The disconnect/resumeSession pattern (disconnect on idle, resume + send on new input) would require a `session.send()` per user input, which is also not cost-effective.
 
-Future improvement will require a fundamentally different approach. Both the current idle-loop pattern and the disconnect/resumeSession pattern have premium request cost issues that make them unsuitable as long-term solutions.
+### Planned approach: Tool-internal polling with keepalive
+
+Agent session を channel から分離し、`copilotclaw_*` tool の内部で input をポーリング待機する。tool 実行中はセッションが active 扱いとなり idle timeout しない。timeout 接近時（約 25 分）に空返し → 即座に tool 再実行を指示するサイクルで、プレミアムリクエスト消費を約 30 分に 1 回に抑える。詳細は `docs/proposals/proposal.md` の「Agent Session」セクションを参照。
 
 ## Session Idle Timeout
 
