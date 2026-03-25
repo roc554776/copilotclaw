@@ -120,9 +120,18 @@ export function renderDashboard(channels: Channel[], inputs: UserInput[], active
     const statusModalContent = document.getElementById("status-modal-content");
     const wsDot = document.getElementById("ws-dot");
 
+    function escHtml(s) {
+      return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
     // --- Server-Sent Events ---
     let evtSource = null;
     function connectSSE() {
+      if (!CHANNEL_ID) return;
       evtSource = new EventSource("/api/events?channel=" + encodeURIComponent(CHANNEL_ID));
       evtSource.onopen = () => { wsDot.className = "ws-indicator ws-connected"; };
       evtSource.onerror = () => { wsDot.className = "ws-indicator ws-disconnected"; };
@@ -175,23 +184,24 @@ export function renderDashboard(channels: Channel[], inputs: UserInput[], active
       statusModal.style.display = "block";
       statusModalOverlay.style.display = "block";
       try {
-        const res = await fetch("/api/status");
-        if (!res.ok) { statusModalContent.textContent = "Failed to load status"; return; }
-        const body = await res.json();
+        const statusRes = await fetch("/api/status");
+        if (!statusRes.ok) { statusModalContent.textContent = "Failed to load status"; return; }
+        const body = await statusRes.json();
         let html = '<div class="section"><div class="section-title">Gateway</div>';
-        html += '<div class="row"><span class="label">Status</span><span class="value">' + (body.gateway?.status || "unknown") + '</span></div>';
+        html += '<div class="row"><span class="label">Status</span><span class="value">' + escHtml(body.gateway?.status || "unknown") + '</span></div>';
         html += '</div>';
         if (body.agent) {
           html += '<div class="section"><div class="section-title">Agent</div>';
-          html += '<div class="row"><span class="label">Version</span><span class="value">' + (body.agent.version || "—") + '</span></div>';
-          html += '<div class="row"><span class="label">Started</span><span class="value">' + (body.agent.startedAt || "—") + '</span></div>';
+          html += '<div class="row"><span class="label">Version</span><span class="value">' + escHtml(body.agent.version || "—") + '</span></div>';
+          html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(body.agent.startedAt || "—") + '</span></div>';
           html += '</div>';
           const sessions = body.agent.sessions || {};
           const entries = Object.entries(sessions);
           if (entries.length > 0) {
-            html += '<div class="section"><div class="section-title">Sessions (' + entries.length + ')</div>';
+            html += '<div class="section"><div class="section-title">Sessions (' + escHtml(String(entries.length)) + ')</div>';
             for (const [id, sess] of entries) {
-              html += '<div class="row"><span class="label">' + id.slice(0,8) + (sess.boundChannelId ? ' → ch:' + sess.boundChannelId.slice(0,8) : '') + '</span><span class="value">' + sess.status + '</span></div>';
+              const chLabel = sess.boundChannelId ? ' → ch:' + escHtml(sess.boundChannelId.slice(0,8)) : '';
+              html += '<div class="row"><span class="label">' + escHtml(id.slice(0,8)) + chLabel + '</span><span class="value">' + escHtml(sess.status) + '</span></div>';
             }
             html += '</div>';
           } else {

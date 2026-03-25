@@ -56,7 +56,7 @@ export interface ServerDeps {
   store?: Store;
   onStop?: () => void;
   agentManager?: AgentManager | null;
-  wsBroadcaster?: WsBroadcaster | null;
+  wsBroadcaster?: WsBroadcaster;
 }
 
 function createRequestHandler(store: Store, onStop: () => void, agentManager: AgentManager | null, wsBroadcaster: WsBroadcaster) {
@@ -280,9 +280,7 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const agentManager = options?.agentManager === null
     ? null
     : options?.agentManager ?? new AgentManager({ gatewayPort: port });
-  const wsBroadcaster = options?.wsBroadcaster === null
-    ? new WsBroadcaster()
-    : options?.wsBroadcaster ?? new WsBroadcaster();
+  const wsBroadcaster = options?.wsBroadcaster ?? new WsBroadcaster();
   const handleRequest = createRequestHandler(store, onStop, agentManager, wsBroadcaster);
 
   // Create default channel on startup

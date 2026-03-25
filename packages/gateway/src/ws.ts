@@ -18,6 +18,7 @@ export class WsBroadcaster {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
     });
     res.write(":\n\n"); // SSE comment as keepalive
 
