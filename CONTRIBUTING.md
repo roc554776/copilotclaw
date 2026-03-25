@@ -15,6 +15,21 @@ pnpm run typecheck   # Type check
 pnpm run test        # Run tests
 ```
 
+### Gateway commands
+
+```sh
+pnpm --filter @copilotclaw/gateway run start   # Start gateway daemon
+pnpm --filter @copilotclaw/gateway run stop    # Stop gateway and agent
+pnpm --filter @copilotclaw/gateway run setup   # Initialize workspace (~/.copilotclaw/)
+pnpm --filter @copilotclaw/gateway run update  # Self-update via git pull + build
+```
+
+### Agent commands
+
+```sh
+pnpm --filter @copilotclaw/agent run stop      # Stop agent process
+```
+
 ## Codebase Reference
 
 `docs/CODEMAPS/` contains architecture maps (routes, file mappings, dependencies). Read before exploring unfamiliar areas.
@@ -24,7 +39,7 @@ pnpm run test        # Run tests
 ```
 packages/
   agent/     — Agent process using the Copilot SDK
-  gateway/   — Central HTTP server (input queue, reply, dashboard)
+  gateway/   — Central HTTP server (message queue, dashboard, persistence)
 observability/ — OTEL telemetry collection and visualization stack (Grafana, Prometheus, Loki, Tempo)
 docs/          — Requirements, proposals, and references
 ```
@@ -40,3 +55,9 @@ Every implementation must include automated tests. PRs with implementation only 
 - All dependencies on the GitHub Copilot SDK must be mocked — including in E2E tests. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles (mocks / stubs) must be implemented in place. Tests must never be skipped due to missing test doubles
 - E2E tests start servers on dedicated ports (`port: 0`) to isolate from the production environment
+
+## Versioning
+
+- Gateway and agent are versioned independently via `package.json`
+- Gateway defines `MIN_AGENT_VERSION` to enforce agent compatibility
+- IPC protocol or API changes require a minor version bump and `MIN_AGENT_VERSION` update
