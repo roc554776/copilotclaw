@@ -61,9 +61,10 @@ function handleConnection(
             break;
           }
           case "stop":
-            socket.write(JSON.stringify({ ok: true }) + "\n");
-            socket.end();
-            onStop();
+            socket.write(JSON.stringify({ ok: true }) + "\n", () => {
+              socket.destroy();
+              onStop();
+            });
             break;
           default:
             socket.write(JSON.stringify({ error: "unknown method" }) + "\n");
@@ -84,12 +85,22 @@ function createHandle(server: Server, socketPath: string, state: AgentIpcState):
     server,
     socketPath,
     state,
-    close: () => new Promise<void>((res) => {
-      server.close(() => {
-        try { unlinkSync(socketPath); } catch {}
-        res();
+    close: () => {
+      const closePromise = new Promise<void>((res) => {
+        server.close(() => {
+          try { unlinkSync(socketPath); } catch {}
+          res();
+        });
       });
-    }),
+      const timeout = new Promise<void>((res) => {
+        const t = setTimeout(() => {
+          try { unlinkSync(socketPath); } catch {}
+          res();
+        }, 3000);
+        t.unref();
+      });
+      return Promise.race([closePromise, timeout]);
+    },
   };
 }
 

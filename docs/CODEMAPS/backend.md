@@ -44,6 +44,7 @@ src/ipc-paths.ts     — socket path: ${tmpdir}/copilotclaw-agent.sock
 
 → {"method":"channel_status","params":{"channelId":"ch-id"}}
 ← {"status":"processing","startedAt":"...","processingStartedAt":"..."}
+  (or {"status":"not_running"} if no session exists)
 
 → {"method":"stop"}
 ← {"ok":true}  → graceful shutdown of all channel sessions

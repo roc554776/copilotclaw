@@ -96,7 +96,7 @@ ChannelStatus:
 
 | フィールド | 型 | 意味 |
 | :--- | :--- | :--- |
-| `status` | `"starting" \| "waiting" \| "processing"` | セッションの状態 |
+| `status` | `"starting" \| "waiting" \| "processing" \| "not_running"` | セッションの状態 |
 | `startedAt` | `string` | セッション開始時刻 |
 | `processingStartedAt?` | `string` | processing 状態に入った時刻 |
 
@@ -105,13 +105,12 @@ ChannelStatus:
 ```
 Agent プロセス起動
   → IPC サーバー開始
-  → gateway ポーリングループ開始（全チャンネルの inputs/next を巡回）
+  → gateway ポーリングループ開始（GET /api/channels/pending で各チャンネルの pending 数を確認）
     → チャンネルに未処理 user input あり かつ セッション未起動 → セッション起動
     → チャンネルセッションが processing のまま staleTimeout (default 10 min) 超過
-      → 同一チャンネルの最古 user input が前回と同じ → retryCount++
-        → retryCount > 1 → 当該チャンネルの user input を全て flush、セッション停止
-        → retryCount <= 1 → セッション再起動（1 回だけリトライ）
-      → 最古 user input が変わっている → retryCount リセット、セッション再起動
+      → restartCount == 0 → セッション再起動（1 回だけリトライ）、restartCount を 1 に
+      → restartCount >= 1 → 当該チャンネルの user input を全て flush、セッション停止
+      → 再起動成功後は restartCount をリセット
 ```
 
 ### Gateway の Agent 管理

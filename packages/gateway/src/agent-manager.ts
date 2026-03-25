@@ -13,6 +13,7 @@ export class AgentManager {
   private readonly gatewayPort: number;
   private readonly agentScript: string;
   private spawning = false;
+  private spawningTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: AgentManagerOptions) {
     this.gatewayPort = options.gatewayPort;
@@ -29,8 +30,9 @@ export class AgentManager {
       if (status !== null) return;
       this.spawnAgent();
     } finally {
-      // Reset after grace period for socket to be bound
-      setTimeout(() => { this.spawning = false; }, 3000);
+      if (this.spawningTimer !== undefined) clearTimeout(this.spawningTimer);
+      this.spawningTimer = setTimeout(() => { this.spawning = false; }, 3000);
+      this.spawningTimer.unref();
     }
   }
 

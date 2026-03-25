@@ -6,7 +6,7 @@
 
 ```
 ┌─────────────┐  HTTP   ┌─────────────┐  IPC (.sock)  ┌──────────────────────┐
-│   Browser    │◄──────►│   Gateway    │◄────────────►│       Agent          │
+│   Browser    │◄──────►│   Gateway    │─────────────►│       Agent          │
 │  (dashboard) │        │  (daemon)    │               │  (single process)    │
 └─────────────┘        └──────┬──────┘               │  ┌──────────────┐   │
                               │                       │  │ Ch Session A │   │

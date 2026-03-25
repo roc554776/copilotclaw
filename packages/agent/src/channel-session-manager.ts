@@ -29,7 +29,7 @@ const DEFAULT_STALE_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class ChannelSessionManager {
   private readonly sessions = new Map<string, ChannelSessionEntry>();
-  private readonly staleRetryState = new Map<string, { lastOldestInputId: string; retryCount: number }>();
+  private readonly restartCounts = new Map<string, number>();
   private readonly gatewayBaseUrl: string;
   private readonly staleTimeoutMs: number;
   private generationCounter = 0;
@@ -79,7 +79,7 @@ export class ChannelSessionManager {
       const current = this.sessions.get(channelId);
       if (current !== undefined && current.generation === generation) {
         this.sessions.delete(channelId);
-        this.staleRetryState.delete(channelId);
+        this.restartCounts.delete(channelId);
       }
       client.stop().catch(() => {});
     });
@@ -157,29 +157,26 @@ export class ChannelSessionManager {
     // Don't restart if there are no pending inputs (agent may be legitimately finishing)
     if (oldestInputId === undefined) return "ok";
 
-    // Track retry state at manager level (survives session restarts)
-    const retryState = this.staleRetryState.get(channelId);
-    if (retryState !== undefined && retryState.lastOldestInputId === oldestInputId) {
-      retryState.retryCount++;
-    } else {
-      this.staleRetryState.set(channelId, { lastOldestInputId: oldestInputId, retryCount: 1 });
-    }
+    // Track restart count at manager level (survives session restarts)
+    const restarts = this.restartCounts.get(channelId) ?? 0;
 
-    const currentRetry = this.staleRetryState.get(channelId)!;
-
-    if (currentRetry.retryCount > 1) {
-      console.error(`[agent] channel ${channelId.slice(0, 8)} stuck after retry, flushing inputs`);
+    if (restarts >= 1) {
+      // Already restarted once and still stuck — flush and give up
+      console.error(`[agent] channel ${channelId.slice(0, 8)} stuck after ${restarts} restart(s), flushing inputs`);
       this.stopSession(channelId);
-      this.staleRetryState.delete(channelId);
+      this.restartCounts.delete(channelId);
       return "flushed";
     }
 
-    // Restart session (first retry)
+    // First stale detection — restart session
     console.error(`[agent] channel ${channelId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), restarting session`);
+    this.restartCounts.set(channelId, restarts + 1);
     entry.restarting = true;
     this.stopSession(channelId);
     await entry.sessionPromise.catch(() => {});
     this.startSession(channelId);
+    // Clear restart count — the restart succeeded, give the new session a fresh start
+    this.restartCounts.delete(channelId);
     return "ok";
   }
 }
