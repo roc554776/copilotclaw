@@ -26,6 +26,7 @@ interface AgentSessionEntry {
 export interface AgentSessionManagerOptions {
   gatewayBaseUrl: string;
   staleTimeoutMs?: number;
+  fetch?: typeof globalThis.fetch;
 }
 
 export interface StartSessionOptions {
@@ -40,11 +41,13 @@ export class AgentSessionManager {
   private readonly restartCounts = new Map<string, number>(); // channelId → count (persists across session restarts)
   private readonly gatewayBaseUrl: string;
   private readonly staleTimeoutMs: number;
+  private readonly fetchFn: typeof globalThis.fetch;
   private generationCounter = 0;
 
   constructor(options: AgentSessionManagerOptions) {
     this.gatewayBaseUrl = options.gatewayBaseUrl;
     this.staleTimeoutMs = options.staleTimeoutMs ?? DEFAULT_STALE_TIMEOUT_MS;
+    this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
   getSessionStatuses(): Record<string, AgentSessionInfo> {
@@ -143,6 +146,7 @@ export class AgentSessionManager {
       gatewayBaseUrl: this.gatewayBaseUrl,
       channelId,
       abortSignal: entry.abortController.signal,
+      fetch: this.fetchFn,
       onStatusChange: (status) => {
         entry.info.status = status;
         if (status === "processing") {
@@ -164,7 +168,7 @@ export class AgentSessionManager {
           try {
             if (signal.aborted) return;
             const fetchOpts: RequestInit = { signal };
-            const res = await fetch(`${gatewayBaseUrl}/api/channels/${channelId}/inputs/peek`, fetchOpts);
+            const res = await this.fetchFn(`${gatewayBaseUrl}/api/channels/${channelId}/inputs/peek`, fetchOpts);
             if (res.status === 200) {
               return {
                 additionalContext: `[NOTIFICATION] New user input is available on the channel. Call copilotclaw_receive_input immediately to read it.`,
@@ -267,11 +271,13 @@ export class AgentSessionManager {
   private notifyChannelSessionStopped(channelId: string | undefined): void {
     if (channelId === undefined) return;
     const message = "[SYSTEM] Agent session stopped unexpectedly. A new session will start when you send a message.";
-    fetch(`${this.gatewayBaseUrl}/api/channels/${channelId}/messages`, {
+    this.fetchFn(`${this.gatewayBaseUrl}/api/channels/${channelId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sender: "agent", message }),
-    }).catch(() => {});
+    }).catch((err: unknown) => {
+      console.error(`[agent] failed to notify channel ${channelId} of session stop:`, err);
+    });
   }
 
   /** Get the sessionId bound to a channel, if any */
