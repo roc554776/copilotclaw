@@ -8,13 +8,13 @@
 
 ```
 GET  /healthz                              → 200 { status: "ok" }
-POST /api/stop                             → 200 { status: "stopping" } → stop agent → exit (localhost only)
+POST /api/stop                             → 200 { status: "stopping" } → gateway exit only (localhost only, agent NOT stopped)
 GET  /api/status                           → 200 { gateway: {status, version}, agent: AgentStatusResponse|null }
 GET  /api/channels                         → 200 Channel[]
 POST /api/channels                         → 201 Channel
 GET  /api/channels/pending                 → 200 { [channelId]: count }
 GET  /api/channels/:channelId/messages              → 200 Message[] (?limit=N, reverse-chronological)
-POST /api/channels/:channelId/messages              → 201 Message (sender: "user"|"agent", user messages go to pending queue + ensureAgent)
+POST /api/channels/:channelId/messages              → 201 Message (sender: "user"|"agent", user messages go to pending queue)
 POST /api/channels/:channelId/messages/pending      → 200 Message[] | 204 (drain all pending user messages)
 GET  /api/channels/:channelId/messages/pending/peek → 200 Message | 204 (oldest pending, non-destructive)
 POST /api/channels/:channelId/messages/pending/flush → 200 { flushed: count }
