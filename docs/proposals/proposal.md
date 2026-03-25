@@ -313,7 +313,13 @@ CLI (copilotclaw gateway start)
 サーバープロセス (detached, バックグラウンド)
   → HTTP サーバーを起動
   → SIGTERM / /api/stop で graceful shutdown
+
+CLI (copilotclaw restart)
+  → /api/stop で既存 gateway を停止
+  → サーバープロセスを detached spawn → health check で起動確認 → CLI 終了
+  → agent process は停止しない（独立プロセスの原則）
 ```
+
 
 ### API エンドポイント
 
@@ -328,7 +334,7 @@ CLI (copilotclaw gateway start)
 | `/api/channels/{{channelId}}/messages/pending/flush` | POST | channel の全未処理 user message をクリア（スタック回復時に使用） |
 | `/api/channels/{{channelId}}/messages` | GET | channel のメッセージ一覧（sender 付き、最新順、`?limit=N`） || `/api/channels/{{channelId}}/messages` | POST | channel にメッセージを投稿（agent からの送信用） || `/api/channels/{{channelId}}/replies` | POST | channel の user message に対して reply を投稿（後方互換、将来廃止予定） |
 | `/api/events` | GET | SSE エンドポイント（`?channel={{channelId}}` でリアルタイムイベント購読） |
-| `/api/status` | GET | gateway と agent のステータス一括取得 |
+| `/api/status` | GET | gateway（version 含む）と agent のステータス一括取得 |
 | `/api/stop` | POST | gateway を停止する |
 | `/` | GET | dashboard（channel タブ切り替え + チャット UI） |
 
@@ -529,6 +535,8 @@ gateway と agent のバージョン管理ルールを定める。
 - Update 機能（git pull ベースのセルフアップデート、file URL アップストリーム対応）
 - バージョン管理ポリシーの策定とドキュメント化
 - Channel アーキテクチャ再設計（ChannelProvider インターフェース導入、内蔵 chat を BuiltinChatChannel として分離）
+- Gateway restart コマンド（`copilotclaw restart` で stop → start を 1 コマンド実行）
+- `/api/status` に gateway version を追加
 - 自動テスト基盤（Vitest、mock session、mock fetch による agent テスト）
 
 **今後の課題:**

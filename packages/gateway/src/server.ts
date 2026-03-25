@@ -1,6 +1,13 @@
+import { readFileSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
+
+const thisDir = dirname(fileURLToPath(import.meta.url));
+const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string };
+const GATEWAY_VERSION = pkgJson.version;
 import type { ChannelProvider } from "./channel-provider.js";
 import { Store } from "./store.js";
 import { WsBroadcaster } from "./ws.js";
@@ -95,7 +102,7 @@ function createRequestHandler(
     if (fullPathname === "/api/status" && method === "GET") {
       const agentStatus = agentManager !== null ? await agentManager.getStatus() : null;
       json(res, 200, {
-        gateway: { status: "running" },
+        gateway: { status: "running", version: GATEWAY_VERSION },
         agent: agentStatus,
       });
       return;

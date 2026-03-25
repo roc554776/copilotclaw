@@ -230,11 +230,12 @@ describe("GET /", () => {
 });
 
 describe("GET /api/status", () => {
-  it("returns gateway status and null agent when no agent manager", async () => {
+  it("returns gateway status with version and null agent when no agent manager", async () => {
     const res = await fetch(`${baseUrl}/api/status`);
     expect(res.status).toBe(200);
-    const body = await res.json() as { gateway: { status: string }; agent: null };
+    const body = await res.json() as { gateway: { status: string; version: string }; agent: null };
     expect(body.gateway.status).toBe("running");
+    expect(body.gateway.version).toBeTruthy();
     expect(body.agent).toBeNull();
   });
 });

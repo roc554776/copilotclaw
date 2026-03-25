@@ -51,6 +51,7 @@ Open http://localhost:19741 in your browser.
 
 ```sh
 copilotclaw stop          # Stop gateway only (agent keeps running)
+copilotclaw restart       # Restart gateway (stop + start)
 copilotclaw agent stop    # Stop agent only
 ```
 
@@ -80,6 +81,7 @@ copilotclaw start --force-agent-restart
 copilotclaw setup                Initialize workspace (~/.copilotclaw/)
 copilotclaw start [options]      Start the gateway daemon
 copilotclaw stop                 Stop the gateway (agent keeps running)
+copilotclaw restart              Restart the gateway (stop + start)
 copilotclaw update               Update copilotclaw (git pull + build)
 copilotclaw agent stop           Stop the agent process only
 ```

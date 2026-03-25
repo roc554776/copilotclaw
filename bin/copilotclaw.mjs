@@ -18,6 +18,7 @@ Commands:
   setup                Initialize workspace (~/.copilotclaw/)
   start [options]      Start the gateway daemon
   stop                 Stop the gateway (agent keeps running)
+  restart              Restart the gateway (stop + start)
   update               Update copilotclaw (git pull + build)
   agent stop           Stop the agent process only
 
@@ -51,6 +52,10 @@ async function run() {
 
     case "stop":
       await import(join(gatewayDist, "stop.js"));
+      break;
+
+    case "restart":
+      await import(join(gatewayDist, "restart.js"));
       break;
 
     case "update":
