@@ -128,54 +128,6 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
         return;
       }
 
-      if (action === "inputs" && method === "POST") {
-        const body = parseJson(await readBody(req));
-        if (!isRecord(body) || typeof body["message"] !== "string") {
-          json(res, 400, { error: "missing 'message' field" });
-          return;
-        }
-        const input = store.addInput(channelId, body["message"] as string);
-        if (input === undefined) {
-          json(res, 404, { error: "channel not found" });
-          return;
-        }
-        // Ensure agent process is running
-        if (agentManager !== null) {
-          agentManager.ensureAgent().catch((err: unknown) => {
-            console.error("[gateway] ensureAgent error:", err);
-          });
-        }
-        wsBroadcaster.broadcast({ type: "new_message", channelId, data: { sender: "user", message: body["message"] } });
-        json(res, 201, input);
-        return;
-      }
-
-      if (action === "inputs/next" && method === "POST") {
-        const inputs = store.drainInputs(channelId);
-        if (inputs.length === 0) {
-          json(res, 204, null);
-          return;
-        }
-        json(res, 200, inputs);
-        return;
-      }
-
-      if (action === "replies" && method === "POST") {
-        const body = parseJson(await readBody(req));
-        if (!isRecord(body) || typeof body["inputId"] !== "string" || typeof body["message"] !== "string") {
-          json(res, 400, { error: "missing 'inputId' or 'message' field" });
-          return;
-        }
-        const updated = store.addReply(body["inputId"] as string, body["message"] as string);
-        if (updated === undefined) {
-          json(res, 404, { error: "input not found" });
-          return;
-        }
-        wsBroadcaster.broadcast({ type: "new_message", channelId, data: { sender: "agent", message: body["message"] } });
-        json(res, 200, updated);
-        return;
-      }
-
       if (action === "messages" && method === "GET") {
         const limitParam = params.get("limit");
         const limit = limitParam !== null ? parseInt(limitParam, 10) : 5;
@@ -195,24 +147,40 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
           json(res, 404, { error: "channel not found" });
           return;
         }
+        // Ensure agent process is running when user sends a message
+        if (sender === "user" && agentManager !== null) {
+          agentManager.ensureAgent().catch((err: unknown) => {
+            console.error("[gateway] ensureAgent error:", err);
+          });
+        }
         wsBroadcaster.broadcast({ type: "new_message", channelId, data: msg });
         json(res, 201, msg);
         return;
       }
 
-      if (action === "inputs/flush" && method === "POST") {
-        const count = store.flushInputs(channelId);
-        json(res, 200, { flushed: count });
+      if (action === "messages/pending" && method === "POST") {
+        const pending = store.drainPending(channelId);
+        if (pending.length === 0) {
+          json(res, 204, null);
+          return;
+        }
+        json(res, 200, pending);
         return;
       }
 
-      if (action === "inputs/peek" && method === "GET") {
-        const oldest = store.peekOldestInput(channelId);
+      if (action === "messages/pending/peek" && method === "GET") {
+        const oldest = store.peekOldestPending(channelId);
         if (oldest === undefined) {
           json(res, 204, null);
           return;
         }
         json(res, 200, oldest);
+        return;
+      }
+
+      if (action === "messages/pending/flush" && method === "POST") {
+        const count = store.flushPending(channelId);
+        json(res, 200, { flushed: count });
         return;
       }
 

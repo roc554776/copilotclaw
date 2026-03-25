@@ -9,7 +9,6 @@ let defaultChannelId: string;
 beforeAll(async () => {
   handle = await startServer({ port: 0, store: new Store(), agentManager: null });
   baseUrl = `http://localhost:${handle.port}`;
-  // Get the default channel created on startup
   const channels = await (await fetch(`${baseUrl}/api/channels`)).json() as Array<{ id: string }>;
   defaultChannelId = channels[0]!.id;
 });
@@ -46,114 +45,160 @@ describe("POST /api/channels", () => {
   });
 });
 
-describe("POST /api/channels/:channelId/inputs", () => {
-  it("creates an input in the channel", async () => {
-    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/inputs`, {
+describe("POST /api/channels/:channelId/messages (user message)", () => {
+  it("creates a user message in the channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "test input" }),
+      body: JSON.stringify({ sender: "user", message: "test message" }),
     });
     expect(res.status).toBe(201);
-    const body = await res.json() as { id: string; channelId: string; message: string };
+    const body = await res.json() as { id: string; channelId: string; sender: string; message: string };
     expect(body.id).toBeTruthy();
     expect(body.channelId).toBe(defaultChannelId);
-    expect(body.message).toBe("test input");
+    expect(body.sender).toBe("user");
+    expect(body.message).toBe("test message");
   });
 
   it("returns 400 when message is missing", async () => {
-    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/inputs`, {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ sender: "user" }),
     });
     expect(res.status).toBe(400);
   });
 
   it("returns 404 for non-existent channel", async () => {
-    const res = await fetch(`${baseUrl}/api/channels/nonexistent/inputs`, {
+    const res = await fetch(`${baseUrl}/api/channels/nonexistent/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "hello" }),
+      body: JSON.stringify({ sender: "user", message: "hello" }),
     });
     expect(res.status).toBe(404);
   });
 });
 
-describe("POST /api/channels/:channelId/inputs/next", () => {
-  it("returns 204 when queue is empty", async () => {
-    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
-    const channels = await (await fetch(`http://localhost:${freshHandle.port}/api/channels`)).json() as Array<{ id: string }>;
-    const chId = channels[0]!.id;
-    const res = await fetch(`http://localhost:${freshHandle.port}/api/channels/${chId}/inputs/next`, { method: "POST" });
-    expect(res.status).toBe(204);
-    await freshHandle.close();
-  });
-
-  it("drains all queued inputs at once", async () => {
+describe("POST /api/channels/:channelId/messages (agent message)", () => {
+  it("creates an agent message", async () => {
     const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
     const url = `http://localhost:${freshHandle.port}`;
     const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
     const chId = channels[0]!.id;
 
-    await fetch(`${url}/api/channels/${chId}/inputs`, {
+    const res = await fetch(`${url}/api/channels/${chId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "first" }),
+      body: JSON.stringify({ sender: "agent", message: "hello from agent" }),
     });
-    await fetch(`${url}/api/channels/${chId}/inputs`, {
+    expect(res.status).toBe(201);
+    const msg = await res.json() as { sender: string; message: string };
+    expect(msg.sender).toBe("agent");
+    expect(msg.message).toBe("hello from agent");
+    await freshHandle.close();
+  });
+});
+
+describe("POST /api/channels/:channelId/messages/pending", () => {
+  it("returns 204 when no pending messages", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+    const res = await fetch(`${url}/api/channels/${chId}/messages/pending`, { method: "POST" });
+    expect(res.status).toBe(204);
+    await freshHandle.close();
+  });
+
+  it("drains all pending user messages at once", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    await fetch(`${url}/api/channels/${chId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "second" }),
+      body: JSON.stringify({ sender: "user", message: "first" }),
+    });
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "second" }),
     });
 
-    const res = await fetch(`${url}/api/channels/${chId}/inputs/next`, { method: "POST" });
+    const res = await fetch(`${url}/api/channels/${chId}/messages/pending`, { method: "POST" });
     expect(res.status).toBe(200);
-    const inputs = await res.json() as Array<{ message: string }>;
-    expect(inputs).toHaveLength(2);
-    expect(inputs[0]!.message).toBe("first");
-    expect(inputs[1]!.message).toBe("second");
+    const msgs = await res.json() as Array<{ sender: string; message: string }>;
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]!.message).toBe("first");
+    expect(msgs[1]!.message).toBe("second");
 
     // Queue is now empty
-    const res2 = await fetch(`${url}/api/channels/${chId}/inputs/next`, { method: "POST" });
+    const res2 = await fetch(`${url}/api/channels/${chId}/messages/pending`, { method: "POST" });
     expect(res2.status).toBe(204);
 
     await freshHandle.close();
   });
 });
 
-describe("POST /api/channels/:channelId/replies", () => {
-  it("attaches a reply to an input", async () => {
+describe("GET /api/channels/:channelId/messages", () => {
+  it("returns empty array when no messages", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+    const res = await fetch(`${url}/api/channels/${chId}/messages`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
+    await freshHandle.close();
+  });
+
+  it("returns messages with sender info", async () => {
     const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
     const url = `http://localhost:${freshHandle.port}`;
     const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
     const chId = channels[0]!.id;
 
-    const inputRes = await fetch(`${url}/api/channels/${chId}/inputs`, {
+    await fetch(`${url}/api/channels/${chId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "question" }),
+      body: JSON.stringify({ sender: "user", message: "hello" }),
     });
-    const { id } = await inputRes.json() as { id: string };
 
-    const replyRes = await fetch(`${url}/api/channels/${chId}/replies`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ inputId: id, message: "answer" }),
-    });
-    expect(replyRes.status).toBe(200);
-    const body = await replyRes.json() as { reply: { message: string } };
-    expect(body.reply.message).toBe("answer");
-
+    const res = await fetch(`${url}/api/channels/${chId}/messages`);
+    const msgs = await res.json() as Array<{ sender: string; message: string }>;
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.sender).toBe("user");
+    expect(msgs[0]!.message).toBe("hello");
     await freshHandle.close();
   });
 
-  it("returns 400 when fields are missing", async () => {
-    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/replies`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ inputId: "id" }),
-    });
-    expect(res.status).toBe(400);
+  it("respects the limit query parameter", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    for (let i = 1; i <= 4; i++) {
+      await fetch(`${url}/api/channels/${chId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sender: "user", message: `msg-${i}` }),
+      });
+    }
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages?limit=2`);
+    const msgs = await res.json() as Array<{ message: string }>;
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]!.message).toBe("msg-4");
+    expect(msgs[1]!.message).toBe("msg-3");
+    await freshHandle.close();
+  });
+
+  it("returns 404 for non-existent channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/nonexistent/messages`);
+    expect(res.status).toBe(404);
   });
 });
 
@@ -206,106 +251,6 @@ describe("GET / (dashboard status bar)", () => {
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);
-    expect(res.status).toBe(404);
-  });
-});
-
-describe("GET /api/channels/:channelId/messages", () => {
-  it("returns empty array when no messages", async () => {
-    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
-    const url = `http://localhost:${freshHandle.port}`;
-    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
-    const chId = channels[0]!.id;
-    const res = await fetch(`${url}/api/channels/${chId}/messages`);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual([]);
-    await freshHandle.close();
-  });
-
-  it("returns user inputs as messages with sender=user", async () => {
-    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
-    const url = `http://localhost:${freshHandle.port}`;
-    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
-    const chId = channels[0]!.id;
-
-    await fetch(`${url}/api/channels/${chId}/inputs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "hello from user" }),
-    });
-
-    const res = await fetch(`${url}/api/channels/${chId}/messages`);
-    expect(res.status).toBe(200);
-    const msgs = await res.json() as Array<{ sender: string; message: string }>;
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]!.sender).toBe("user");
-    expect(msgs[0]!.message).toBe("hello from user");
-    await freshHandle.close();
-  });
-
-  it("respects the limit query parameter", async () => {
-    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
-    const url = `http://localhost:${freshHandle.port}`;
-    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
-    const chId = channels[0]!.id;
-
-    for (let i = 1; i <= 4; i++) {
-      await fetch(`${url}/api/channels/${chId}/inputs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: `msg-${i}` }),
-      });
-    }
-
-    const res = await fetch(`${url}/api/channels/${chId}/messages?limit=2`);
-    const msgs = await res.json() as Array<{ message: string }>;
-    expect(msgs).toHaveLength(2);
-    expect(msgs[0]!.message).toBe("msg-4");
-    expect(msgs[1]!.message).toBe("msg-3");
-    await freshHandle.close();
-  });
-
-  it("returns 404 for non-existent channel", async () => {
-    const res = await fetch(`${baseUrl}/api/channels/nonexistent/messages`);
-    expect(res.status).toBe(404);
-  });
-});
-
-describe("POST /api/channels/:channelId/messages", () => {
-  it("adds an agent message and returns 201", async () => {
-    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
-    const url = `http://localhost:${freshHandle.port}`;
-    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
-    const chId = channels[0]!.id;
-
-    const res = await fetch(`${url}/api/channels/${chId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sender: "agent", message: "hello from agent" }),
-    });
-    expect(res.status).toBe(201);
-    const msg = await res.json() as { id: string; sender: string; message: string; channelId: string };
-    expect(msg.sender).toBe("agent");
-    expect(msg.message).toBe("hello from agent");
-    expect(msg.channelId).toBe(chId);
-    await freshHandle.close();
-  });
-
-  it("returns 400 when message field is missing", async () => {
-    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sender: "agent" }),
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it("returns 404 for non-existent channel", async () => {
-    const res = await fetch(`${baseUrl}/api/channels/nonexistent/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sender: "agent", message: "hi" }),
-    });
     expect(res.status).toBe(404);
   });
 });

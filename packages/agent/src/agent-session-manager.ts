@@ -164,14 +164,14 @@ export class AgentSessionManager {
       tools: [sendMessage, receiveInput, listMessages],
       hooks: {
         onPostToolUse: async () => {
-          // Check if channel has pending user inputs
+          // Check if channel has pending user messages
           try {
             if (signal.aborted) return;
             const fetchOpts: RequestInit = { signal };
-            const res = await this.fetchFn(`${gatewayBaseUrl}/api/channels/${channelId}/inputs/peek`, fetchOpts);
+            const res = await this.fetchFn(`${gatewayBaseUrl}/api/channels/${channelId}/messages/pending/peek`, fetchOpts);
             if (res.status === 200) {
               return {
-                additionalContext: `[NOTIFICATION] New user input is available on the channel. Call copilotclaw_receive_input immediately to read it.`,
+                additionalContext: `[NOTIFICATION] New user message is available on the channel. Call copilotclaw_receive_input immediately to read it.`,
               };
             }
           } catch {
@@ -189,9 +189,9 @@ export class AgentSessionManager {
       session: adaptCopilotSession(session),
       initialPrompt:
         "You are a copilotclaw agent bound to a channel. " +
-        "Call copilotclaw_receive_input now to receive the first user input. " +
+        "Call copilotclaw_receive_input now to receive the first user message. " +
         "After processing input, use copilotclaw_send_message to send your response, then call copilotclaw_receive_input again to wait for the next input. " +
-        "You may receive notifications about new user input via additionalContext in tool responses — when notified, call copilotclaw_receive_input immediately. " +
+        "You may receive notifications about new user message via additionalContext in tool responses — when notified, call copilotclaw_receive_input immediately. " +
         "Never stop without calling copilotclaw_receive_input.",
       onMessage: (content) => { console.log(`[ch:${logPrefix}] ${content}`); },
       log: (message) => { console.error(`[agent:${logPrefix}] ${message}`); },

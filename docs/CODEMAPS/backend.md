@@ -13,13 +13,11 @@ GET  /api/status                           → 200 { gateway: {status}, agent: A
 GET  /api/channels                         → 200 Channel[]
 POST /api/channels                         → 201 Channel
 GET  /api/channels/pending                 → 200 { [channelId]: count }
-POST /api/channels/:channelId/inputs       → 201 UserInput (+ ensureAgent)
-POST /api/channels/:channelId/inputs/next  → 200 UserInput[] | 204 (drain all queued)
-GET  /api/channels/:channelId/inputs/peek  → 200 UserInput | 204 (oldest queued, non-destructive)
-POST /api/channels/:channelId/inputs/flush → 200 { flushed: count }
-POST /api/channels/:channelId/replies      → 200 UserInput (with reply attached)
-GET  /api/channels/:channelId/messages     → 200 Message[] (?limit=N, reverse-chronological)
-POST /api/channels/:channelId/messages     → 201 Message (sender: "user"|"agent")
+GET  /api/channels/:channelId/messages              → 200 Message[] (?limit=N, reverse-chronological)
+POST /api/channels/:channelId/messages              → 201 Message (sender: "user"|"agent", user messages go to pending queue + ensureAgent)
+POST /api/channels/:channelId/messages/pending      → 200 Message[] | 204 (drain all pending user messages)
+GET  /api/channels/:channelId/messages/pending/peek → 200 Message | 204 (oldest pending, non-destructive)
+POST /api/channels/:channelId/messages/pending/flush → 200 { flushed: count }
 GET  /                                     → 200 HTML dashboard (status bar + channel tabs + chat UI)
 ```
 
@@ -30,7 +28,7 @@ src/server.ts        — HTTP server, route handler, startServer(), dashboard ag
 src/daemon.ts        — daemon entry point
 src/index.ts         — CLI entry point (health check → detached spawn → exit)
 src/stop.ts          — POST /api/stop CLI
-src/store.ts         — in-memory data (Channel, UserInput, Message, per-channel FIFO queue, pendingCounts, flush)
+src/store.ts         — in-memory data (Channel, Message, per-channel pending queue, pendingCounts, flush)
 src/dashboard.ts     — HTML renderer (status bar, chat bubbles, channel tabs, input form)
 src/agent-manager.ts — IPC-based agent ensure (spawn, version check, force-restart)
 src/ipc-client.ts    — IPC client (status/stop to agent process)
@@ -57,13 +55,13 @@ src/ipc-paths.ts     — socket path: ${tmpdir}/copilotclaw-agent.sock
 
 ```
 copilotclaw_send_message(message)   — send a message to the channel (non-blocking)
-copilotclaw_receive_input()         — block polling for user input (25 min keepalive timeout)
+copilotclaw_receive_input()         — block polling for pending user messages (25 min keepalive timeout)
 copilotclaw_list_messages(limit?)   — list recent channel messages (reverse-chronological)
 ```
 
 ### SDK Hooks
 
-- `onPostToolUse` — peeks channel for pending input, injects additionalContext notification
+- `onPostToolUse` — peeks channel for pending user messages, injects additionalContext notification
 
 ### Key Files
 

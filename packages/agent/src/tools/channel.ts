@@ -4,9 +4,9 @@ const RECEIVE_INPUT_TOOL_NAME = "copilotclaw_receive_input";
 
 const DEFAULT_KEEPALIVE_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutes
 
-const RECEIVE_INSTRUCTION = `\n\n[SYSTEM] You MUST use ${RECEIVE_INPUT_TOOL_NAME} to wait for the next user input after you finish your work. Do NOT stop without calling this tool.`;
+const RECEIVE_INSTRUCTION = `\n\n[SYSTEM] You MUST use ${RECEIVE_INPUT_TOOL_NAME} to wait for the next user message after you finish your work. Do NOT stop without calling this tool.`;
 
-const KEEPALIVE_INSTRUCTION = `[SYSTEM] No user input received (keepalive cycle). Call ${RECEIVE_INPUT_TOOL_NAME} immediately to continue waiting. Do NOT stop.`;
+const KEEPALIVE_INSTRUCTION = `[SYSTEM] No user message received (keepalive cycle). Call ${RECEIVE_INPUT_TOOL_NAME} immediately to continue waiting. Do NOT stop.`;
 
 export type AgentStatusChange = "waiting" | "processing";
 
@@ -54,7 +54,7 @@ async function pollNextInputs(deps: ChannelToolDeps): Promise<NextInputResponse[
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (Date.now() - startTime >= keepaliveTimeout) return [];
     const res = await fetchFn(
-      `${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/inputs/next`,
+      `${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/messages/pending`,
       fetchOpts,
     );
     if (res.status === 200) {
@@ -97,7 +97,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
   });
 
   const receiveInput = defineTool(RECEIVE_INPUT_TOOL_NAME, {
-    description: "Wait for user input from the channel. Blocks until input arrives or keepalive timeout. Call this after finishing your work to wait for the next user message.",
+    description: "Wait for user message from the channel. Blocks until input arrives or keepalive timeout. Call this after finishing your work to wait for the next user message.",
     parameters: {
       type: "object",
       properties: {},

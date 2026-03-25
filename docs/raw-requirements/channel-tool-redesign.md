@@ -51,8 +51,8 @@
 
 - channel に紐づく agent session では、任意の tool を呼び出した後に SDK の `onPostToolUse` hook を発火させる
 - hook 処理:
-  - 当該 channel に未読の user input があるか確認
+  - 当該 channel に未読の user message があるか確認
   - もしあれば `additionalContext` に以下を追加:
-    - 未読の user input があること
+    - 未読の user message があること
     - input 取得 tool で即時確認すべきであること
 - channel に紐づく agent session を起動する際、「tool の response の additionalContext で新着通知がされる可能性があること」を起動時のプロンプトで伝える

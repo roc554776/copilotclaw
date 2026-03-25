@@ -80,10 +80,10 @@ describe("SSE /api/events", () => {
     // Small delay to ensure SSE client is fully registered
     await new Promise((r) => { setTimeout(r, 50); });
 
-    await fetch(`${baseUrl}/api/channels/${defaultChannelId}/inputs`, {
+    await fetch(`${baseUrl}/api/channels/${defaultChannelId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "sse-test-input" }),
+      body: JSON.stringify({ sender: "user", message: "sse-test-input" }),
     });
 
     // Wait for event to arrive
@@ -122,10 +122,10 @@ describe("SSE /api/events", () => {
     await new Promise((r) => { setTimeout(r, 50); });
 
     // Post to the other channel
-    await fetch(`${baseUrl}/api/channels/${ch2.id}/inputs`, {
+    await fetch(`${baseUrl}/api/channels/${ch2.id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: "other-channel" }),
+      body: JSON.stringify({ sender: "user", message: "other-channel" }),
     });
 
     await new Promise((r) => { setTimeout(r, 100); });

@@ -1,7 +1,7 @@
 # Agent Singleton (raw requirement)
 
 - agent はチャンネルごとに 1 プロセスではなく、1 プロセスで複数チャンネルを管理する
-  - copilot sdk でチャンネルごとにセッションを作る（1 セッションに複数チャンネルの user input を流し込むのではない）
+  - copilot sdk でチャンネルごとにセッションを作る（1 セッションに複数チャンネルの user message を流し込むのではない）
   - vscode と同様に IPC socket を使ってシングルトンで動作させる
   - 外部から停止もさせられるようにする
   - ゾンビ化しないように注意する
@@ -13,11 +13,11 @@
     - 複数チャンネル（セッション）のステータスを同時取得できる
     - 個別にも取得できる
     - prop: 起動時刻
-    - channel session status: 起動していない / 起動直後 / user input 待ち / user input 処理中
+    - channel session status: 起動していない / 起動直後 / user message 待ち / user message 処理中
   - gateway は agent プロセスを ensure するだけ
-    - gateway の責務: user input の管理、agent プロセスの管理、チャットシステムの提供
+    - gateway の責務: user message の管理、agent プロセスの管理、チャットシステムの提供
   - agent プロセスの責務
-    - user input をポーリングで確認し、待機 user input のチャンネルごとの個数を取得し、必要ならチャンネルセッションを起動
-    - チャンネルセッションが user input 処理中のまま既定の時間（デフォルト 10 分）が経過した場合は停止させる
+    - user message をポーリングで確認し、待機 user message のチャンネルごとの個数を取得し、必要ならチャンネルセッションを起動
+    - チャンネルセッションが user message 処理中のまま既定の時間（デフォルト 10 分）が経過した場合は停止させる
       - 再起動・停止を無制限に繰り返さないようにする
-      - 当該チャンネルの user input の最も古いメッセージが同じまま残り続けているなら、1 回リトライしたら、当該チャンネルの user input は全て処理済み扱いで flush する
+      - 当該チャンネルの user message の最も古いメッセージが同じまま残り続けているなら、1 回リトライしたら、当該チャンネルの user message は全て処理済み扱いで flush する

@@ -105,7 +105,7 @@ describe("copilotclaw_receive_input", () => {
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await receiveInput.handler({}, invocation) as { userMessage: string };
 
-    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/inputs/next");
+    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages/pending");
     expect(result.userMessage).toContain("hello");
     expect(result.userMessage).toContain("how are you");
     expect(result.userMessage).toContain(RECEIVE_INSTRUCTION);

@@ -223,10 +223,10 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       sendBtn.disabled = true;
       msgInput.value = "";
       try {
-        await fetch("/api/channels/" + CHANNEL_ID + "/inputs", {
+        await fetch("/api/channels/" + CHANNEL_ID + "/messages", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text }),
+          body: JSON.stringify({ sender: "user", message: text }),
         });
         // WebSocket will trigger refreshChat, but also do it immediately for responsiveness
         await refreshChat();

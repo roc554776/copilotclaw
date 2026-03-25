@@ -17,9 +17,9 @@ async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, nu
   return {};
 }
 
-async function peekOldestInput(gatewayUrl: string, channelId: string): Promise<string | undefined> {
+async function peekOldestPending(gatewayUrl: string, channelId: string): Promise<string | undefined> {
   try {
-    const res = await fetch(`${gatewayUrl}/api/channels/${channelId}/inputs/peek`);
+    const res = await fetch(`${gatewayUrl}/api/channels/${channelId}/messages/pending/peek`);
     if (res.status === 200) {
       const data = await res.json() as { id: string };
       return data.id;
@@ -28,9 +28,9 @@ async function peekOldestInput(gatewayUrl: string, channelId: string): Promise<s
   return undefined;
 }
 
-async function flushChannelInputs(gatewayUrl: string, channelId: string): Promise<void> {
+async function flushPending(gatewayUrl: string, channelId: string): Promise<void> {
   try {
-    await fetch(`${gatewayUrl}/api/channels/${channelId}/inputs/flush`, { method: "POST" });
+    await fetch(`${gatewayUrl}/api/channels/${channelId}/messages/pending/flush`, { method: "POST" });
   } catch {}
 }
 
@@ -66,7 +66,7 @@ async function main(): Promise<void> {
 
       for (const [channelId, count] of Object.entries(pending)) {
         if (count > 0 && !sessionManager.hasSessionForChannel(channelId)) {
-          log(`starting session for channel ${channelId.slice(0, 8)} (${count} pending inputs)`);
+          log(`starting session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
           sessionManager.startSession({ boundChannelId: channelId });
         }
       }
@@ -76,10 +76,10 @@ async function main(): Promise<void> {
       for (const [sessionId, info] of Object.entries(sessionStatuses)) {
         const channelId = info.boundChannelId;
         if (channelId === undefined) continue;
-        const oldestInputId = await peekOldestInput(GATEWAY_URL, channelId);
-        const action = await sessionManager.checkStaleAndHandle(sessionId, oldestInputId);
+        const oldestPendingId = await peekOldestPending(GATEWAY_URL, channelId);
+        const action = await sessionManager.checkStaleAndHandle(sessionId, oldestPendingId);
         if (action === "flushed") {
-          await flushChannelInputs(GATEWAY_URL, channelId);
+          await flushPending(GATEWAY_URL, channelId);
         }
       }
     } catch (err: unknown) {
