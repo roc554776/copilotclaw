@@ -155,7 +155,7 @@ function createRequestHandler(
         }
         // Notify all channel providers
         for (const provider of channelProviders) {
-          provider.onMessage?.(channelId, sender, body["message"] as string);
+          provider.onMessage?.(channelId, sender, msg.message);
         }
         json(res, 201, msg);
         return;
