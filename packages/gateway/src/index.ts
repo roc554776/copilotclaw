@@ -92,7 +92,7 @@ async function main(): Promise<void> {
   if (await waitForHealthy()) {
     log(`running on http://localhost:${DEFAULT_PORT}`);
     log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
-    log(`run 'pnpm --filter @copilotclaw/gateway run stop' to shut down`);
+    log(`run 'copilotclaw stop' to shut down`);
   } else {
     throw new Error("daemon failed to start");
   }
