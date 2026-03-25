@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-25 | Packages: 2 | Token estimate: ~700 -->
+<!-- Generated: 2026-03-26 | Packages: 2 | Token estimate: ~850 -->
 
 # Architecture
 
@@ -18,9 +18,22 @@
                                                             (mocked in tests)
 ```
 
-- **Gateway**: singleton daemon on port 19741, manages channels, inputs, and messages
+- **Gateway**: singleton daemon on port 19741, manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json) via /api/status
 - **Agent**: single process, manages agent sessions independently of channels
 - **Agent Session**: wraps a Copilot SDK session with its own sessionId, optionally bound to a channel
+- **ChannelProvider**: plugin interface for chat mediums (built-in chat, Discord, Telegram, etc.); providers handle medium-specific routes and receive message notifications
+- **BuiltinChatChannel**: default ChannelProvider — serves dashboard UI at "/", SSE at "/api/events", broadcasts via WsBroadcaster
+
+## CLI Entrypoint (bin/copilotclaw.mjs)
+
+```
+copilotclaw setup                → workspace init (~/.copilotclaw/)
+copilotclaw start [--force-agent-restart]  → spawn gateway daemon
+copilotclaw stop                 → stop gateway (agent keeps running)
+copilotclaw restart              → stop + start gateway
+copilotclaw update               → git pull + pnpm build
+copilotclaw agent stop           → stop agent process only
+```
 
 ## Process Model
 
@@ -28,6 +41,7 @@
 - Agent: single process, singleton via Unix domain socket (`copilotclaw-agent.sock`)
 - Gateway start → agent process ensure: IPC status + version check, spawn if absent
 - Gateway stop → gateway only (agent process NOT stopped)
+- Gateway restart → POST /api/stop, wait for port free, then start (restart.ts)
 - Agent → Gateway: HTTP API poll (pending counts, drain pending, post messages, peek/flush)
 - Agent process manages agent sessions: polls gateway for pending, starts session when found
 - User message POST does NOT trigger agent process ensure (agent polls on its own)
