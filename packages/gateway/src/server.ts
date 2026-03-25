@@ -2,6 +2,7 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import { AgentManager } from "./agent-manager.js";
 import { renderDashboard } from "./dashboard.js";
 import { Store } from "./store.js";
+import { WsBroadcaster } from "./ws.js";
 
 export const DEFAULT_PORT = 19741;
 
@@ -55,9 +56,10 @@ export interface ServerDeps {
   store?: Store;
   onStop?: () => void;
   agentManager?: AgentManager | null;
+  wsBroadcaster?: WsBroadcaster | null;
 }
 
-function createRequestHandler(store: Store, onStop: () => void, agentManager: AgentManager | null) {
+function createRequestHandler(store: Store, onStop: () => void, agentManager: AgentManager | null, wsBroadcaster: WsBroadcaster) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
     const fullPathname = url?.split("?")[0] ?? "/";
@@ -81,6 +83,12 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
         agentManager?.stopAgent().catch(() => {});
         onStop();
       });
+      return;
+    }
+
+    if (fullPathname === "/api/events" && method === "GET") {
+      const channelId = params.get("channel") ?? undefined;
+      wsBroadcaster.addClient(res, channelId);
       return;
     }
 
@@ -137,6 +145,7 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
             console.error("[gateway] ensureAgent error:", err);
           });
         }
+        wsBroadcaster.broadcast({ type: "new_message", channelId, data: { sender: "user", message: body["message"] } });
         json(res, 201, input);
         return;
       }
@@ -162,6 +171,7 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
           json(res, 404, { error: "input not found" });
           return;
         }
+        wsBroadcaster.broadcast({ type: "new_message", channelId, data: { sender: "agent", message: body["message"] } });
         json(res, 200, updated);
         return;
       }
@@ -185,6 +195,7 @@ function createRequestHandler(store: Store, onStop: () => void, agentManager: Ag
           json(res, 404, { error: "channel not found" });
           return;
         }
+        wsBroadcaster.broadcast({ type: "new_message", channelId, data: msg });
         json(res, 201, msg);
         return;
       }
@@ -257,6 +268,7 @@ export interface ServerHandle {
   server: Server;
   port: number;
   store: Store;
+  wsBroadcaster: WsBroadcaster;
   close: () => Promise<void>;
 }
 
@@ -268,7 +280,10 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const agentManager = options?.agentManager === null
     ? null
     : options?.agentManager ?? new AgentManager({ gatewayPort: port });
-  const handleRequest = createRequestHandler(store, onStop, agentManager);
+  const wsBroadcaster = options?.wsBroadcaster === null
+    ? new WsBroadcaster()
+    : options?.wsBroadcaster ?? new WsBroadcaster();
+  const handleRequest = createRequestHandler(store, onStop, agentManager, wsBroadcaster);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {
@@ -293,7 +308,9 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
         server,
         port: actualPort,
         store,
+        wsBroadcaster,
         close: async () => {
+          wsBroadcaster.closeAll();
           await agentManager?.stopAgent().catch(() => {});
           await new Promise<void>((res, rej) => {
             server.close((err) => { err ? rej(err) : res(); });

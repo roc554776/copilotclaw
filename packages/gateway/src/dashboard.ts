@@ -37,7 +37,6 @@ export function renderDashboard(channels: Channel[], inputs: UserInput[], active
 
   const agentVersion = agentStatus?.version ? escapeHtml(agentStatus.version) : "—";
   const sessionState = agentStatus?.sessionStatus ? escapeHtml(agentStatus.sessionStatus) : "—";
-  const statusBar = `<div id="status-bar">gateway: running | agent: v${agentVersion} | session: ${sessionState}</div>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -69,11 +68,34 @@ export function renderDashboard(channels: Channel[], inputs: UserInput[], active
     #input-area button:hover { background: #2ea043; }
     #input-area button:disabled { opacity: 0.5; cursor: default; }
     .empty { color: #484f58; text-align: center; margin-top: 2rem; }
-    #status-bar { padding: 0.3rem 1rem; background: #161b22; border-bottom: 1px solid #30363d; font-size: 0.75rem; color: #8b949e; }
+    #status-bar { padding: 0.3rem 1rem; background: #161b22; border-bottom: 1px solid #30363d; font-size: 0.75rem; color: #8b949e; cursor: pointer; user-select: none; }
+    #status-bar:hover { color: #c9d1d9; }
+    #status-modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 100; }
+    #status-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #161b22; border: 1px solid #30363d; border-radius: 0.75rem; padding: 1.5rem; min-width: 400px; max-width: 600px; z-index: 101; color: #c9d1d9; font-size: 0.85rem; }
+    #status-modal h3 { margin-bottom: 1rem; font-size: 1rem; color: #58a6ff; }
+    #status-modal .section { margin-bottom: 1rem; }
+    #status-modal .section-title { font-weight: 600; color: #8b949e; margin-bottom: 0.3rem; }
+    #status-modal .row { display: flex; justify-content: space-between; padding: 0.2rem 0; }
+    #status-modal .label { color: #8b949e; }
+    #status-modal .value { color: #c9d1d9; }
+    #status-modal .close-btn { position: absolute; top: 0.75rem; right: 1rem; background: none; border: none; color: #8b949e; cursor: pointer; font-size: 1.2rem; }
+    #status-modal .close-btn:hover { color: #c9d1d9; }
+    .ws-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
+    .ws-connected { background: #3fb950; }
+    .ws-disconnected { background: #f85149; }
   </style>
 </head>
 <body>
-  ${statusBar}
+  <div id="status-bar">
+    <span class="ws-indicator ws-disconnected" id="ws-dot"></span>
+    <span id="status-text">gateway: running | agent: v${agentVersion} | session: ${sessionState}</span>
+  </div>
+  <div id="status-modal-overlay" onclick="closeStatusModal()"></div>
+  <div id="status-modal" style="display:none">
+    <button class="close-btn" onclick="closeStatusModal()">&times;</button>
+    <h3>System Status</h3>
+    <div id="status-modal-content">Loading...</div>
+  </div>
   <div id="tabs">
     ${tabs}
     <button id="new-tab">+</button>
@@ -91,7 +113,105 @@ export function renderDashboard(channels: Channel[], inputs: UserInput[], active
     const msgInput = document.getElementById("msg");
     const sendBtn = document.getElementById("send");
     const newTabBtn = document.getElementById("new-tab");
+    const statusBar = document.getElementById("status-bar");
+    const statusText = document.getElementById("status-text");
+    const statusModal = document.getElementById("status-modal");
+    const statusModalOverlay = document.getElementById("status-modal-overlay");
+    const statusModalContent = document.getElementById("status-modal-content");
+    const wsDot = document.getElementById("ws-dot");
 
+    // --- Server-Sent Events ---
+    let evtSource = null;
+    function connectSSE() {
+      evtSource = new EventSource("/api/events?channel=" + encodeURIComponent(CHANNEL_ID));
+      evtSource.onopen = () => { wsDot.className = "ws-indicator ws-connected"; };
+      evtSource.onerror = () => { wsDot.className = "ws-indicator ws-disconnected"; };
+      evtSource.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data);
+          if (event.type === "new_message") {
+            refreshChat();
+          } else if (event.type === "status_update") {
+            updateStatusBar(event.data);
+          }
+        } catch {}
+      };
+    }
+    connectSSE();
+
+    // --- Status Bar ---
+    function updateStatusBar(data) {
+      if (!data) return;
+      const agentVer = data.agentVersion || "—";
+      const sessStatus = data.sessionStatus || "—";
+      statusText.textContent = "gateway: running | agent: v" + agentVer + " | session: " + sessStatus;
+    }
+
+    // Poll status periodically (lightweight, supplements WS)
+    async function refreshStatus() {
+      try {
+        const res = await fetch("/api/status");
+        if (!res.ok) return;
+        const body = await res.json();
+        const agent = body.agent;
+        let sessStatus = "no session";
+        let agentVer = "—";
+        if (agent) {
+          agentVer = agent.version || "—";
+          const sessions = Object.values(agent.sessions || {});
+          const bound = sessions.find(s => s.boundChannelId === CHANNEL_ID);
+          sessStatus = bound ? bound.status : (sessions.length > 0 ? "other channel" : "no session");
+        }
+        updateStatusBar({ agentVersion: agentVer, sessionStatus: sessStatus });
+      } catch {}
+    }
+    setInterval(refreshStatus, 5000);
+    refreshStatus();
+
+    // --- Status Modal ---
+    statusBar.addEventListener("click", openStatusModal);
+
+    async function openStatusModal() {
+      statusModal.style.display = "block";
+      statusModalOverlay.style.display = "block";
+      try {
+        const res = await fetch("/api/status");
+        if (!res.ok) { statusModalContent.textContent = "Failed to load status"; return; }
+        const body = await res.json();
+        let html = '<div class="section"><div class="section-title">Gateway</div>';
+        html += '<div class="row"><span class="label">Status</span><span class="value">' + (body.gateway?.status || "unknown") + '</span></div>';
+        html += '</div>';
+        if (body.agent) {
+          html += '<div class="section"><div class="section-title">Agent</div>';
+          html += '<div class="row"><span class="label">Version</span><span class="value">' + (body.agent.version || "—") + '</span></div>';
+          html += '<div class="row"><span class="label">Started</span><span class="value">' + (body.agent.startedAt || "—") + '</span></div>';
+          html += '</div>';
+          const sessions = body.agent.sessions || {};
+          const entries = Object.entries(sessions);
+          if (entries.length > 0) {
+            html += '<div class="section"><div class="section-title">Sessions (' + entries.length + ')</div>';
+            for (const [id, sess] of entries) {
+              html += '<div class="row"><span class="label">' + id.slice(0,8) + (sess.boundChannelId ? ' → ch:' + sess.boundChannelId.slice(0,8) : '') + '</span><span class="value">' + sess.status + '</span></div>';
+            }
+            html += '</div>';
+          } else {
+            html += '<div class="section"><div class="section-title">Sessions</div><div class="row"><span class="label">None active</span></div></div>';
+          }
+        } else {
+          html += '<div class="section"><div class="section-title">Agent</div><div class="row"><span class="label">Not running</span></div></div>';
+        }
+        statusModalContent.innerHTML = html;
+      } catch {
+        statusModalContent.textContent = "Failed to load status";
+      }
+    }
+
+    function closeStatusModal() {
+      statusModal.style.display = "none";
+      statusModalOverlay.style.display = "none";
+    }
+
+    // --- Chat ---
     async function sendMessage() {
       const text = msgInput.value.trim();
       if (!text || !CHANNEL_ID) return;
@@ -103,6 +223,7 @@ export function renderDashboard(channels: Channel[], inputs: UserInput[], active
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: text }),
         });
+        // WebSocket will trigger refreshChat, but also do it immediately for responsiveness
         await refreshChat();
       } finally {
         sendBtn.disabled = false;
@@ -139,7 +260,10 @@ export function renderDashboard(channels: Channel[], inputs: UserInput[], active
     });
     newTabBtn.addEventListener("click", createChannel);
 
-    setInterval(refreshChat, 2000);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeStatusModal();
+    });
+
     chat.scrollTop = chat.scrollHeight;
   </script>
 </body>
