@@ -235,7 +235,7 @@ describe("GET /api/status", () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { gateway: { status: string; version: string }; agent: null };
     expect(body.gateway.status).toBe("running");
-    expect(body.gateway.version).toBeTruthy();
+    expect(body.gateway.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(body.agent).toBeNull();
   });
 });

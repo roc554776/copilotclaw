@@ -4,13 +4,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
+import type { ChannelProvider } from "./channel-provider.js";
+import { Store } from "./store.js";
+import { WsBroadcaster } from "./ws.js";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string };
 const GATEWAY_VERSION = pkgJson.version;
-import type { ChannelProvider } from "./channel-provider.js";
-import { Store } from "./store.js";
-import { WsBroadcaster } from "./ws.js";
 
 export const DEFAULT_PORT = 19741;
 

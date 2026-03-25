@@ -20,6 +20,7 @@ pnpm run test        # Run tests
 ```sh
 pnpm --filter @copilotclaw/gateway run start   # Start gateway daemon
 pnpm --filter @copilotclaw/gateway run stop    # Stop gateway only (agent keeps running)
+pnpm --filter @copilotclaw/gateway run restart # Restart gateway (stop + start)
 pnpm --filter @copilotclaw/gateway run setup   # Initialize workspace (~/.copilotclaw/)
 pnpm --filter @copilotclaw/gateway run update  # Self-update via git pull + build
 ```
