@@ -29,6 +29,10 @@ observability/ — OTEL telemetry collection and visualization stack (Grafana, P
 docs/          — Requirements, proposals, and references
 ```
 
+## Serena
+
+Changes under `.serena/` can always be committed without explicit approval.
+
 ## Testing
 
 Every implementation must include automated tests. PRs with implementation only and no tests will not be merged.
