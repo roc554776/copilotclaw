@@ -166,8 +166,11 @@ CLI (copilotclaw gateway start)
 | `/healthz` | GET | ヘルスチェック |
 | `/api/channels` | GET | channel 一覧 |
 | `/api/channels` | POST | 新しい channel を作成 |
+| `/api/channels/pending` | GET | 各チャンネルの未処理 user input 数を取得 |
 | `/api/channels/{{channelId}}/inputs` | POST | channel に user input を投稿（キューに追加）。対応 agent がなければ自動起動 |
 | `/api/channels/{{channelId}}/inputs/next` | POST | channel のキューから未処理 user input を一括取得（なければ即時空応答） |
+| `/api/channels/{{channelId}}/inputs/peek` | GET | channel の最古の未処理 user input を取得（非破壊的） |
+| `/api/channels/{{channelId}}/inputs/flush` | POST | channel の全 user input をクリア（スタック回復時に使用） |
 | `/api/channels/{{channelId}}/replies` | POST | channel の user input に対して reply を投稿 |
 | `/api/stop` | POST | gateway を停止する |
 | `/` | GET | dashboard（channel タブ切り替え + チャット UI） |

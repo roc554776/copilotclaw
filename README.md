@@ -17,35 +17,27 @@ pnpm run build
 
 ## Try it out
 
-Start the gateway (HTTP server) and the agent as two separate processes, then interact via the browser.
-
 ### Start the gateway
 
 ```sh
 pnpm --filter @copilotclaw/gateway run start
 ```
 
-The dashboard opens at http://localhost:19741.
-
-### Start the agent
-
-In a separate terminal:
-
-```sh
-pnpm --filter @copilotclaw/agent run start
-```
-
-The agent begins polling the gateway for user input.
+The gateway starts as a background daemon on http://localhost:19741.
 
 ### Interact
 
-Open http://localhost:19741 in your browser, type a message, and press Send. The agent will reply.
+Open http://localhost:19741 in your browser, type a message, and press Send. The gateway automatically starts the agent process, which handles user input and replies via the Copilot SDK.
 
-### Stop the gateway
+Use the "+" button to create additional channels for parallel conversations.
+
+### Stop
 
 ```sh
 pnpm --filter @copilotclaw/gateway run stop
 ```
+
+This stops both the gateway and the agent process.
 
 ## Contributing
 
