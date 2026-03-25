@@ -260,7 +260,12 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       const doc = parser.parseFromString(html, "text/html");
       const newChat = doc.getElementById("chat");
       if (newChat) {
+        const wasProcessing = processingIndicator.classList.contains("visible");
         chat.innerHTML = newChat.innerHTML;
+        const newIndicator = document.getElementById("processing-indicator");
+        if (wasProcessing && newIndicator) {
+          newIndicator.classList.add("visible");
+        }
         chat.scrollTop = chat.scrollHeight;
       }
     }
