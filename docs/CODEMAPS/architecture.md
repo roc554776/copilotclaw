@@ -31,7 +31,7 @@ copilotclaw setup                → workspace init + auto-port selection if def
 copilotclaw start [--force-agent-restart]  → spawn gateway daemon
 copilotclaw stop                 → stop gateway (agent keeps running)
 copilotclaw restart              → stop + start gateway
-copilotclaw update               → git pull + pnpm build + npm install -g . (file:// upstream always rebuilds)
+copilotclaw update               → fetch upstream to ~/.copilotclaw/source/, pnpm build, npm pack + install -g tgz
 copilotclaw config get <key>     → show resolved config value (env var override noted)
 copilotclaw config set <key> <v> → set config value in file (env var precedence warning)
 copilotclaw doctor [--fix]       → diagnose environment (workspace, config, gateway, agent); --fix auto-repairs fixable issues
