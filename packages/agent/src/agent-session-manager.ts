@@ -308,8 +308,12 @@ export class AgentSessionManager {
             if (parts.length > 0) {
               return { additionalContext: parts.join("\n\n") };
             }
-          } catch {
-            // Ignore errors (e.g. aborted)
+          } catch (err: unknown) {
+            // AbortError is expected when session is stopped — suppress silently.
+            // Log other errors so production issues in the hook are visible.
+            if (!(err instanceof Error && err.name === "AbortError")) {
+              console.error("[agent] onPostToolUse hook error:", err);
+            }
           }
           return;
         },
