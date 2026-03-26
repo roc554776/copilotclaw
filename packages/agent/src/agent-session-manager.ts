@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
@@ -122,6 +124,19 @@ export interface AgentSessionManagerOptions {
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
   workingDirectory?: string;
+  /** Path to persist channel bindings and suspended session state across agent restarts. */
+  persistPath?: string;
+}
+
+interface SessionSnapshot {
+  sessionId: string;
+  copilotSessionId?: string | undefined;
+  boundChannelId?: string | undefined;
+  startedAt: string;
+}
+
+interface BindingSnapshot {
+  sessions: SessionSnapshot[];
 }
 
 export interface StartSessionOptions {
@@ -144,6 +159,7 @@ export class AgentSessionManager {
   private readonly zeroPremium: boolean;
   private readonly debugMockCopilotUnsafeTools: boolean;
   private readonly workingDirectory: string | undefined;
+  private readonly persistPath: string | undefined;
   private generationCounter = 0;
 
   constructor(options: AgentSessionManagerOptions) {
@@ -155,6 +171,70 @@ export class AgentSessionManager {
     this.zeroPremium = options.zeroPremium ?? false;
     this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
     this.workingDirectory = options.workingDirectory;
+    this.persistPath = options.persistPath;
+    this.loadBindings();
+  }
+
+  /** Load persisted channel bindings and restore suspended sessions. */
+  private loadBindings(): void {
+    if (this.persistPath === undefined) return;
+    try {
+      if (!existsSync(this.persistPath)) return;
+      const raw = readFileSync(this.persistPath, "utf-8");
+      const snapshot = JSON.parse(raw) as BindingSnapshot;
+      for (const s of snapshot.sessions) {
+        const entry: AgentSessionEntry = {
+          sessionId: s.sessionId,
+          copilotSessionId: s.copilotSessionId,
+          info: {
+            status: "suspended",
+            startedAt: s.startedAt,
+            boundChannelId: s.boundChannelId,
+          },
+          client: new CopilotClient(), // placeholder — will be replaced on revive
+          abortController: new AbortController(),
+          sessionPromise: Promise.resolve(),
+          generation: ++this.generationCounter,
+        };
+        this.sessions.set(s.sessionId, entry);
+        if (s.boundChannelId !== undefined) {
+          this.channelBindings.set(s.boundChannelId, s.sessionId);
+        }
+      }
+      if (snapshot.sessions.length > 0) {
+        console.error(`[agent] restored ${snapshot.sessions.length} suspended session binding(s) from disk`);
+      }
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.error(`[agent] WARNING: could not load bindings from ${this.persistPath}: ${String(err)}`);
+      }
+    }
+  }
+
+  /** Persist channel bindings and suspended session state to disk. */
+  private saveBindings(): void {
+    if (this.persistPath === undefined) return;
+    const sessions: SessionSnapshot[] = [];
+    for (const [, entry] of this.sessions) {
+      if (entry.info.status === "suspended" && entry.info.boundChannelId !== undefined) {
+        sessions.push({
+          sessionId: entry.sessionId,
+          copilotSessionId: entry.copilotSessionId,
+          boundChannelId: entry.info.boundChannelId,
+          startedAt: entry.info.startedAt,
+        });
+      }
+    }
+    const snapshot: BindingSnapshot = { sessions };
+    try {
+      mkdirSync(dirname(this.persistPath), { recursive: true });
+      const tmp = `${this.persistPath}.tmp`;
+      writeFileSync(tmp, JSON.stringify(snapshot, null, 2), "utf-8");
+      renameSync(tmp, this.persistPath);
+    } catch (err: unknown) {
+      console.error(`[agent] WARNING: could not save bindings to ${this.persistPath}: ${String(err)}`);
+    }
   }
 
   /** Get the first active CopilotClient (for server-level RPCs like quota/models). */
@@ -616,6 +696,7 @@ export class AgentSessionManager {
     entry.info.physicalSession = undefined;
     entry.info.subagentSessions = undefined;
     // copilotSessionId is preserved for resumeSession on revival
+    this.saveBindings();
   }
 
   /** Revive a suspended abstract session by launching a new physical session. */
@@ -665,6 +746,7 @@ export class AgentSessionManager {
       this.channelBindings.delete(boundChannelId);
     }
     this.sessions.delete(sessionId);
+    this.saveBindings();
   }
 
   stopSessionForChannel(channelId: string): void {

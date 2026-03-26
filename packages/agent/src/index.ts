@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { listenIpc } from "./ipc-server.js";
@@ -68,7 +69,10 @@ async function main(): Promise<void> {
     debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
   };
   if (config.model !== null) managerOpts.model = config.model;
-  if (config.workspaceRoot !== null) managerOpts.workingDirectory = config.workspaceRoot;
+  if (config.workspaceRoot !== null) {
+    managerOpts.workingDirectory = config.workspaceRoot;
+    managerOpts.persistPath = join(config.workspaceRoot, "data", "agent-bindings.json");
+  }
   const sessionManager = new AgentSessionManager(managerOpts);
 
   const result = await listenIpc(

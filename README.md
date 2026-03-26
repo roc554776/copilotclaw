@@ -50,7 +50,7 @@ Open the gateway URL shown at startup in your browser.
 - The agent periodically reinforces its critical operating instructions to maintain stability during long sessions
 - Custom agent architecture: channel-operator handles user interaction, worker handles delegated subtasks
 - Subagent completion notifications are delivered to the parent agent in real time
-- Sessions survive physical disconnections — the agent automatically resumes with conversation history intact
+- Sessions survive physical disconnections and agent restarts — the agent automatically resumes with conversation history intact
 
 ### Stop
 
