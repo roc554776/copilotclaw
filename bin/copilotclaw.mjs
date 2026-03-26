@@ -22,6 +22,7 @@ Commands:
   update               Update copilotclaw (git pull + build)
   config get <key>     Show config value
   config set <key> <v> Set config value
+  doctor [--fix]       Diagnose environment (fix issues with --fix)
   agent stop           Stop the agent process only
 
 Start options:
@@ -68,6 +69,10 @@ async function run() {
 
     case "config":
       await import(join(gatewayDist, "config-cli.js"));
+      break;
+
+    case "doctor":
+      await import(join(gatewayDist, "doctor.js"));
       break;
 
     case "agent":

@@ -23,6 +23,10 @@
 
 - バージョン管理のポリシーを決めてドキュメント化する
 - 特に gateway と agent のバージョン管理は更新ルールをしっかり入れておかないと管理不足になる
+<!-- 2026-03-26 -->
+- 各パッケージ（root, gateway, agent）のバージョンは一律に揃える
+- gateway と agent の compatibility が壊れる場合には、`MIN_AGENT_VERSION` を引き上げる
+  - compatibility が壊れていない場合には最低要求バージョンを引き上げてはいけない（無駄なコストになる）
 
 ## 永続化
 
@@ -64,6 +68,23 @@
 - 仕様検討の参考に openclaw の codebase を参照すべき
   - openclaw はあくまで参考であって、完全に同じにする必要はない
   - openclaw のよい点を取り入れる
+
+## Doctor コマンド
+
+<!-- 2026-03-26 -->
+- openclaw のような doctor コマンドを追加したい
+  - 環境の診断・修復を行うコマンド
+  - ただし interactive ではない（後述の CLI 設計方針を参照）
+  - 参考: openclaw は `openclaw doctor --fix` で config のマイグレーション等を行う
+
+## CLI 設計方針
+
+<!-- 2026-03-26 -->
+- copilotclaw は基本的に interactive コマンドを採用しない
+  - 理由: human には分かりやすいが、agent には難しいため
+  - human は agent にやり方を聞くので、interactive で分かりやすい必要性がほぼない
+- CLI 出力は全て no color。raw mode も使わない
+  - 理由: agent には雑音になってしまうため
 
 ## Channel アーキテクチャの再設計
 
