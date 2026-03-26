@@ -46,11 +46,7 @@ Open the gateway URL shown at startup in your browser.
 - Use the "+" button to create additional channels for parallel conversations
 - Click the status bar for detailed status (gateway, agent, Copilot sessions, premium requests, models)
 - A typing indicator shows when the agent is processing
-- Agent responses appear in the chat automatically — even when the agent responds with text instead of using the send message tool
-- The agent periodically reinforces its critical operating instructions to maintain stability during long sessions
-- Custom agent architecture: channel-operator handles user interaction, worker handles delegated subtasks
-- Subagent completion notifications are delivered to the parent agent in real time
-- Sessions survive physical disconnections and agent restarts — the agent automatically resumes with conversation history intact
+- Sessions survive disconnections and agent restarts — conversations resume automatically
 
 ### Stop
 
@@ -135,6 +131,7 @@ All persistent data is stored under `~/.copilotclaw/`:
 |:---|:---|
 | `config.json` | Configuration |
 | `data/store.json` | Channels and message history |
+| `data/agent-bindings.json` | Agent session bindings (survives agent restarts) |
 
 ## Contributing
 
