@@ -6,6 +6,68 @@ OpenClaw における agent workspace、自己認識（SOUL.md）、記憶（Mem
 
 ---
 
+## System Prompt（ハードコード部分）
+
+OpenClaw のシステムプロンプトは `src/agents/system-prompt.ts` の `buildAgentSystemPrompt()` で構築される。ユーザーが変更できないハードコード部分と、workspace files として注入されるユーザー編集可能部分の2層構造。
+
+### ハードコードされるセクション一覧
+
+`buildAgentSystemPrompt()` が生成する固定セクション（ユーザー変更不可）:
+
+| セクション | 内容 |
+|---|---|
+| Identity | `"You are a personal assistant running inside OpenClaw."` |
+| Tooling | 利用可能ツール一覧（read, write, edit, exec, grep, find, ls 等）+ 各ツールの説明 |
+| Tool Call Style | 低リスクなら無言で実行、複雑/センシティブなら説明。plain human language で |
+| Safety | 自己保存・自己複製・権限拡大の禁止、人間の監督を優先（Anthropic constitution 参照） |
+| CLI Quick Reference | `openclaw gateway status/start/stop/restart` 等のコマンド |
+| Skills | `<available_skills>` からスキルを選んで SKILL.md を読む手順（mandatory） |
+| Memory Recall | `memory_search` / `memory_get` ツールが有効な場合のみ追加 |
+| Self-Update | `gateway` ツールが有効な場合のみ、config/update の操作方法 |
+| Workspace | `"Your working directory is: {{workspaceDir}}"` + ファイル操作方針 |
+| Docs | OpenClaw ドキュメントの参照先 |
+| Workspace Files (injected) | `"These user-editable files are loaded by OpenClaw and included below in Project Context."` |
+| Reply Tags | `[[reply_to_current]]` 等のリプライタグ仕様 |
+| Messaging | メッセージ送信のルーティング方法 |
+| Voice | TTS ヒント（有効な場合のみ） |
+| Silent Replies | `HEARTBEAT_OK` 応答のルール |
+| Heartbeats | Heartbeat poll への応答方法 |
+| Sandbox | サンドボックス環境の制約（有効な場合のみ） |
+| Reasoning | `<think>...</think>` 推論フォーマット（有効な場合のみ） |
+| Runtime | agent ID, host, OS, model, channel 等のランタイム情報 |
+
+**PromptMode（subagent 制御）:**
+- `"full"` — 全セクション（メイン agent 用）
+- `"minimal"` — Tooling, Workspace, Runtime のみ（subagent 用）
+- `"none"` — Identity 1 行のみ
+
+### Project Context セクション（ユーザー編集可能部分の注入）
+
+workspace bootstrap files が `# Project Context` セクションとしてシステムプロンプトの末尾に注入される:
+
+```
+# Project Context
+
+The following project context files have been loaded:
+If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies;
+follow its guidance unless higher-priority instructions override it.
+
+## AGENTS.md
+（ファイル内容）
+
+## SOUL.md
+（ファイル内容）
+
+## USER.md
+（ファイル内容）
+```
+
+SOUL.md の存在を検出（line 608-612）し、存在する場合のみ「embody its persona and tone」指示を追加。「higher-priority instructions override it」= ハードコードされたシステムプロンプト本体が優先。
+
+Source: `src/agents/system-prompt.ts` lines 176-703
+
+---
+
 ## Workspace Bootstrap Files
 
 setup 時に `~/.openclaw/workspace/` に以下のファイルが生成される。これらは全て **ユーザー向け** のファイルであり、agent のシステムプロンプトではない。agent はセッション開始時にこれらを読み取り、指示に従う。
