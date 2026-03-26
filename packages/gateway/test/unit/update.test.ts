@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { parseTgzFilename } from "../../src/update.js";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { rewriteWorkspaceDeps } from "../../src/update.js";
 import { getUpdateDir } from "../../src/workspace.js";
 
 describe("getUpdateDir", () => {
@@ -26,29 +29,55 @@ describe("getUpdateDir", () => {
   });
 });
 
-describe("parseTgzFilename", () => {
-  it("extracts tgz filename from single-line output", () => {
-    expect(parseTgzFilename("copilotclaw-0.12.0.tgz")).toBe("copilotclaw-0.12.0.tgz");
+describe("rewriteWorkspaceDeps", () => {
+  const testDir = join(tmpdir(), `copilotclaw-update-test-${Date.now()}`);
+  const cliDir = join(testDir, "packages", "cli");
+  const sourceRoot = testDir;
+
+  beforeEach(() => {
+    mkdirSync(cliDir, { recursive: true });
   });
 
-  it("extracts tgz filename from multi-line output", () => {
-    const output = "npm notice\nnpm notice package: copilotclaw@0.12.0\ncopilotclaw-0.12.0.tgz";
-    expect(parseTgzFilename(output)).toBe("copilotclaw-0.12.0.tgz");
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
   });
 
-  it("handles trailing newline", () => {
-    expect(parseTgzFilename("copilotclaw-0.12.0.tgz\n")).toBe("copilotclaw-0.12.0.tgz");
+  it("rewrites workspace:* to file: paths", () => {
+    writeFileSync(join(cliDir, "package.json"), JSON.stringify({
+      name: "copilotclaw",
+      dependencies: {
+        "@copilotclaw/gateway": "workspace:*",
+        "@copilotclaw/agent": "workspace:*",
+      },
+    }));
+
+    rewriteWorkspaceDeps(cliDir, sourceRoot);
+
+    const result = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf-8")) as { dependencies: Record<string, string> };
+    expect(result.dependencies["@copilotclaw/gateway"]).toBe(`file:${join(sourceRoot, "packages", "gateway")}`);
+    expect(result.dependencies["@copilotclaw/agent"]).toBe(`file:${join(sourceRoot, "packages", "agent")}`);
   });
 
-  it("handles output with leading whitespace", () => {
-    expect(parseTgzFilename("  copilotclaw-0.12.0.tgz  ")).toBe("copilotclaw-0.12.0.tgz");
+  it("leaves non-workspace dependencies untouched", () => {
+    writeFileSync(join(cliDir, "package.json"), JSON.stringify({
+      name: "copilotclaw",
+      dependencies: {
+        "@copilotclaw/gateway": "workspace:*",
+        "some-other-package": "^1.0.0",
+      },
+    }));
+
+    rewriteWorkspaceDeps(cliDir, sourceRoot);
+
+    const result = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf-8")) as { dependencies: Record<string, string> };
+    expect(result.dependencies["some-other-package"]).toBe("^1.0.0");
   });
 
-  it("returns undefined for empty output", () => {
-    expect(parseTgzFilename("")).toBeUndefined();
-  });
+  it("does not throw when dependencies is missing", () => {
+    writeFileSync(join(cliDir, "package.json"), JSON.stringify({
+      name: "copilotclaw",
+    }));
 
-  it("returns undefined for output with no tgz file", () => {
-    expect(parseTgzFilename("npm notice\nsome other output")).toBeUndefined();
+    expect(() => rewriteWorkspaceDeps(cliDir, sourceRoot)).not.toThrow();
   });
 });

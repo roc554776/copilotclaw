@@ -16,11 +16,6 @@ function log(message: string): void {
   console.error(`[update] ${message}`);
 }
 
-/** Extract .tgz filename from npm pack output. */
-export function parseTgzFilename(packOutput: string): string | undefined {
-  return packOutput.split("\n").filter((l) => l.trim().endsWith(".tgz")).pop()?.trim() || undefined;
-}
-
 function run(args: string[], cwd: string): string {
   const [cmd, ...rest] = args;
   if (cmd === undefined) throw new Error("run: empty command");
@@ -36,7 +31,7 @@ function run(args: string[], cwd: string): string {
  * Rewrite workspace:* dependencies to file: paths in the CLI package.json
  * so that `npm install -g` can resolve them locally.
  */
-function rewriteWorkspaceDeps(cliDir: string, sourceRoot: string): void {
+export function rewriteWorkspaceDeps(cliDir: string, sourceRoot: string): void {
   const pkgPath = join(cliDir, "package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as Record<string, unknown>;
   const deps = pkg["dependencies"] as Record<string, string> | undefined;
@@ -112,9 +107,16 @@ async function main(): Promise<void> {
 
   // Rewrite workspace:* to file: paths for npm compatibility, then install globally
   const cliDir = join(updateDir, "packages", "cli");
+  const cliPkgPath = join(cliDir, "package.json");
+  const originalPkgJson = readFileSync(cliPkgPath, "utf-8");
   log("installing...");
-  rewriteWorkspaceDeps(cliDir, updateDir);
-  run(["npm", "install", "-g", "."], cliDir);
+  try {
+    rewriteWorkspaceDeps(cliDir, updateDir);
+    run(["npm", "install", "-g", "."], cliDir);
+  } finally {
+    // Restore original package.json to keep working tree clean
+    writeFileSync(cliPkgPath, originalPkgJson, "utf-8");
+  }
 
   log("update complete — restart gateway to apply");
 }
