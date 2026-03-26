@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-26 | Files scanned: 30 | Token estimate: ~1500 -->
+<!-- Generated: 2026-03-26 | Files scanned: 31 | Token estimate: ~1550 -->
 
 # Backend
 
@@ -41,7 +41,8 @@ src/channel-provider.ts    — ChannelProvider interface (plugin contract for ch
 src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, WS broadcast); passes compatibility info to dashboard
 src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening)
 src/ws.ts                  — WsBroadcaster: SSE event broadcasting to connected clients
-src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods
+src/doctor.ts              — `copilotclaw doctor` CLI: checkWorkspace, checkConfig, checkGateway, checkAgent diagnostics; runDoctor orchestrates checks and optional --fix (fixWorkspace, fixConfig, fixStaleSocket); exits 1 on failures
+src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods; semverSatisfies exported (used by doctor)
 src/ipc-client.ts          — IPC client (status/stop to agent process); AgentStatusResponse includes bootId field
 src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.sock or copilotclaw-agent-{{profile}}.sock in tmpdir)
 ```
@@ -109,10 +110,10 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (165 total: 157 vitest + 8 Playwright)
+### Test Suites (168 total: 160 vitest + 8 Playwright)
 
 ```
-Gateway vitest (111 tests) — unit + E2E tests with mock agent (includes config, config-cli, ipc-paths, setup, workspace tests)
-Agent vitest (46 tests)    — unit + E2E tests with mock Copilot SDK session
+Gateway vitest (128 tests) — unit + E2E tests with mock agent (includes config, config-cli, doctor, ipc-paths, setup, workspace tests)
+Agent vitest (32 tests)    — unit tests with mock Copilot SDK session
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```

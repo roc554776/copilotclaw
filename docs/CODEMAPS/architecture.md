@@ -34,6 +34,7 @@ copilotclaw restart              → stop + start gateway
 copilotclaw update               → git pull + pnpm build
 copilotclaw config get <key>     → show resolved config value (env var override noted)
 copilotclaw config set <key> <v> → set config value in file (env var precedence warning)
+copilotclaw doctor [--fix]       → diagnose environment (workspace, config, gateway, agent); --fix auto-repairs fixable issues
 copilotclaw agent stop           → stop agent process only
 ```
 
@@ -81,5 +82,5 @@ Environment variables:
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (157 tests: 46 agent + 111 gateway), Playwright for browser E2E (8 tests); vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (160 tests: 32 agent + 128 gateway), Playwright for browser E2E (8 tests); vitest excludes test/browser/ directory
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
