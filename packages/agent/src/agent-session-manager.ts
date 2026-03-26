@@ -313,7 +313,7 @@ export class AgentSessionManager {
           return;
         },
       },
-      // Debug mock copilot unsafe tools mode: restrict to safe built-in tools + copilotclaw_* + debug debug mock copilot unsafe tools
+      // Debug mock copilot unsafe tools mode: restrict to safe built-in tools + copilotclaw_* + debug mock tools
       ...(this.debugMockCopilotUnsafeTools ? {
         availableTools: [
           "copilotclaw_send_message",
