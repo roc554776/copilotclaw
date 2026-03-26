@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.17.0 | Token estimate: ~1600 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.18.0 | Token estimate: ~1600 -->
 
 # Architecture
 
@@ -83,7 +83,7 @@ Environment variables:
 - Parent agent can distinguish subagent completions from pending user messages and react accordingly
 - SubagentCompletionInfo type exported from tools/channel.ts
 
-## Session Lifecycle (v0.17.0: Abstract/Physical Separation)
+## Session Lifecycle (v0.18.0: Persistent Channel Bindings)
 
 - **Abstract vs. Physical Sessions**: Abstract session (sessionId, bound to channel) is separate from physical session (Copilot SDK session). When physical session ends unexpectedly, abstract session transitions to "suspended" (not deleted), preserving channel binding.
 - **Session Status**: "starting" → "waiting" → "processing" → "suspended" or "stopped"
@@ -93,6 +93,7 @@ Environment variables:
 - **Suspension via checkSessionMaxAge**: if "waiting" session exceeds 2 days (default, configurable), suspend and save copilotSessionId for resume
 - **Revival via reviveSession**: suspended sessions auto-revive with new physical session when triggered (e.g., user message arrives for the channel); same abstract sessionId reused, copilotSessionId preserved for resumeSession
 - **Auto-revival in polling**: startSession auto-detects suspended sessions for a channel via hasActiveSessionForChannel; if suspended, revives with saved copilotSessionId
+- **Binding Persistence (v0.18.0)**: AgentSessionManager optionally accepts `persistPath` option; suspended sessions with channel bindings persisted to disk via `agent-bindings.json` using atomic write (tmp → rename); `loadBindings()` called in constructor restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries
 - **savedCopilotSessionIds map**: no longer the primary resume mechanism — copilotSessionId lives on the suspended entry; map kept for potential compatibility
 - **Channel notifications**: session stopped (unexpected end) and session timed out (stale processing) post system messages to bound channel
 

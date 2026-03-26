@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 32 | Version: 0.17.0 | Token estimate: ~2300 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 32 | Version: 0.18.0 | Token estimate: ~2300 -->
 
 # Backend
 
@@ -89,11 +89,11 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 ← [ ...message objects ] | {"error":"session not found"} | {"error":"missing sessionId"}
 ```
 
-**Status values (v0.17.0)**:
+**Status values (v0.18.0)**:
 - "starting" — session initializing, copilotClient not yet bound
 - "waiting" — idle, awaiting user input (keepalive tool polling gateway)
 - "processing" — handling tool calls or LLM requests
-- "suspended" — physical session ended, abstract session preserved for later revival (copilotSessionId retained)
+- "suspended" — physical session ended, abstract session preserved for later revival (copilotSessionId retained); persisted to disk if persistPath configured
 - "stopped" — session fully removed via explicit stopSession()
 
 ### Copilot SDK Tools (tools/channel.ts)
@@ -118,8 +118,8 @@ Tool availability:
 ### Key Files
 
 ```
-src/index.ts                    — singleton entry, fetches config from gateway /api/status, polls gateway for pending inputs; uses hasActiveSessionForChannel to avoid starting duplicate sessions; startSession auto-revives suspended sessions (with saved copilotSessionId) or creates new; per-cycle: max-age check (checkSessionMaxAge suspends on expiry), then stale detection (checkStaleAndHandle suspends after 10m+ processing with pending, flushes inputs)
-src/agent-session-manager.ts    — per-session lifecycle with abstract/physical session separation (v0.17.0); channel binding preserved across suspensions; AgentSessionStatus: "starting"|"waiting"|"processing"|"suspended"|"stopped"; startSession auto-detects suspended sessions via hasActiveSessionForChannel and revives via reviveSession; suspendSession transitions to "suspended", clears physicalSession but preserves copilotSessionId for later revival; reviveSession launches new physical session, reusing abstract sessionId and copilotSessionId; stopSession fully removes abstract session and channel binding (explicit termination); checkSessionMaxAge suspends when "waiting" exceeds 2-day max (or configurable maxSessionAgeMs); checkStaleAndHandle suspends when "processing" >10min with pending inputs (staleTimeoutMs), posts timeout notification, returns "flushed" to trigger input flush; PhysicalSessionSummary (totalInputTokens, totalOutputTokens, latestQuotaSnapshots); getQuota/getModels methods proxy Copilot SDK account API; getSessionMessages retrieves CopilotSession conversation history; resolveModel handles zeroPremium override; debugMockCopilotUnsafeTools restricts availableTools; custom agents (v0.16.0+): CHANNEL_OPERATOR_CONFIG (infer:false, deadlock prevention) and WORKER_CONFIG (infer:true); onPostToolUse hook gates on copilotclaw_receive_input, injects: (1) pending message notifications, (2) subagent completion notifications [SUBAGENT COMPLETED], (3) periodic system prompt reminders on context usage 10% increments; channel notifications (stopped, timed-out) via postChannelMessage
+src/index.ts                    — singleton entry, fetches config from gateway /api/status, polls gateway for pending inputs; uses hasActiveSessionForChannel to avoid starting duplicate sessions; startSession auto-revives suspended sessions (with saved copilotSessionId) or creates new; per-cycle: max-age check (checkSessionMaxAge suspends on expiry), then stale detection (checkStaleAndHandle suspends after 10m+ processing with pending, flushes inputs); derives persistPath from workspaceRoot: {{workspaceRoot}}/data/agent-bindings.json
+src/agent-session-manager.ts    — per-session lifecycle with abstract/physical session separation (v0.18.0); channel binding persistence: AgentSessionManagerOptions accepts persistPath; loadBindings() in constructor (line 175) restores suspended sessions from agent-bindings.json, recreating entries in suspended state with preserved copilotSessionId and boundChannelId; saveBindings() called on suspendSession (line 699) and stopSession (line 749) to persist/update agent-bindings.json via atomic write (tmp → rename); SessionSnapshot and BindingSnapshot types define persist format; AgentSessionStatus: "starting"|"waiting"|"processing"|"suspended"|"stopped"; startSession auto-detects suspended sessions via hasActiveSessionForChannel and revives via reviveSession; suspendSession transitions to "suspended", clears physicalSession but preserves copilotSessionId for later revival; reviveSession launches new physical session, reusing abstract sessionId and copilotSessionId; stopSession fully removes abstract session and channel binding (explicit termination); checkSessionMaxAge suspends when "waiting" exceeds 2-day max (or configurable maxSessionAgeMs); checkStaleAndHandle suspends when "processing" >10min with pending inputs (staleTimeoutMs), posts timeout notification, returns "flushed" to trigger input flush; PhysicalSessionSummary (totalInputTokens, totalOutputTokens, latestQuotaSnapshots); getQuota/getModels methods proxy Copilot SDK account API; getSessionMessages retrieves CopilotSession conversation history; resolveModel handles zeroPremium override; debugMockCopilotUnsafeTools restricts availableTools; custom agents (v0.16.0+): CHANNEL_OPERATOR_CONFIG (infer:false, deadlock prevention) and WORKER_CONFIG (infer:true); onPostToolUse hook gates on copilotclaw_receive_input, injects: (1) pending message notifications, (2) subagent completion notifications [SUBAGENT COMPLETED], (3) periodic system prompt reminders on context usage 10% increments; channel notifications (stopped, timed-out) via postChannelMessage
 src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop/quota/models/session_messages)
 src/ipc-paths.ts                — socket path generation (profile-aware)
 src/session-loop.ts             — session idle loop (subscribe/send/disconnect); supports both createSession and resumeSession
