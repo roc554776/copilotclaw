@@ -19,12 +19,13 @@
 
 - channel に紐づく agent session については、`copilotclaw_receive_input` tool に関する情報が最優先
 - これがないとシステムが壊れる
-- SOUL.md などで、`copilotclaw_receive_input` tool のことを忘れてしまわないように、最初と最後に `copilotclaw_receive_input` tool のことを念入りに書いておく
+- SOUL.md 等の workspace ファイルを agent が読み込んだ結果、大量のコンテキストが注入され `copilotclaw_receive_input` の義務が埋もれて忘れられる可能性がある
+- そのため、SOUL.md 等が読み込まれた後に、システム的に `copilotclaw_receive_input` のことをリマインドする対策が必要
 
 ### 多層防御の設計
 
 - **システムプロンプト**（custom agent の prompt フィールド）→ `copilotclaw_receive_input` の義務を最初と最後に記載（既に実装済み: CHANNEL_OPERATOR_PROMPT）。ユーザーが変更できない、最も信頼性の高い層
-- **AGENTS.md**（デフォルトテンプレート）→ セッション開始手順の一部として `copilotclaw_receive_input` の義務を冒頭と末尾に記載。ユーザーが削除しても、システムプロンプト側の記載がフォールバックになる
+- **workspace ファイル読み込み後のリマインド** → agent が SOUL.md / AGENTS.md 等を読み込んだ直後に、onPostToolUse hook 等でシステム的に `copilotclaw_receive_input` の義務をリマインドする（既に実装済み: session.usage_info / session.compaction_complete トリガーの `<system>` タグ方式）
 
 ## Memory
 

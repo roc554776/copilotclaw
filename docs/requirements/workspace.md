@@ -8,9 +8,9 @@ OpenClaw の workspace bootstrap files に相当するファイルを workspace 
 
 - SOUL.md（人格・トーン・価値観）、AGENTS.md（操作マニュアル）、USER.md（ユーザー情報）等をデフォルトテンプレートから生成する
 - これらは **ユーザーが自由にカスタマイズするファイル** であり、copilotclaw のシステムプロンプトではない
-- `copilotclaw_receive_input` の義務は多層防御で記載する:
+- SOUL.md 等の workspace ファイルを読み込むと大量のコンテキストが注入され、`copilotclaw_receive_input` の義務が埋もれるリスクがある。多層防御で対策する:
   - **システムプロンプト**（custom agent の prompt フィールド）に冒頭と末尾で記載（最も信頼性が高い層、ユーザーが変更不可）
-  - **AGENTS.md デフォルトテンプレート**にも冒頭と末尾で記載（ユーザーが削除してもシステムプロンプト側がフォールバック）
+  - **workspace ファイル読み込み後のリマインド** — onPostToolUse hook 等でシステム的に `copilotclaw_receive_input` の義務をリマインドする（既に実装済み: `<system>` タグ方式）
 - agent はビルトインツール（ファイル読み書き）でこれらを読み書きする
 - system prompt に「AGENTS.md を最初に読め」という指示を含める
 
