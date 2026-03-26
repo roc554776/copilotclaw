@@ -4,7 +4,7 @@ import { Store } from "./store.js";
 import { ensureWorkspace, getStoreFilePath } from "./workspace.js";
 
 const AGENT_MONITOR_INTERVAL_MS = 30_000; // 30 seconds
-const AGENT_MONITOR_MAX_RETRIES = 3;
+const AGENT_MONITOR_ERROR_THRESHOLD = 3;
 
 async function main(): Promise<void> {
   const forceAgentRestart = process.env["COPILOTCLAW_FORCE_AGENT_RESTART"] === "1";
@@ -33,10 +33,10 @@ async function main(): Promise<void> {
       consecutiveFailures = 0;
     } catch (err: unknown) {
       consecutiveFailures++;
-      if (consecutiveFailures >= AGENT_MONITOR_MAX_RETRIES) {
+      if (consecutiveFailures >= AGENT_MONITOR_ERROR_THRESHOLD) {
         console.error(`[gateway] agent process ERROR: health check failed after ${consecutiveFailures} attempts:`, err);
       } else {
-        console.error(`[gateway] agent ensure failed (attempt ${consecutiveFailures}/${AGENT_MONITOR_MAX_RETRIES}):`, err);
+        console.error(`[gateway] agent ensure failed (attempt ${consecutiveFailures}/${AGENT_MONITOR_ERROR_THRESHOLD}):`, err);
       }
     }
   }, AGENT_MONITOR_INTERVAL_MS);

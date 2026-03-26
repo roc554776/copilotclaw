@@ -295,11 +295,13 @@ export class AgentSessionManager {
     });
   }
 
-  /** Check if session has exceeded max age and should be stopped */
+  /** Check if session has exceeded max age and should be stopped.
+   * Only applies to sessions in "waiting" state with a bound channel. */
   checkSessionMaxAge(sessionId: string): boolean {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return false;
     if (entry.info.status !== "waiting") return false;
+    if (entry.info.boundChannelId === undefined) return false;
 
     const age = Date.now() - new Date(entry.info.startedAt).getTime();
     if (age < this.maxSessionAgeMs) return false;
