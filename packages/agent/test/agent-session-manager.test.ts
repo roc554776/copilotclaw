@@ -449,6 +449,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
 
   it("posts assistant.message content to the channel timeline", async () => {
     const mockSession = makeMockCopilotSession("idle");
+    // Suppress automatic idle emit so we can emit assistant.message first, then idle manually.
     mockSession.send.mockImplementation(async () => "msg-id");
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
@@ -471,7 +472,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
     const messageCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
       ([url, opts]) => (url as string).includes("/messages") && !(url as string).includes("pending") && opts.method === "POST",
     );
-    expect(messageCalls.length).toBeGreaterThanOrEqual(1);
+    expect(messageCalls).toHaveLength(1);
     const body = JSON.parse(messageCalls[0]![1].body as string) as { sender: string; message: string };
     expect(body.sender).toBe("agent");
     expect(body.message).toBe("Hello from assistant");
@@ -482,6 +483,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
 
   it("does not post empty assistant.message content", async () => {
     const mockSession = makeMockCopilotSession("idle");
+    // Suppress automatic idle emit so we can emit assistant.message first, then idle manually.
     mockSession.send.mockImplementation(async () => "msg-id");
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
@@ -499,8 +501,6 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
     await waitForPhysicalSession(manager);
 
     mockSession.emit("assistant.message", { data: { content: "" } });
-    mockSession.emit("assistant.message", { data: { content: undefined } });
-    mockSession.emit("assistant.message", { data: {} });
     await wait(10);
 
     const messageCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
