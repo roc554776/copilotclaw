@@ -32,7 +32,7 @@ src/server.ts              — HTTP server, route handler, startServer(), GATEWA
 src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, CONFIG_ENV_VARS, parseBool helper; profile-aware (~/.copilotclaw/config.json or config-{{profile}}.json); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS) take precedence over file values; CopilotclawConfig includes model, zeroPremium, debugMockCopilotUnsafeTools fields
 src/config-cli.ts          — `copilotclaw config` CLI: configGet (resolve + display, notes env var override), configSet (validate + save, warns if env var shadows); valid keys: upstream, port, model, zeroPremium, debugMockCopilotUnsafeTools; BOOLEAN_KEYS handling for zeroPremium/debugMockCopilotUnsafeTools
 src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + LogBuffer creation + console intercept + startServer on resolvePort() + periodic agent monitor every 30s, max 3 retries)
-src/index.ts               — CLI entry point (health check on resolvePort() → detached spawn → exit); after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible; checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart)
+src/index.ts               — CLI entry point (health check on resolvePort() → detached spawn → exit); reads GATEWAY_VERSION from package.json, shows version in all CLI log messages; after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible; checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart)
 src/log-buffer.ts          — LogBuffer class (ring buffer for recent log lines), interceptConsole() to capture stdout/stderr
 src/stop.ts                — POST /api/stop CLI (uses resolvePort())
 src/restart.ts             — `copilotclaw restart` CLI: stop gateway → wait for shutdown → start (uses resolvePort())
@@ -41,7 +41,7 @@ src/update.ts              — `copilotclaw update` CLI: git pull + pnpm build s
 src/workspace.ts           — workspace paths: profile-aware (~/.copilotclaw/ or ~/.copilotclaw/workspace-{{profile}}/), data/, store.json; ensureWorkspace(); profile via COPILOTCLAW_PROFILE env var
 src/store.ts               — persistent store (Channel, Message, per-channel pending queue); JSON file via atomic rename
 src/channel-provider.ts    — ChannelProvider interface (plugin contract for chat mediums)
-src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, WS broadcast); passes compatibility info to dashboard
+src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, SSE broadcast via SseBroadcaster); passes compatibility info to dashboard
 src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening); status modal shows physical session details (with elapsed time, accumulated tokens in/out/total), subagent sessions, premium requests, available models; quota display uses /api/quota with fallback to latestQuotaSnapshots from session data; showSessionDetail() fetches and displays copilot session context detail via /api/sessions/:sessionId/messages
 src/sse-broadcaster.ts                  — SseBroadcaster: SSE event broadcasting to connected clients
 src/doctor.ts              — `copilotclaw doctor` CLI: checkWorkspace, checkConfig, checkGateway, checkAgent, checkZeroPremium diagnostics; runDoctor orchestrates checks and optional --fix (fixWorkspace, fixConfig, fixStaleSocket); exits 1 on failures
@@ -69,7 +69,7 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 
 ```
 → {"method":"status"}
-← {"version":"0.1.0","bootId":"uuid","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"...","physicalSession":{"sessionId":"...","model":"...","startedAt":"...","totalInputTokens":123,"totalOutputTokens":456,"latestQuotaSnapshots":{...}},"subagentSessions":[{"sessionId":"...","model":"...","status":"...","startedAt":"..."}]}}}
+← {"version":"0.10.0","bootId":"uuid","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"...","physicalSession":{"sessionId":"...","model":"...","startedAt":"...","totalInputTokens":123,"totalOutputTokens":456,"latestQuotaSnapshots":{...}},"subagentSessions":[{"sessionId":"...","model":"...","status":"...","startedAt":"..."}]}}}
 
 → {"method":"session_status","params":{"sessionId":"sess-id"}}
 ← {"status":"processing","startedAt":"...","processingStartedAt":"...","boundChannelId":"ch-id"}
