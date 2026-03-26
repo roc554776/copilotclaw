@@ -5,7 +5,6 @@ export interface PhysicalSessionSummary {
   model: string;
   startedAt: string;
   currentState: string;
-  totalTokensConsumed?: number;
 }
 
 export interface SubagentInfo {
@@ -76,7 +75,7 @@ export async function getAgentStatus(socketPath: string): Promise<AgentStatusRes
 
 export async function getAgentQuota(socketPath: string): Promise<Record<string, unknown> | null> {
   try {
-    const res = await sendIpcRequest(socketPath, "quota");
+    const res = await sendIpcRequest(socketPath, "quota", undefined, 15000);
     if ("error" in res) return null;
     return res;
   } catch {
@@ -86,7 +85,7 @@ export async function getAgentQuota(socketPath: string): Promise<Record<string, 
 
 export async function getAgentModels(socketPath: string): Promise<Record<string, unknown> | null> {
   try {
-    const res = await sendIpcRequest(socketPath, "models");
+    const res = await sendIpcRequest(socketPath, "models", undefined, 15000);
     if ("error" in res) return null;
     return res;
   } catch {

@@ -11,7 +11,6 @@ export interface PhysicalSessionSummary {
   model: string;
   startedAt: string;
   currentState: string;
-  totalTokensConsumed?: number;
 }
 
 export interface SubagentInfo {
@@ -299,13 +298,20 @@ export class AgentSessionManager {
       }
     });
     session.on("subagent.started", (event) => {
-      entry.info.subagentSessions?.push({
-        toolCallId: event.data.toolCallId,
-        agentName: event.data.agentName,
-        agentDisplayName: event.data.agentDisplayName,
-        status: "running",
-        startedAt: event.timestamp,
-      });
+      const subs = entry.info.subagentSessions;
+      if (subs !== undefined) {
+        subs.push({
+          toolCallId: event.data.toolCallId,
+          agentName: event.data.agentName,
+          agentDisplayName: event.data.agentDisplayName,
+          status: "running",
+          startedAt: event.timestamp,
+        });
+        // Keep only the last 50 entries to prevent unbounded growth
+        if (subs.length > 50) {
+          subs.splice(0, subs.length - 50);
+        }
+      }
     });
     session.on("subagent.completed", (event) => {
       const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
