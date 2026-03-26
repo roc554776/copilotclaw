@@ -25,7 +25,16 @@
       "Bash(git commit:*)",
       "Bash(pnpm --filter @copilotclaw/agent run test)",
       "Bash(xargs basename:*)",
-      "Bash(git status:*)"
+      "Bash(git status:*)",
+      "Bash(npm pack:*)",
+      "Bash(copilotclaw --help)",
+      "Bash(copilotclaw setup:*)",
+      "Bash(copilotclaw start:*)",
+      "Bash(curl -s 'http://localhost:19741/api/status')",
+      "Bash(copilotclaw restart:*)",
+      "Bash(curl -s 'http://localhost:19741/api/channels')",
+      "Bash(python3 -c \"import sys,json; ch=json.load\\(sys.stdin\\); print\\(ch[1][''''id''''] if len\\(ch\\)>1 else ch[0][''''id'''']\\)\")",
+      "Bash(copilotclaw stop:*)"
     ]
   }
 }

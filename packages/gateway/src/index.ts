@@ -50,8 +50,38 @@ async function waitForHealthy(): Promise<boolean> {
   return false;
 }
 
+async function checkAgentCompatibility(waitForAgent = false): Promise<void> {
+  const maxAttempts = waitForAgent ? 30 : 1; // 30 * 500ms = 15s
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await sleep(500);
+    try {
+      const statusRes = await fetch(`http://localhost:${DEFAULT_PORT}/api/status`);
+      if (!statusRes.ok) continue;
+      const status = await statusRes.json() as { agentCompatibility?: string; agent?: { version?: string } | null };
+      const compat = status.agentCompatibility ?? "unavailable";
+      if (compat === "compatible") {
+        log(`agent: compatible (v${status.agent?.version ?? "?"})`);
+        return;
+      } else if (compat === "incompatible") {
+        log(`ERROR: agent is incompatible (v${status.agent?.version ?? "?"}). Use --force-agent-restart to upgrade.`);
+        process.exit(1);
+      } else if (!waitForAgent) {
+        log(`WARNING: agent is not running`);
+        return;
+      }
+      // If waitForAgent, keep trying until agent appears
+    } catch {
+      if (!waitForAgent) {
+        log("WARNING: could not verify agent status");
+        return;
+      }
+    }
+  }
+  log("WARNING: agent did not start within timeout");
+}
+
 async function main(): Promise<void> {
-  const forceAgentRestart = process.argv.includes("--force-agent-restart");
+  const forceAgentRestart = process.argv.includes("--force-agent-restart") || process.env["COPILOTCLAW_FORCE_AGENT_RESTART_FLAG"] === "1";
 
   if (forceAgentRestart) {
     log("--force-agent-restart: will stop outdated agent on startup");
@@ -61,6 +91,9 @@ async function main(): Promise<void> {
 
   if (initialStatus === "healthy") {
     log(`already running on port ${DEFAULT_PORT}`);
+    await checkAgentCompatibility(forceAgentRestart);
+    log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+    log(`run 'copilotclaw stop' to shut down`);
     return;
   }
 
@@ -71,6 +104,9 @@ async function main(): Promise<void> {
       const status = await checkHealth();
       if (status === "healthy") {
         log("became healthy");
+        await checkAgentCompatibility(forceAgentRestart);
+        log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+        log(`run 'copilotclaw stop' to shut down`);
         return;
       }
       if (status === "port-free") {
@@ -78,6 +114,9 @@ async function main(): Promise<void> {
         spawnDaemon({ forceAgentRestart });
         if (await waitForHealthy()) {
           log(`running on http://localhost:${DEFAULT_PORT}`);
+          await checkAgentCompatibility(forceAgentRestart);
+          log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+          log(`run 'copilotclaw stop' to shut down`);
           return;
         }
         throw new Error("daemon failed to start");
@@ -89,13 +128,14 @@ async function main(): Promise<void> {
   log("starting gateway daemon...");
   spawnDaemon({ forceAgentRestart });
 
-  if (await waitForHealthy()) {
-    log(`running on http://localhost:${DEFAULT_PORT}`);
-    log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
-    log(`run 'pnpm --filter @copilotclaw/gateway run stop' to shut down`);
-  } else {
+  if (!(await waitForHealthy())) {
     throw new Error("daemon failed to start");
   }
+
+  log(`running on http://localhost:${DEFAULT_PORT}`);
+  await checkAgentCompatibility(forceAgentRestart);
+  log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+  log(`run 'copilotclaw stop' to shut down`);
 }
 
 main().catch((err: unknown) => {

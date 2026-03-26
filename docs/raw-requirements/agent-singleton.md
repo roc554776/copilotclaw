@@ -8,16 +8,19 @@
 - gateway と agent のアーキテクチャについて
   - gateway と agent は独立で動作させる
     - 理由: gateway だけを再起動させたい場合もあるが、その際に agent は再起動させたくないため
+    - 理由: agent session は高コスト（プレミアムリクエスト消費）なので、gateway restart しても agent session はそのまま再利用できるようにするため
   - 起動は常に gateway → agent。agent が gateway を起動することはない
   - agent は IPC で外から health check / status 取得できるようにする
     - 複数チャンネル（セッション）のステータスを同時取得できる
     - 個別にも取得できる
     - prop: 起動時刻
     - channel session status: 起動していない / 起動直後 / user message 待ち / user message 処理中
-  - gateway は agent プロセスを ensure するだけ
-    - gateway の責務: user message の管理、agent プロセスの管理、チャットシステムの提供
+  - gateway start 時に agent process を ensure する（プロセスの生存確認 + バージョンチェック、なければ spawn）
+  - user message POST 時に agent session を ensure する（agent process 側の責務: gateway をポーリングして pending を見つけたら session を起動）
+  - gateway stop 時に agent process は停止しない（独立プロセスの原則）
+  - gateway の責務: user message の管理、agent プロセスの ensure（start 時のみ）、チャットシステムの提供
   - agent プロセスの責務
-    - user message をポーリングで確認し、待機 user message のチャンネルごとの個数を取得し、必要ならチャンネルセッションを起動
+    - gateway をポーリングして pending user message を確認し、必要なら agent session を起動（session ensure は agent 側の責務）
     - チャンネルセッションが user message 処理中のまま既定の時間（デフォルト 10 分）が経過した場合は停止させる
       - 再起動・停止を無制限に繰り返さないようにする
       - 当該チャンネルの user message の最も古いメッセージが同じまま残り続けているなら、1 回リトライしたら、当該チャンネルの user message は全て処理済み扱いで flush する

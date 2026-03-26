@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { type AgentStatusResponse, getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 
-const MIN_AGENT_VERSION = "0.1.0";
+const MIN_AGENT_VERSION = "0.3.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -34,8 +34,12 @@ export class AgentManager {
     this.agentScript = options.agentScript ?? join(thisDir, "..", "..", "agent", "dist", "index.js");
   }
 
-  async ensureAgent(options?: { forceRestart?: boolean }): Promise<void> {
-    if (this.spawning) return;
+  /** Ensure agent process is running and compatible.
+   * When forceRestart is true and the agent version is outdated, stops the old agent and spawns a new one.
+   * Returns the old bootId if a force-restart was performed (pass to waitForNewAgent).
+   * If the agent is already at a compatible version, forceRestart has no effect. */
+  async ensureAgent(options?: { forceRestart?: boolean }): Promise<string | undefined> {
+    if (this.spawning) return undefined;
     this.spawning = true;
     try {
       const socketPath = getAgentSocketPath();
@@ -44,10 +48,11 @@ export class AgentManager {
         const versionTooOld = status.version === undefined || !semverSatisfies(status.version, MIN_AGENT_VERSION);
         if (versionTooOld) {
           if (options?.forceRestart) {
+            const oldBootId = status.bootId;
             console.error(`[gateway] agent version ${status.version ?? "unknown"} is below minimum ${MIN_AGENT_VERSION}, force-restarting`);
             await stopAgent(socketPath);
             this.spawnAgent();
-            return;
+            return oldBootId;
           }
           throw new Error(
             status.version === undefined
@@ -55,14 +60,36 @@ export class AgentManager {
               : `agent version ${status.version} is below minimum ${MIN_AGENT_VERSION}`,
           );
         }
-        return;
+        return undefined;
       }
       this.spawnAgent();
+      return undefined;
     } finally {
       if (this.spawningTimer !== undefined) clearTimeout(this.spawningTimer);
       this.spawningTimer = setTimeout(() => { this.spawning = false; }, 3000);
       this.spawningTimer.unref();
     }
+  }
+
+  /** Wait for agent to come up with a different bootId than the one provided.
+   * Used after force-restart to confirm the new agent has started.
+   * oldBootId must be a non-undefined string — comparing against undefined is meaningless. */
+  async waitForNewAgent(oldBootId: string, timeoutMs = 15000): Promise<boolean> {
+    const socketPath = getAgentSocketPath();
+    const start = Date.now();
+    const interval = 500;
+    while (Date.now() - start < timeoutMs) {
+      await new Promise((r) => { setTimeout(r, interval); });
+      try {
+        const status = await getAgentStatus(socketPath);
+        if (status !== null && status.bootId !== oldBootId) {
+          return true;
+        }
+      } catch {
+        // Agent not yet reachable
+      }
+    }
+    return false;
   }
 
   private spawnAgent(): void {
@@ -81,6 +108,19 @@ export class AgentManager {
   async getStatus(): Promise<AgentStatusResponse | null> {
     const socketPath = getAgentSocketPath();
     return getAgentStatus(socketPath);
+  }
+
+  /** Check agent compatibility. Returns "compatible", "incompatible", or "unavailable". */
+  async checkCompatibility(): Promise<"compatible" | "incompatible" | "unavailable"> {
+    const status = await this.getStatus();
+    if (status === null) return "unavailable";
+    if (status.version === undefined) return "incompatible";
+    if (!semverSatisfies(status.version, MIN_AGENT_VERSION)) return "incompatible";
+    return "compatible";
+  }
+
+  getMinAgentVersion(): string {
+    return MIN_AGENT_VERSION;
   }
 
   async stopAgent(): Promise<void> {

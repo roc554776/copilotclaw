@@ -36,7 +36,7 @@ afterEach(async () => {
 });
 
 describe("IPC server", () => {
-  it("starts and responds to status with version, startedAt, and empty sessions", async () => {
+  it("starts and responds to status with version, bootId, startedAt, and empty sessions", async () => {
     const path = randomSocketPath();
     const result = await listenIpc(path, () => {});
     expect(result.kind).toBe("server");
@@ -45,6 +45,8 @@ describe("IPC server", () => {
 
     const status = await sendIpcRequest(path, "status");
     expect(status["version"]).toBeTruthy();
+    expect(status["bootId"]).toBeTruthy();
+    expect(typeof status["bootId"]).toBe("string");
     expect(status["startedAt"]).toBeTruthy();
     expect(status["sessions"]).toEqual({});
   });

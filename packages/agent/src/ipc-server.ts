@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type Server, createConnection, createServer, type Socket } from "node:net";
 import { unlinkSync } from "node:fs";
 import { readFileSync } from "node:fs";
@@ -10,6 +11,7 @@ const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "ut
 const AGENT_VERSION = pkgJson.version;
 
 export interface AgentIpcState {
+  bootId: string;
   startedAt: string;
 }
 
@@ -49,6 +51,7 @@ function handleConnection(
             const sessions = sessionManager?.getSessionStatuses() ?? {};
             socket.write(JSON.stringify({
               version: AGENT_VERSION,
+              bootId: state.bootId,
               startedAt: state.startedAt,
               sessions,
             }) + "\n");
@@ -119,6 +122,7 @@ export function listenIpc(
 ): Promise<ListenResult> {
   const mgr = sessionManager ?? null;
   const state: AgentIpcState = {
+    bootId: randomUUID(),
     startedAt: new Date().toISOString(),
   };
 

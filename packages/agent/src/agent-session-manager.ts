@@ -15,38 +15,45 @@ export interface AgentSessionInfo {
 
 interface AgentSessionEntry {
   sessionId: string;
+  copilotSessionId?: string; // SDK session ID for resumeSession
   info: AgentSessionInfo;
   client: CopilotClient;
   abortController: AbortController;
   sessionPromise: Promise<void>;
   generation: number;
-  restarting: boolean;
 }
 
 export interface AgentSessionManagerOptions {
   gatewayBaseUrl: string;
   staleTimeoutMs?: number;
+  maxSessionAgeMs?: number;
   fetch?: typeof globalThis.fetch;
 }
 
 export interface StartSessionOptions {
   boundChannelId?: string;
+  /** SDK session ID to resume instead of creating a new one. Used by deferred resume. */
+  copilotSessionId?: string;
 }
 
 const DEFAULT_STALE_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_MAX_SESSION_AGE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 
 export class AgentSessionManager {
   private readonly sessions = new Map<string, AgentSessionEntry>();
   private readonly channelBindings = new Map<string, string>(); // channelId → sessionId
   private readonly restartCounts = new Map<string, number>(); // channelId → count (persists across session restarts)
+  private readonly savedCopilotSessionIds = new Map<string, string>(); // channelId → SDK session ID (for deferred resume)
   private readonly gatewayBaseUrl: string;
   private readonly staleTimeoutMs: number;
+  private readonly maxSessionAgeMs: number;
   private readonly fetchFn: typeof globalThis.fetch;
   private generationCounter = 0;
 
   constructor(options: AgentSessionManagerOptions) {
     this.gatewayBaseUrl = options.gatewayBaseUrl;
     this.staleTimeoutMs = options.staleTimeoutMs ?? DEFAULT_STALE_TIMEOUT_MS;
+    this.maxSessionAgeMs = options.maxSessionAgeMs ?? DEFAULT_MAX_SESSION_AGE_MS;
     this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -90,12 +97,16 @@ export class AgentSessionManager {
       abortController,
       sessionPromise: Promise.resolve(),
       generation,
-      restarting: false,
     };
 
     if (boundChannelId !== undefined) {
       entry.info.boundChannelId = boundChannelId;
       this.channelBindings.set(boundChannelId, sessionId);
+    }
+
+    // Propagate SDK session ID for resume before runSession reads it
+    if (options?.copilotSessionId !== undefined) {
+      entry.copilotSessionId = options.copilotSessionId;
     }
 
     const promise = this.runSession(entry).then(() => {
@@ -119,12 +130,7 @@ export class AgentSessionManager {
           // Only unbind if still bound to this session
           if (this.channelBindings.get(boundChannelId) === sessionId) {
             this.channelBindings.delete(boundChannelId);
-            // Only reset the restart count when the session ended normally (not during a
-            // controlled restart). The restarting flag is set before stopSession() is called
-            // so the finally block can distinguish the two cases.
-            if (!current.restarting) {
-              this.restartCounts.delete(boundChannelId);
-            }
+            this.restartCounts.delete(boundChannelId);
           }
         }
       }
@@ -158,13 +164,11 @@ export class AgentSessionManager {
     const gatewayBaseUrl = this.gatewayBaseUrl;
     const signal = entry.abortController.signal;
 
-    const session = await entry.client.createSession({
-      model: "gpt-4.1",
+    const sessionConfig = {
       onPermissionRequest: approveAll,
       tools: [sendMessage, receiveInput, listMessages],
       hooks: {
         onPostToolUse: async () => {
-          // Check if channel has pending user messages
           try {
             if (signal.aborted) return;
             const fetchOpts: RequestInit = { signal };
@@ -180,8 +184,14 @@ export class AgentSessionManager {
           return;
         },
       },
-    });
+    };
 
+    // Resume existing SDK session or create new one
+    const session = entry.copilotSessionId !== undefined
+      ? await entry.client.resumeSession(entry.copilotSessionId, sessionConfig)
+      : await entry.client.createSession({ model: "gpt-4.1", ...sessionConfig });
+
+    entry.copilotSessionId = session.sessionId;
     entry.info.status = "waiting";
 
     const logPrefix = channelId.slice(0, 8);
@@ -229,7 +239,6 @@ export class AgentSessionManager {
   async checkStaleAndHandle(sessionId: string, oldestInputId: string | undefined): Promise<"ok" | "flushed"> {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return "ok";
-    if (entry.restarting) return "ok";
     if (entry.info.status !== "processing") return "ok";
 
     const processingStartedAt = entry.info.processingStartedAt;
@@ -238,46 +247,75 @@ export class AgentSessionManager {
     const elapsed = Date.now() - new Date(processingStartedAt).getTime();
     if (elapsed < this.staleTimeoutMs) return "ok";
 
-    // Don't restart if there are no pending inputs (agent may be legitimately finishing)
+    // Don't act if there are no pending inputs (agent may be legitimately finishing)
     if (oldestInputId === undefined) return "ok";
 
-    // Track restart count by channelId so it survives session restarts
     const boundChannelId = entry.info.boundChannelId;
     const countKey = boundChannelId ?? sessionId;
-    const restarts = this.restartCounts.get(countKey) ?? 0;
 
-    if (restarts >= 1) {
-      // Already restarted once and still stuck — flush and give up
-      console.error(`[agent] session ${sessionId.slice(0, 8)} stuck after ${restarts} restart(s), flushing inputs`);
-      this.stopSession(sessionId);
-      this.restartCounts.delete(countKey);
-      return "flushed";
+    // Stale session — save state for deferred resume, stop, notify, flush stale inputs
+    console.error(`[agent] session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), saving state and stopping (deferred resume)`);
+
+    // Save copilotSessionId for deferred resume on next genuinely new pending message
+    if (entry.copilotSessionId !== undefined && boundChannelId !== undefined) {
+      this.savedCopilotSessionIds.set(boundChannelId, entry.copilotSessionId);
     }
 
-    // First stale detection — restart session
-    console.error(`[agent] session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), restarting session`);
-    this.restartCounts.set(countKey, restarts + 1);
-    entry.restarting = true;
+    this.notifyChannelSessionTimedOut(boundChannelId);
     this.stopSession(sessionId);
-    await entry.sessionPromise.catch(() => {});
-
-    // Start a new session bound to the same channel
-    if (boundChannelId !== undefined) {
-      this.startSession({ boundChannelId });
-    }
-    return "ok";
+    this.restartCounts.delete(countKey);
+    // Return "flushed" so the caller flushes stale inputs; the deferred resume will only
+    // fire when a genuinely new user message arrives after the flush.
+    return "flushed";
   }
 
   private notifyChannelSessionStopped(channelId: string | undefined): void {
     if (channelId === undefined) return;
     const message = "[SYSTEM] Agent session stopped unexpectedly. A new session will start when you send a message.";
+    this.postChannelMessage(channelId, message);
+  }
+
+  private notifyChannelSessionTimedOut(channelId: string | undefined): void {
+    if (channelId === undefined) return;
+    const message = "[SYSTEM] Agent session timed out (stuck processing). A new session will start when you send a message.";
+    this.postChannelMessage(channelId, message);
+  }
+
+  private postChannelMessage(channelId: string, message: string): void {
     this.fetchFn(`${this.gatewayBaseUrl}/api/channels/${channelId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sender: "agent", message }),
     }).catch((err: unknown) => {
-      console.error(`[agent] failed to notify channel ${channelId} of session stop:`, err);
+      console.error(`[agent] failed to notify channel ${channelId}:`, err);
     });
+  }
+
+  /** Check if session has exceeded max age. If so, save state and stop (deferred resume).
+   * The session will be resumed when the next pending message arrives for the channel.
+   * Only applies to sessions in "waiting" state with a bound channel. */
+  checkSessionMaxAge(sessionId: string): boolean {
+    const entry = this.sessions.get(sessionId);
+    if (entry === undefined) return false;
+    if (entry.info.status !== "waiting") return false;
+    if (entry.info.boundChannelId === undefined) return false;
+
+    const age = Date.now() - new Date(entry.info.startedAt).getTime();
+    if (age < this.maxSessionAgeMs) return false;
+
+    const boundChannelId = entry.info.boundChannelId;
+
+    console.error(`[agent] session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), saving state and stopping (deferred resume)`);
+
+    // Save copilotSessionId for deferred resume
+    if (entry.copilotSessionId !== undefined) {
+      this.savedCopilotSessionIds.set(boundChannelId, entry.copilotSessionId);
+    }
+
+    // Stop session — no immediate restart (deferred resume on next pending)
+    this.stopSession(sessionId);
+
+    return true;
   }
 
   /** Get the sessionId bound to a channel, if any */
@@ -288,5 +326,19 @@ export class AgentSessionManager {
   /** Get the boundChannelId for a session, if any */
   getBoundChannelId(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.info.boundChannelId;
+  }
+
+  /** Check if a channel has a saved copilotSessionId for deferred resume */
+  hasSavedSession(channelId: string): boolean {
+    return this.savedCopilotSessionIds.has(channelId);
+  }
+
+  /** Consume the saved copilotSessionId for a channel (returns and removes it) */
+  consumeSavedSession(channelId: string): string | undefined {
+    const id = this.savedCopilotSessionIds.get(channelId);
+    if (id !== undefined) {
+      this.savedCopilotSessionIds.delete(channelId);
+    }
+    return id;
   }
 }

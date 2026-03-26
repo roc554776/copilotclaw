@@ -8,7 +8,14 @@ vi.mock("@github/copilot-sdk", () => {
   const CopilotClient = vi.fn(function () {
     /* constructed per-test via mockImplementation */
   });
-  return { CopilotClient, approveAll };
+  // defineTool: return a minimal tool object with the given name
+  const defineTool = vi.fn((name: string, opts: { handler: unknown }) => ({
+    name,
+    handler: opts.handler,
+    parameters: { type: "object", properties: {}, required: [] },
+    skipPermission: true,
+  }));
+  return { CopilotClient, approveAll, defineTool };
 });
 
 import { AgentSessionManager } from "../src/agent-session-manager.js";
@@ -48,6 +55,7 @@ function wait(ms: number): Promise<void> {
 function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
   (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
     (this as Record<string, unknown>)["createSession"] = createSession;
+    (this as Record<string, unknown>)["resumeSession"] = createSession; // reuse same mock for resume
     (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
   });
 }
@@ -145,6 +153,38 @@ describe("AgentSessionManager — stopped status and channel notification", () =
     expect(notifyCalls).toHaveLength(0);
   });
 
+  it("checkStaleAndHandle returns ok for sessions not in processing state", async () => {
+    installClientMock(vi.fn().mockImplementation(async () => {
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      return {
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          const list = listeners.get(event) ?? [];
+          list.push(cb);
+          listeners.set(event, list);
+        }),
+        send: vi.fn().mockResolvedValue("msg-id"),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+    }));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      staleTimeoutMs: 1,
+      fetch: fetchSpy,
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-stale" });
+    await wait(30);
+
+    // Session is in "waiting" state, not "processing" — stale check should return "ok"
+    const result = await manager.checkStaleAndHandle(sessionId, "some-pending-id");
+    expect(result).toBe("ok");
+  });
+
   it("does not notify when there is no bound channel (channel-less session errors immediately)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
@@ -164,5 +204,223 @@ describe("AgentSessionManager — stopped status and channel notification", () =
       ([url]) => (url as string).includes("/messages"),
     );
     expect(notifyCalls).toHaveLength(0);
+  });
+});
+
+describe("AgentSessionManager — session max age", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("saves copilotSessionId and stops session on max age (deferred resume)", async () => {
+    installClientMock(vi.fn().mockImplementation(async () => {
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      return {
+        sessionId: "sdk-session-old",
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          const list = listeners.get(event) ?? [];
+          list.push(cb);
+          listeners.set(event, list);
+        }),
+        send: vi.fn().mockResolvedValue("msg-id"),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+    }));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      maxSessionAgeMs: 1,
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-age" });
+    await wait(20);
+
+    // All sessions should be waiting (max age 1ms already exceeded)
+    const statuses = manager.getSessionStatuses();
+    const sessionId = Object.keys(statuses)[0]!;
+    const stopped = manager.checkSessionMaxAge(sessionId);
+    expect(stopped).toBe(true);
+
+    // copilotSessionId should be saved for deferred resume
+    expect(manager.hasSavedSession("ch-age")).toBe(true);
+
+    // No immediate replacement — no new session started
+    await wait(20);
+    // The old session is being torn down, no new session for this channel yet
+  });
+
+  it("consumeSavedSession returns and removes the saved ID", async () => {
+    installClientMock(vi.fn().mockImplementation(async () => {
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      return {
+        sessionId: "sdk-to-resume",
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          const list = listeners.get(event) ?? [];
+          list.push(cb);
+          listeners.set(event, list);
+        }),
+        send: vi.fn().mockResolvedValue("msg-id"),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+    }));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      maxSessionAgeMs: 1,
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-consume" });
+    await wait(20);
+
+    const statuses = manager.getSessionStatuses();
+    const sessionId = Object.keys(statuses)[0]!;
+    manager.checkSessionMaxAge(sessionId);
+
+    // Consume should return and remove
+    const saved = manager.consumeSavedSession("ch-consume");
+    expect(saved).toBe("sdk-to-resume");
+    expect(manager.hasSavedSession("ch-consume")).toBe(false);
+  });
+
+  it("does not stop session that is within max age", async () => {
+    installClientMock(vi.fn().mockImplementation(async () => {
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      return {
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          const list = listeners.get(event) ?? [];
+          list.push(cb);
+          listeners.set(event, list);
+        }),
+        send: vi.fn().mockResolvedValue("msg-id"),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+    }));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      maxSessionAgeMs: 999999999,
+      fetch: fetchSpy,
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-young" });
+    await wait(20);
+
+    const stopped = manager.checkSessionMaxAge(sessionId);
+    expect(stopped).toBe(false);
+    // Session still exists
+    const statuses = manager.getSessionStatuses();
+    expect(statuses[sessionId]).toBeDefined();
+  });
+});
+
+describe("AgentSessionManager — stale deferred resume", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Build a session mock that stays in "processing" state indefinitely (no idle/error events). */
+  function makeStuckSession(sdkSessionId: string): object {
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    return {
+      sessionId: sdkSessionId,
+      on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+        const list = listeners.get(event) ?? [];
+        list.push(cb);
+        listeners.set(event, list);
+      }),
+      send: vi.fn().mockResolvedValue("msg-id"),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it("saves copilotSessionId, notifies channel, and returns flushed on stale timeout", async () => {
+    installClientMock(vi.fn().mockImplementation(async () => makeStuckSession("sdk-stale-id")));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      staleTimeoutMs: 1,
+      fetch: fetchSpy,
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-stale-defer" });
+    await wait(20);
+
+    // Manually transition to processing state (simulate the LLM starting work)
+    const entry = (manager as unknown as { sessions: Map<string, { info: { status: string; processingStartedAt: string }; copilotSessionId: string }> }).sessions.get(sessionId);
+    if (entry !== undefined) {
+      entry.info.status = "processing";
+      entry.info.processingStartedAt = new Date(Date.now() - 100).toISOString(); // 100ms ago, well past staleTimeoutMs=1ms
+      entry.copilotSessionId = "sdk-stale-id";
+    }
+
+    const result = await manager.checkStaleAndHandle(sessionId, "pending-msg-id");
+
+    // Must return "flushed" so the caller flushes stale inputs
+    expect(result).toBe("flushed");
+
+    // Must have saved the copilotSessionId for deferred resume
+    expect(manager.hasSavedSession("ch-stale-defer")).toBe(true);
+    expect(manager.consumeSavedSession("ch-stale-defer")).toBe("sdk-stale-id");
+
+    // Must have notified the channel of the timeout
+    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
+      ([url]) => (url as string).includes("/messages") && !(url as string).includes("pending"),
+    );
+    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(notifyCalls[0]![1].body as string) as { sender: string; message: string };
+    expect(body.sender).toBe("agent");
+    expect(body.message).toContain("timed out");
+
+    // Only one session should exist (the original stale one, teardown is async)
+    // Crucially, no second session was created for the channel
+    const sessionCountAfter = Object.keys(manager.getSessionStatuses()).length;
+    expect(sessionCountAfter).toBeLessThanOrEqual(1);
+  });
+
+  it("does not save copilotSessionId when oldestInputId is undefined (nothing pending)", async () => {
+    installClientMock(vi.fn().mockImplementation(async () => makeStuckSession("sdk-noop-id")));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      staleTimeoutMs: 1,
+      fetch: fetchSpy,
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-nopending" });
+    await wait(20);
+
+    const entry = (manager as unknown as { sessions: Map<string, { info: { status: string; processingStartedAt: string }; copilotSessionId: string }> }).sessions.get(sessionId);
+    if (entry !== undefined) {
+      entry.info.status = "processing";
+      entry.info.processingStartedAt = new Date(Date.now() - 100).toISOString();
+      entry.copilotSessionId = "sdk-noop-id";
+    }
+
+    // oldestInputId is undefined — agent may be legitimately finishing
+    const result = await manager.checkStaleAndHandle(sessionId, undefined);
+    expect(result).toBe("ok");
+    expect(manager.hasSavedSession("ch-nopending")).toBe(false);
   });
 });

@@ -230,12 +230,30 @@ describe("GET /", () => {
 });
 
 describe("GET /api/status", () => {
-  it("returns gateway status and null agent when no agent manager", async () => {
+  it("returns gateway status with version, null agent, and unavailable compatibility", async () => {
     const res = await fetch(`${baseUrl}/api/status`);
     expect(res.status).toBe(200);
-    const body = await res.json() as { gateway: { status: string }; agent: null };
+    const body = await res.json() as { gateway: { status: string; version: string }; agent: null; agentCompatibility: string };
     expect(body.gateway.status).toBe("running");
+    expect(body.gateway.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(body.agent).toBeNull();
+    expect(body.agentCompatibility).toBe("unavailable");
+  });
+});
+
+describe("GET /api/logs", () => {
+  it("returns an array of log entries", async () => {
+    const res = await fetch(`${baseUrl}/api/logs`);
+    expect(res.status).toBe(200);
+    const logs = await res.json() as Array<{ timestamp: string; source: string; level: string; message: string }>;
+    expect(Array.isArray(logs)).toBe(true);
+  });
+
+  it("respects limit parameter", async () => {
+    const res = await fetch(`${baseUrl}/api/logs?limit=1`);
+    expect(res.status).toBe(200);
+    const logs = await res.json() as unknown[];
+    expect(logs.length).toBeLessThanOrEqual(1);
   });
 });
 

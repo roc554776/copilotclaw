@@ -44,6 +44,16 @@ When a change introduces, modifies, or removes a design constraint or policy, ex
 
 Always update documentation (raw-requirements, requirements, proposals) before making code changes. Code changes without preceding documentation updates are not acceptable.
 
+### Raw Requirements のタイムスタンプ
+
+raw requirements に新しいブロックを追加するときは、そのブロックにタイムスタンプ（ISO 8601 日付）を付与すること。理由: 衝突する要望が存在するときに、どの要望がより新しいのかを明確にするため。
+
+形式例:
+```markdown
+<!-- 2026-03-26 -->
+- 新しい要望の内容
+```
+
 ## Codebase Reference
 
 - `docs/CODEMAPS/` contains token-lean architecture maps. Read before exploring unfamiliar areas of the codebase. Update after every completed task that changes structure, routes, files, or dependencies.
