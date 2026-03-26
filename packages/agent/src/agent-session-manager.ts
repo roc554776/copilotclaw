@@ -208,8 +208,8 @@ export class AgentSessionManager {
       } : {}),
     };
 
-    // Resolve model: explicit config > zeroPremium auto-select > default
-    const resolvedModel = this.resolveModel();
+    // Resolve model dynamically from SDK model list
+    const resolvedModel = await this.resolveModel(entry.client);
 
     // Resume existing SDK session or create new one
     const session = entry.copilotSessionId !== undefined
@@ -235,25 +235,49 @@ export class AgentSessionManager {
   }
 
   /** Resolve which model to use for session creation.
-   * zeroPremium mode overrides premium models to the cheapest non-premium option. */
-  private resolveModel(): string {
-    // Keep in sync with NON_PREMIUM_MODELS in packages/gateway/src/config.ts
-    const NON_PREMIUM_MODELS = ["gpt-4.1-nano", "gpt-4.1-mini"];
-    const DEFAULT_MODEL = "gpt-4.1";
-
-    if (this.zeroPremium) {
-      // If explicit model is set but is premium, override to non-premium
-      if (this.model !== undefined && !NON_PREMIUM_MODELS.includes(this.model)) {
-        console.error(`[agent] zeroPremium: overriding model ${this.model} → ${NON_PREMIUM_MODELS[0]}`);
-        return NON_PREMIUM_MODELS[0]!;
+   * Queries available models via SDK and selects based on config:
+   * - zeroPremium: picks cheapest non-premium model (billing.multiplier === 0)
+   * - model unset: picks model with lowest billing.multiplier
+   * - model set: uses that model (zeroPremium may override if it's premium) */
+  private async resolveModel(client: CopilotClient): Promise<string> {
+    try {
+      const { models } = await client.rpc.models.list();
+      if (models.length === 0) {
+        console.error("[agent] no models available from SDK, falling back to gpt-4.1");
+        return this.model ?? "gpt-4.1";
       }
-      // If explicit model is non-premium, use it
-      if (this.model !== undefined) return this.model;
-      // No model specified, pick cheapest non-premium
-      return NON_PREMIUM_MODELS[0]!;
-    }
 
-    return this.model ?? DEFAULT_MODEL;
+      // Sort by billing multiplier (ascending — cheapest first)
+      const sorted = [...models].sort((a, b) =>
+        (a.billing?.multiplier ?? Infinity) - (b.billing?.multiplier ?? Infinity),
+      );
+      const nonPremium = sorted.filter((m) => m.billing?.multiplier === 0);
+
+      if (this.zeroPremium) {
+        if (nonPremium.length === 0) {
+          console.error("[agent] zeroPremium: no non-premium models available");
+          throw new Error("zeroPremium is enabled but no non-premium models are available");
+        }
+        if (this.model !== undefined) {
+          const modelInfo = models.find((m) => m.id === this.model);
+          if (modelInfo !== undefined && modelInfo.billing?.multiplier !== 0) {
+            console.error(`[agent] zeroPremium: overriding premium model ${this.model} → ${nonPremium[0]!.id}`);
+            return nonPremium[0]!.id;
+          }
+          return this.model;
+        }
+        return nonPremium[0]!.id;
+      }
+
+      if (this.model !== undefined) return this.model;
+
+      // No model specified: pick the one with lowest premium cost
+      return sorted[0]!.id;
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes("zeroPremium")) throw err;
+      console.error("[agent] failed to list models from SDK, falling back to gpt-4.1:", err);
+      return this.model ?? "gpt-4.1";
+    }
   }
 
   stopSession(sessionId: string): void {
