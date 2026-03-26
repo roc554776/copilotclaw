@@ -93,6 +93,17 @@ export async function getAgentModels(socketPath: string): Promise<Record<string,
   }
 }
 
+export async function getAgentSessionMessages(socketPath: string, sessionId: string): Promise<unknown[] | null> {
+  try {
+    const res = await sendIpcRequest(socketPath, "session_messages", { sessionId }, 15000);
+    if ("error" in res) return null;
+    if (Array.isArray(res)) return res;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function stopAgent(socketPath: string): Promise<boolean> {
   try {
     await sendIpcRequest(socketPath, "stop");

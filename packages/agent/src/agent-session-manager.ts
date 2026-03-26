@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
 import { createChannelTools } from "./tools/channel.js";
@@ -33,6 +33,7 @@ export interface AgentSessionInfo {
 interface AgentSessionEntry {
   sessionId: string;
   copilotSessionId?: string; // SDK session ID for resumeSession
+  copilotSession?: CopilotSession; // Live SDK session for getMessages()
   info: AgentSessionInfo;
   client: CopilotClient;
   abortController: AbortController;
@@ -112,6 +113,20 @@ export class AgentSessionManager {
     } catch {
       return null;
     }
+  }
+
+  /** Get session messages (conversation history) from the SDK for a given copilot session ID. */
+  async getSessionMessages(copilotSessionId: string): Promise<unknown[] | null> {
+    for (const [, entry] of this.sessions) {
+      if (entry.copilotSessionId === copilotSessionId && entry.copilotSession !== undefined) {
+        try {
+          return await entry.copilotSession.getMessages();
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
   }
 
   getSessionStatuses(): Record<string, AgentSessionInfo> {
@@ -270,6 +285,7 @@ export class AgentSessionManager {
       : await entry.client.createSession(baseConfig);
 
     entry.copilotSessionId = session.sessionId;
+    entry.copilotSession = session;
     entry.info.status = "waiting";
 
     // Track physical session state

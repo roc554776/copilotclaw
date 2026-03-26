@@ -290,6 +290,13 @@ describe("GET /api/status (config section)", () => {
   });
 });
 
+describe("GET /api/sessions/:sessionId/messages", () => {
+  it("returns 404 when no agent manager", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/nonexistent/messages`);
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);

@@ -484,26 +484,26 @@ PhysicalSessionSummary:
 | :--- | :--- | :--- |
 | `sessionId` | `string` | SDK session ID |
 | `model` | `string` | 使用中のモデル |
-| `contextTokens` | `number` | 現在のコンテキストトークン数 |
-| `maxContextTokens` | `number` | 最大コンテキストウィンドウサイズ |
-| `contextUtilization` | `number` | 使用率 (0.0〜1.0) |
-| `compactionThreshold` | `number` | compact 閾値 (0.0〜1.0) |
-| `totalTokensConsumed` | `number?` | これまでの累計消費トークン数 |
 | `startedAt` | `string` | 開始時刻 |
 | `currentState` | `string` | 現在の状態（idle, tool 呼び出し中, etc.） |
+| `contextTokens` | `number?` | 現在のコンテキストトークン数（compaction イベントから取得、未発生時は null） <!-- TODO: 未実装 — SDK に常時取得 API がないため、compaction イベント時のキャッシュで代替する設計が必要 --> |
+| `maxContextTokens` | `number?` | 最大コンテキストウィンドウサイズ <!-- TODO: 未実装 — 同上 --> |
+| `totalTokensConsumed` | `number?` | これまでの累計消費トークン数 <!-- TODO: 未実装 — SDK に常時取得 API がないため --> |
 
 #### サマリー表示（ダッシュボードモーダル）
 
 ステータス詳細モーダルに以下を追加:
 - プレミアムリクエスト残量/上限（`client.rpc.account.getQuota()` から取得）
 - 利用可能なモデルとプレミアムリクエスト乗数（`client.rpc.models.list()` から取得）
-- 各物理セッションのサマリー（session ID, model, コンテキスト使用率, 経過時間, 状態）
+- 各物理セッションのサマリー（session ID, model, 経過時間, 状態）
+- 経過時間はクライアントサイドで `startedAt` から動的計算して表示
 
 #### 詳細表示（個別セッション選択時）
 
-モーダル内で物理セッションをクリックすると詳細表示:
+モーダル内で物理セッションをクリックすると詳細パネルを展開表示:
 - サマリーの全項目
-- 現在のコンテキスト内容（システムプロンプト + 会話履歴）
+- 現在のコンテキスト内容（`session.getMessages()` で取得した会話履歴）
+- IPC `session_messages` メソッド → gateway `/api/sessions/{{sessionId}}/messages` で公開
 
 ### Dashboard Processing インジケータ
 

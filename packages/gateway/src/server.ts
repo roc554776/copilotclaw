@@ -149,6 +149,19 @@ function createRequestHandler(
       return;
     }
 
+    // Session messages (physical session context detail)
+    const sessionMsgMatch = /^\/api\/sessions\/([^/]+)\/messages$/.exec(fullPathname);
+    if (sessionMsgMatch !== null && method === "GET") {
+      const sessionId = decodeURIComponent(sessionMsgMatch[1]!);
+      const messages = agentManager !== null ? await agentManager.getSessionMessages(sessionId) : null;
+      if (messages !== null) {
+        json(res, 200, messages);
+      } else {
+        json(res, 404, { error: "session not found or no messages available" });
+      }
+      return;
+    }
+
     // Channel management (core — provider-agnostic)
     if (fullPathname === "/api/channels" && method === "GET") {
       json(res, 200, store.listChannels());

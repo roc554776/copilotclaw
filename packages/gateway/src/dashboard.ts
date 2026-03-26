@@ -144,6 +144,15 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;");
     }
+    function elapsed(isoStr) {
+      const ms = Date.now() - new Date(isoStr).getTime();
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return s + "s";
+      const m = Math.floor(s / 60);
+      if (m < 60) return m + "m " + (s % 60) + "s";
+      const h = Math.floor(m / 60);
+      return h + "h " + (m % 60) + "m";
+    }
 
     // --- Server-Sent Events ---
     let evtSource = null;
@@ -234,12 +243,15 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
               // Physical session details
               if (sess.physicalSession) {
                 const ps = sess.physicalSession;
+                const psId = escHtml(ps.sessionId);
                 html += '<div style="margin-left:1rem;font-size:0.8rem;color:#8b949e">';
                 html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(ps.sessionId.slice(0,12)) + '</span></div>';
                 html += '<div class="row"><span class="label">Model</span><span class="value">' + escHtml(ps.model) + '</span></div>';
                 html += '<div class="row"><span class="label">State</span><span class="value">' + escHtml(ps.currentState) + '</span></div>';
-                html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + '</span></div>';
+                html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + ' (' + elapsed(ps.startedAt) + ')</span></div>';
+                html += '<div style="margin-top:0.3rem"><a href="#" style="color:#58a6ff;text-decoration:none" onclick="showSessionDetail(\'' + psId + '\');return false;">Show context detail</a></div>';
                 html += '</div>';
+                html += '<div id="session-detail-' + psId + '" style="display:none;margin-left:1rem;margin-top:0.5rem;font-size:0.75rem;max-height:300px;overflow-y:auto;border:1px solid #30363d;padding:0.5rem;border-radius:0.5rem;white-space:pre-wrap;color:#8b949e"></div>';
               }
               // Subagent sessions
               const subs = sess.subagentSessions || [];
@@ -310,6 +322,45 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       statusModal.style.display = "none";
       statusModalOverlay.style.display = "none";
     }
+
+    window.showSessionDetail = async function(sessionId) {
+      const detailEl = document.getElementById("session-detail-" + sessionId);
+      if (!detailEl) return;
+      if (detailEl.style.display !== "none") {
+        detailEl.style.display = "none";
+        return;
+      }
+      detailEl.textContent = "Loading context...";
+      detailEl.style.display = "block";
+      try {
+        const res = await fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/messages");
+        if (!res.ok) {
+          detailEl.textContent = "Failed to load: " + res.status;
+          return;
+        }
+        const messages = await res.json();
+        if (!Array.isArray(messages) || messages.length === 0) {
+          detailEl.textContent = "(no messages)";
+          return;
+        }
+        let text = "";
+        for (const msg of messages) {
+          const type = msg.type || "unknown";
+          if (type === "user.message") {
+            text += "[user] " + (msg.data?.content || "") + "\\n\\n";
+          } else if (type === "assistant.message") {
+            text += "[assistant] " + (msg.data?.content || "") + "\\n\\n";
+          } else if (type === "tool.execution_start") {
+            text += "[tool:" + (msg.data?.toolName || "?") + "] started\\n";
+          } else if (type === "session.start" || type === "session.resume") {
+            text += "[" + type + "]\\n";
+          }
+        }
+        detailEl.textContent = text || "(no displayable messages)";
+      } catch (err) {
+        detailEl.textContent = "Error: " + err.message;
+      }
+    };
 
     // --- Chat ---
     async function sendMessage() {
