@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-26 | Files scanned: 25 | Token estimate: ~1100 -->
+<!-- Generated: 2026-03-26 | Files scanned: 26 | Token estimate: ~1200 -->
 
 # Backend
 
@@ -9,7 +9,8 @@
 ```
 GET  /healthz                              → 200 { status: "ok" }
 POST /api/stop                             → 200 { status: "stopping" } → gateway exit only (localhost only, agent NOT stopped)
-GET  /api/status                           → 200 { gateway: {status, version}, agent: AgentStatusResponse|null }
+GET  /api/status                           → 200 { gateway: {status, version}, agent: AgentStatusResponse|null, agentCompatibility: {compatible, minVersion, currentVersion}|null }
+GET  /api/logs                             → 200 { logs: string[] } (recent log lines from ring buffer)
 GET  /api/channels                         → 200 Channel[]
 POST /api/channels                         → 201 Channel
 GET  /api/channels/pending                 → 200 { [channelId]: count }
@@ -24,9 +25,10 @@ GET  /                                     → 200 HTML dashboard (status bar + 
 ### Key Files
 
 ```
-src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json
-src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + startServer + periodic agent monitor every 30s, max 3 retries)
-src/index.ts               — CLI entry point (health check → detached spawn → exit)
+src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents
+src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + LogBuffer creation + console intercept + startServer + periodic agent monitor every 30s, max 3 retries)
+src/index.ts               — CLI entry point (health check → detached spawn → exit); after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible
+src/log-buffer.ts          — LogBuffer class (ring buffer for recent log lines), interceptConsole() to capture stdout/stderr
 src/stop.ts                — POST /api/stop CLI
 src/restart.ts             — `copilotclaw restart` CLI: stop gateway → wait for shutdown → start
 src/setup.ts               — `copilotclaw setup` CLI: create workspace directories
@@ -34,10 +36,10 @@ src/update.ts              — `copilotclaw update` CLI: git pull + pnpm build s
 src/workspace.ts           — workspace paths: ~/.copilotclaw/ root, data/, store.json; ensureWorkspace()
 src/store.ts               — persistent store (Channel, Message, per-channel pending queue); JSON file via atomic rename
 src/channel-provider.ts    — ChannelProvider interface (plugin contract for chat mediums)
-src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, WS broadcast)
-src/dashboard.ts           — HTML renderer (status bar, chat bubbles, channel tabs, input form)
+src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, WS broadcast); passes compatibility info to dashboard
+src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button)
 src/ws.ts                  — WsBroadcaster: SSE event broadcasting to connected clients
-src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart)
+src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); checkCompatibility() and getMinAgentVersion() methods
 src/ipc-client.ts          — IPC client (status/stop to agent process)
 src/ipc-paths.ts           — socket path: ${tmpdir}/copilotclaw-agent.sock
 ```

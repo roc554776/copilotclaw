@@ -18,7 +18,7 @@
                                                             (mocked in tests)
 ```
 
-- **Gateway**: singleton daemon on port 19741, manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json) via /api/status
+- **Gateway**: singleton daemon on port 19741, manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json) and agentCompatibility via /api/status; serves recent logs via /api/logs (ring buffer)
 - **Agent**: single process, manages agent sessions independently of channels
 - **Agent Session**: wraps a Copilot SDK session with its own sessionId, optionally bound to a channel
 - **ChannelProvider**: plugin interface for chat mediums (built-in chat, Discord, Telegram, etc.); providers handle medium-specific routes and receive message notifications
@@ -37,7 +37,7 @@ copilotclaw agent stop           → stop agent process only
 
 ## Process Model
 
-- Gateway: CLI spawns daemon (detached), CLI exits immediately
+- Gateway: CLI spawns daemon (detached), CLI checks /api/status agentCompatibility after healthy, exits 1 on incompatible
 - Agent: single process, singleton via Unix domain socket (`copilotclaw-agent.sock`)
 - Gateway start → agent process ensure: IPC status + version check, spawn if absent
 - Gateway daemon → periodic agent monitor (30s interval): re-runs ensureAgent, logs failures, recovers automatically; max 3 consecutive failures before error-level logging
@@ -69,6 +69,7 @@ copilotclaw agent stop           → stop agent process only
 - Startup direction: always gateway → agent (agent never starts gateway)
 - Agent process ensure: gateway start time only (NOT on user message POST)
 - Agent session ensure: agent process responsibility (polls gateway for pending)
-- Agent version check: gateway enforces minimum agent version at start; force-restart on mismatch
+- Agent version check: gateway enforces minimum agent version at start; force-restart on mismatch; checkCompatibility()/getMinAgentVersion() expose compatibility status
+- Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
