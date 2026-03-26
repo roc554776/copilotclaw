@@ -4,14 +4,14 @@ import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
 import { createChannelTools } from "./tools/channel.js";
 
-// Tools that only the channel-operator (parent agent) calls. Subagents never have
-// copilotclaw_receive_input and have no reason to call the other two channel tools.
-// Used to gate onPostToolUse reminder injection — subagents must NOT receive reminders.
-const PARENT_AGENT_TOOL_NAMES = new Set([
-  "copilotclaw_send_message",
-  "copilotclaw_receive_input",
-  "copilotclaw_list_messages",
-]);
+// The only tool exclusive to the channel-operator (parent agent).
+// Subagents (worker) never receive copilotclaw_receive_input — they use
+// copilotclaw_send_message and copilotclaw_list_messages which are shared.
+// Used to gate onPostToolUse reminder/notification injection:
+// the SDK hook system provides no mechanism to distinguish parent vs subagent
+// tool calls (sessionId is always the same, no parentToolCallId in hook inputs),
+// so we gate on the one tool name that is parent-exclusive.
+const PARENT_ONLY_TOOL = "copilotclaw_receive_input";
 
 const SYSTEM_REMINDER =
   `<system>\n` +
@@ -276,11 +276,12 @@ export class AgentSessionManager {
           try {
             if (signal.aborted) return;
 
-            // Only fire for parent agent (channel-operator) tool calls.
-            // PARENT_AGENT_TOOL_NAMES contains only the three channel-operation tools
-            // that subagents never receive. For built-in tools we cannot distinguish
-            // parent vs subagent, so skip entirely (safe side).
-            const isParentAgentTool = PARENT_AGENT_TOOL_NAMES.has(input.toolName);
+            // Only fire for the parent agent (channel-operator).
+            // copilotclaw_receive_input is the ONLY tool exclusive to the parent —
+            // copilotclaw_send_message and copilotclaw_list_messages are shared with
+            // subagents (worker), and the SDK hook system has no way to distinguish
+            // parent vs subagent calls (same sessionId, no parentToolCallId in hooks).
+            const isParentAgentTool = input.toolName === PARENT_ONLY_TOOL;
             if (!isParentAgentTool) return;
 
             const parts: string[] = [];

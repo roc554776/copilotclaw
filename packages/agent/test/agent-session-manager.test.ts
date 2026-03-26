@@ -652,34 +652,65 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     // 30% usage (≥ lastReminderPercent 0% + 10% threshold)
     mockSession.emit("session.usage_info", { data: { currentTokens: 30000, tokenLimit: 100000 } });
 
-    const result = await hook({ toolName: "copilotclaw_send_message" });
+    // Only copilotclaw_receive_input triggers reminder (parent-exclusive tool)
+    const result = await hook({ toolName: "copilotclaw_receive_input" });
     expect(result?.additionalContext).toContain("<system>");
     expect(result?.additionalContext).toContain("copilotclaw_receive_input");
 
     // Second call at same usage should NOT contain reminder (already fired)
-    const result2 = await hook({ toolName: "copilotclaw_send_message" });
+    const result2 = await hook({ toolName: "copilotclaw_receive_input" });
     expect(result2?.additionalContext ?? "").not.toContain("<system>");
 
     mockSession.emit("session.idle");
     await wait(30);
   });
 
-  it("does not fire for built-in tool names but fires for copilotclaw tools (subagent safety)", async () => {
+  it("does not fire for copilotclaw_send_message (shared with subagent)", async () => {
     const { mockSession, createSessionSpy } = await setupWithHookCapture();
 
     const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
     const hook = config.hooks.onPostToolUse;
 
-    // Trigger reminder need
     mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
 
-    // Built-in tool → early return (could be subagent)
-    const result = await hook({ toolName: "Read" });
+    // copilotclaw_send_message is shared with subagent worker → early return
+    const result = await hook({ toolName: "copilotclaw_send_message" });
     expect(result).toBeUndefined();
 
-    // copilotclaw tool → get the reminder
-    const result2 = await hook({ toolName: "copilotclaw_receive_input" });
-    expect(result2?.additionalContext).toContain("<system>");
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("does not fire for copilotclaw_list_messages (shared with subagent)", async () => {
+    const { mockSession, createSessionSpy } = await setupWithHookCapture();
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
+
+    const result = await hook({ toolName: "copilotclaw_list_messages" });
+    expect(result).toBeUndefined();
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("does not fire for built-in tools or debug mock tools", async () => {
+    const { mockSession, createSessionSpy } = await setupWithHookCapture();
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
+
+    expect(await hook({ toolName: "Read" })).toBeUndefined();
+    expect(await hook({ toolName: "Bash" })).toBeUndefined();
+    expect(await hook({ toolName: "copilotclaw_debug_mock_read_file" })).toBeUndefined();
+
+    // But copilotclaw_receive_input does fire
+    const result = await hook({ toolName: "copilotclaw_receive_input" });
+    expect(result?.additionalContext).toContain("<system>");
 
     mockSession.emit("session.idle");
     await wait(30);
@@ -693,7 +724,7 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
 
     mockSession.emit("session.compaction_complete", { data: { success: true } });
 
-    const result = await hook({ toolName: "copilotclaw_list_messages" });
+    const result = await hook({ toolName: "copilotclaw_receive_input" });
     expect(result?.additionalContext).toContain("<system>");
     expect(result?.additionalContext).toContain("CRITICAL REMINDER");
 
@@ -710,42 +741,8 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     // 5% usage — below the 10% threshold
     mockSession.emit("session.usage_info", { data: { currentTokens: 5000, tokenLimit: 100000 } });
 
-    const result = await hook({ toolName: "copilotclaw_send_message" });
+    const result = await hook({ toolName: "copilotclaw_receive_input" });
     expect(result?.additionalContext ?? "").not.toContain("<system>");
-
-    mockSession.emit("session.idle");
-    await wait(30);
-  });
-
-  it("does not fire reminder or notification for debug mock tool names (subagent safety)", async () => {
-    const { mockSession, createSessionSpy } = await setupWithHookCapture();
-
-    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
-    const hook = config.hooks.onPostToolUse;
-
-    // Trigger reminder need
-    mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
-
-    // Debug mock tools are NOT in PARENT_AGENT_TOOL_NAMES — hook should return early
-    const result = await hook({ toolName: "copilotclaw_debug_mock_read_file" });
-    expect(result).toBeUndefined();
-
-    mockSession.emit("session.idle");
-    await wait(30);
-  });
-
-  it("returns undefined for built-in tool calls (no notification, no reminder)", async () => {
-    const { mockSession, createSessionSpy } = await setupWithHookCapture();
-
-    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
-    const hook = config.hooks.onPostToolUse;
-
-    // Trigger reminder need
-    mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
-
-    // Built-in tool → early return, no additionalContext at all
-    const result = await hook({ toolName: "Bash" });
-    expect(result).toBeUndefined();
 
     mockSession.emit("session.idle");
     await wait(30);
