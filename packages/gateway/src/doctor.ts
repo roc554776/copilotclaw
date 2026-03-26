@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { MIN_AGENT_VERSION, semverSatisfies } from "./agent-manager.js";
-import { ensureConfigFile, getConfigFilePath, loadConfig, resolvePort } from "./config.js";
+import { NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, loadConfig, resolvePort } from "./config.js";
 import { getAgentStatus } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
@@ -99,8 +99,7 @@ export function checkZeroPremium(): DiagnosticResult {
     return { name: "zero-premium", result: "pass", message: "disabled" };
   }
 
-  // Known non-premium models
-  const NON_PREMIUM_MODELS = ["gpt-4.1-nano", "gpt-4.1-mini"];
+  // NON_PREMIUM_MODELS imported from config.ts (single source of truth within gateway)
 
   if (config.model !== undefined && !NON_PREMIUM_MODELS.includes(config.model)) {
     return {

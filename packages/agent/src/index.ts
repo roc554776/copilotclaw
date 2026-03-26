@@ -5,7 +5,7 @@ import { listenIpc } from "./ipc-server.js";
 const GATEWAY_URL = process.env["COPILOTCLAW_GATEWAY_URL"] ?? "http://localhost:19741";
 const POLL_INTERVAL_MS = 5000;
 
-export interface GatewayConfig {
+interface GatewayConfig {
   model: string | null;
   zeroPremium: boolean;
   mockTools: boolean;

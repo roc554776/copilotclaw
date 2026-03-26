@@ -6,6 +6,9 @@ const BASE_DIR = join(homedir(), ".copilotclaw");
 
 export const DEFAULT_PORT = 19741;
 
+/** Models that consume zero premium requests. Keep in sync with agent-session-manager.ts. */
+export const NON_PREMIUM_MODELS: readonly string[] = ["gpt-4.1-nano", "gpt-4.1-mini"];
+
 export interface CopilotclawConfig {
   upstream?: string;
   port?: number;

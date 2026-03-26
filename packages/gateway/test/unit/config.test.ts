@@ -5,6 +5,9 @@ describe("config", () => {
     delete process.env["COPILOTCLAW_UPSTREAM"];
     delete process.env["COPILOTCLAW_PORT"];
     delete process.env["COPILOTCLAW_PROFILE"];
+    delete process.env["COPILOTCLAW_MODEL"];
+    delete process.env["COPILOTCLAW_ZERO_PREMIUM"];
+    delete process.env["COPILOTCLAW_MOCK_TOOLS"];
   });
 
   it("getConfigFilePath returns default path without profile", async () => {

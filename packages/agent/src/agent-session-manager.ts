@@ -213,7 +213,7 @@ export class AgentSessionManager {
 
     // Resume existing SDK session or create new one
     const session = entry.copilotSessionId !== undefined
-      ? await entry.client.resumeSession(entry.copilotSessionId, sessionConfig)
+      ? await entry.client.resumeSession(entry.copilotSessionId, { model: resolvedModel, ...sessionConfig })
       : await entry.client.createSession({ model: resolvedModel, ...sessionConfig });
 
     entry.copilotSessionId = session.sessionId;
@@ -237,7 +237,7 @@ export class AgentSessionManager {
   /** Resolve which model to use for session creation.
    * zeroPremium mode overrides premium models to the cheapest non-premium option. */
   private resolveModel(): string {
-    // Known non-premium models (consume 0 premium requests)
+    // Keep in sync with NON_PREMIUM_MODELS in packages/gateway/src/config.ts
     const NON_PREMIUM_MODELS = ["gpt-4.1-nano", "gpt-4.1-mini"];
     const DEFAULT_MODEL = "gpt-4.1";
 
