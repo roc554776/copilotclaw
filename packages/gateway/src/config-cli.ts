@@ -6,7 +6,9 @@ function log(message: string): void {
   console.error(`[config] ${message}`);
 }
 
-function parseValue(key: string, raw: string): string | number {
+const BOOLEAN_KEYS = new Set(["zeroPremium", "mockTools"]);
+
+function parseValue(key: string, raw: string): string | number | boolean {
   if (key === "port") {
     const n = parseInt(raw, 10);
     if (!Number.isFinite(n) || n <= 0 || n > 65535) {
@@ -14,6 +16,12 @@ function parseValue(key: string, raw: string): string | number {
       process.exit(1);
     }
     return n;
+  }
+  if (BOOLEAN_KEYS.has(key)) {
+    if (raw === "true" || raw === "1") return true;
+    if (raw === "false" || raw === "0") return false;
+    log(`invalid boolean value: ${raw} (must be true/false)`);
+    process.exit(1);
   }
   return raw;
 }

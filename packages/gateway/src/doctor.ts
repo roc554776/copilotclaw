@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { MIN_AGENT_VERSION, semverSatisfies } from "./agent-manager.js";
-import { ensureConfigFile, getConfigFilePath, resolvePort } from "./config.js";
+import { ensureConfigFile, getConfigFilePath, loadConfig, resolvePort } from "./config.js";
 import { getAgentStatus } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
@@ -93,6 +93,26 @@ export async function checkAgent(): Promise<DiagnosticResult> {
   return { name: "agent", result: "pass", message: `v${status.version} (boot: ${status.bootId ?? "?"})` };
 }
 
+export function checkZeroPremium(): DiagnosticResult {
+  const config = loadConfig();
+  if (!config.zeroPremium) {
+    return { name: "zero-premium", result: "pass", message: "disabled" };
+  }
+
+  // Known non-premium models
+  const NON_PREMIUM_MODELS = ["gpt-4.1-nano", "gpt-4.1-mini"];
+
+  if (config.model !== undefined && !NON_PREMIUM_MODELS.includes(config.model)) {
+    return {
+      name: "zero-premium",
+      result: "warn",
+      message: `zeroPremium is enabled but model "${config.model}" consumes premium requests — will be overridden to ${NON_PREMIUM_MODELS[0]}`,
+    };
+  }
+
+  return { name: "zero-premium", result: "pass", message: `enabled (model: ${config.model ?? NON_PREMIUM_MODELS[0]})` };
+}
+
 export function fixWorkspace(): boolean {
   try {
     ensureWorkspace();
@@ -128,6 +148,7 @@ export async function runDoctor(fix: boolean): Promise<boolean> {
   // Synchronous checks
   results.push(checkWorkspace());
   results.push(checkConfig());
+  results.push(checkZeroPremium());
 
   // Async checks
   results.push(await checkGateway());

@@ -28,6 +28,9 @@ export interface AgentSessionManagerOptions {
   staleTimeoutMs?: number;
   maxSessionAgeMs?: number;
   fetch?: typeof globalThis.fetch;
+  model?: string;
+  zeroPremium?: boolean;
+  mockTools?: boolean;
 }
 
 export interface StartSessionOptions {
@@ -48,6 +51,9 @@ export class AgentSessionManager {
   private readonly staleTimeoutMs: number;
   private readonly maxSessionAgeMs: number;
   private readonly fetchFn: typeof globalThis.fetch;
+  private readonly model: string | undefined;
+  private readonly zeroPremium: boolean;
+  private readonly mockTools: boolean;
   private generationCounter = 0;
 
   constructor(options: AgentSessionManagerOptions) {
@@ -55,6 +61,9 @@ export class AgentSessionManager {
     this.staleTimeoutMs = options.staleTimeoutMs ?? DEFAULT_STALE_TIMEOUT_MS;
     this.maxSessionAgeMs = options.maxSessionAgeMs ?? DEFAULT_MAX_SESSION_AGE_MS;
     this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.model = options.model;
+    this.zeroPremium = options.zeroPremium ?? false;
+    this.mockTools = options.mockTools ?? false;
   }
 
   getSessionStatuses(): Record<string, AgentSessionInfo> {
@@ -184,12 +193,28 @@ export class AgentSessionManager {
           return;
         },
       },
+      // Mock tools mode: restrict to safe built-in tools + copilotclaw_* + debug mock tools
+      ...(this.mockTools ? {
+        availableTools: [
+          "copilotclaw_send_message",
+          "copilotclaw_receive_input",
+          "copilotclaw_list_messages",
+          "copilotclaw_debug_mock_read_file",
+          "copilotclaw_debug_mock_write_file",
+          "copilotclaw_debug_mock_shell_exec",
+          "WebFetch",
+          "WebSearch",
+        ],
+      } : {}),
     };
+
+    // Resolve model: explicit config > zeroPremium auto-select > default
+    const resolvedModel = this.resolveModel();
 
     // Resume existing SDK session or create new one
     const session = entry.copilotSessionId !== undefined
       ? await entry.client.resumeSession(entry.copilotSessionId, sessionConfig)
-      : await entry.client.createSession({ model: "gpt-4.1", ...sessionConfig });
+      : await entry.client.createSession({ model: resolvedModel, ...sessionConfig });
 
     entry.copilotSessionId = session.sessionId;
     entry.info.status = "waiting";
@@ -207,6 +232,28 @@ export class AgentSessionManager {
       log: (message) => { console.error(`[agent:${logPrefix}] ${message}`); },
       shouldStop: () => entry.abortController.signal.aborted,
     });
+  }
+
+  /** Resolve which model to use for session creation.
+   * zeroPremium mode overrides premium models to the cheapest non-premium option. */
+  private resolveModel(): string {
+    // Known non-premium models (consume 0 premium requests)
+    const NON_PREMIUM_MODELS = ["gpt-4.1-nano", "gpt-4.1-mini"];
+    const DEFAULT_MODEL = "gpt-4.1";
+
+    if (this.zeroPremium) {
+      // If explicit model is set but is premium, override to non-premium
+      if (this.model !== undefined && !NON_PREMIUM_MODELS.includes(this.model)) {
+        console.error(`[agent] zeroPremium: overriding model ${this.model} → ${NON_PREMIUM_MODELS[0]}`);
+        return NON_PREMIUM_MODELS[0]!;
+      }
+      // If explicit model is non-premium, use it
+      if (this.model !== undefined) return this.model;
+      // No model specified, pick cheapest non-premium
+      return NON_PREMIUM_MODELS[0]!;
+    }
+
+    return this.model ?? DEFAULT_MODEL;
   }
 
   stopSession(sessionId: string): void {

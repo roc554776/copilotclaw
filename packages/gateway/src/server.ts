@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
 import type { ChannelProvider } from "./channel-provider.js";
-import { DEFAULT_PORT } from "./config.js";
+import { DEFAULT_PORT, getProfileName, loadConfig } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
 import { Store } from "./store.js";
 import { WsBroadcaster } from "./ws.js";
@@ -113,10 +113,16 @@ function createRequestHandler(
     if (fullPathname === "/api/status" && method === "GET") {
       const agentStatus = agentManager !== null ? await agentManager.getStatus() : null;
       const agentCompatibility = agentManager !== null ? await agentManager.checkCompatibility() : "unavailable";
+      const config = loadConfig();
       json(res, 200, {
-        gateway: { status: "running", version: GATEWAY_VERSION },
+        gateway: { status: "running", version: GATEWAY_VERSION, profile: getProfileName() ?? null },
         agent: agentStatus,
         agentCompatibility,
+        config: {
+          model: config.model ?? null,
+          zeroPremium: config.zeroPremium ?? false,
+          mockTools: config.mockTools ?? false,
+        },
       });
       return;
     }

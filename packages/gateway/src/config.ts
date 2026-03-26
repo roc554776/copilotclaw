@@ -9,6 +9,9 @@ export const DEFAULT_PORT = 19741;
 export interface CopilotclawConfig {
   upstream?: string;
   port?: number;
+  model?: string;
+  zeroPremium?: boolean;
+  mockTools?: boolean;
 }
 
 export function getProfileName(): string | undefined {
@@ -28,6 +31,12 @@ function parsePort(raw: string): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+function parseBool(raw: string): boolean | undefined {
+  if (raw === "1" || raw === "true") return true;
+  if (raw === "0" || raw === "false") return false;
+  return undefined;
+}
+
 export function loadConfig(profile?: string): CopilotclawConfig {
   const filePath = getConfigFilePath(profile);
   let fileConfig: CopilotclawConfig = {};
@@ -42,12 +51,27 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   // Environment variables take precedence over config file
   const envUpstream = process.env["COPILOTCLAW_UPSTREAM"];
   const envPort = process.env["COPILOTCLAW_PORT"];
+  const envModel = process.env["COPILOTCLAW_MODEL"];
+  const envZeroPremium = process.env["COPILOTCLAW_ZERO_PREMIUM"];
+  const envMockTools = process.env["COPILOTCLAW_MOCK_TOOLS"];
 
   const result: CopilotclawConfig = {};
+
   const upstream = (envUpstream !== undefined && envUpstream !== "") ? envUpstream : fileConfig.upstream;
   if (upstream !== undefined) result.upstream = upstream;
+
   const port = (envPort !== undefined && envPort !== "") ? parsePort(envPort) : fileConfig.port;
   if (port !== undefined && Number.isFinite(port) && port > 0 && port <= 65535) result.port = port;
+
+  const model = (envModel !== undefined && envModel !== "") ? envModel : fileConfig.model;
+  if (model !== undefined) result.model = model;
+
+  const zeroPremium = (envZeroPremium !== undefined && envZeroPremium !== "") ? parseBool(envZeroPremium) : fileConfig.zeroPremium;
+  if (zeroPremium !== undefined) result.zeroPremium = zeroPremium;
+
+  const mockTools = (envMockTools !== undefined && envMockTools !== "") ? parseBool(envMockTools) : fileConfig.mockTools;
+  if (mockTools !== undefined) result.mockTools = mockTools;
+
   return result;
 }
 
@@ -66,6 +90,9 @@ export function loadFileConfig(profile?: string): CopilotclawConfig {
 export const CONFIG_ENV_VARS: Record<string, string> = {
   upstream: "COPILOTCLAW_UPSTREAM",
   port: "COPILOTCLAW_PORT",
+  model: "COPILOTCLAW_MODEL",
+  zeroPremium: "COPILOTCLAW_ZERO_PREMIUM",
+  mockTools: "COPILOTCLAW_MOCK_TOOLS",
 };
 
 export function saveConfig(config: CopilotclawConfig, profile?: string): void {

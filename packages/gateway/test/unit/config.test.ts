@@ -81,4 +81,32 @@ describe("config", () => {
     const port = resolvePort("nonexistent-profile-" + Date.now());
     expect(port).toBe(19741);
   });
+
+  it("env var COPILOTCLAW_MODEL overrides config file", async () => {
+    process.env["COPILOTCLAW_MODEL"] = "gpt-4.1-nano";
+    const { loadConfig } = await import("../../src/config.js");
+    const config = loadConfig("nonexistent-profile-" + Date.now());
+    expect(config.model).toBe("gpt-4.1-nano");
+  });
+
+  it("env var COPILOTCLAW_ZERO_PREMIUM parses boolean", async () => {
+    process.env["COPILOTCLAW_ZERO_PREMIUM"] = "true";
+    const { loadConfig } = await import("../../src/config.js");
+    const config = loadConfig("nonexistent-profile-" + Date.now());
+    expect(config.zeroPremium).toBe(true);
+  });
+
+  it("env var COPILOTCLAW_MOCK_TOOLS parses boolean", async () => {
+    process.env["COPILOTCLAW_MOCK_TOOLS"] = "1";
+    const { loadConfig } = await import("../../src/config.js");
+    const config = loadConfig("nonexistent-profile-" + Date.now());
+    expect(config.mockTools).toBe(true);
+  });
+
+  it("invalid boolean env var is ignored", async () => {
+    process.env["COPILOTCLAW_ZERO_PREMIUM"] = "notabool";
+    const { loadConfig } = await import("../../src/config.js");
+    const config = loadConfig("nonexistent-profile-" + Date.now());
+    expect(config.zeroPremium).toBeUndefined();
+  });
 });

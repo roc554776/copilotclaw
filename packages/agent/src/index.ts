@@ -1,12 +1,29 @@
-import { AgentSessionManager } from "./agent-session-manager.js";
+import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { listenIpc } from "./ipc-server.js";
 
 const GATEWAY_URL = process.env["COPILOTCLAW_GATEWAY_URL"] ?? "http://localhost:19741";
 const POLL_INTERVAL_MS = 5000;
 
+export interface GatewayConfig {
+  model: string | null;
+  zeroPremium: boolean;
+  mockTools: boolean;
+}
+
 function log(message: string): void {
   console.error(`[agent] ${message}`);
+}
+
+async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
+  try {
+    const res = await fetch(`${gatewayUrl}/api/status`);
+    if (res.ok) {
+      const data = await res.json() as { config?: GatewayConfig };
+      if (data.config !== undefined) return data.config;
+    }
+  } catch {}
+  return { model: null, zeroPremium: false, mockTools: false };
 }
 
 async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, number>> {
@@ -38,9 +55,17 @@ async function main(): Promise<void> {
   const socketPath = getAgentSocketPath();
   let stopRequested = false;
 
-  const sessionManager = new AgentSessionManager({
+  // Fetch config from gateway
+  const config = await fetchGatewayConfig(GATEWAY_URL);
+  log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, mockTools=${config.mockTools}`);
+
+  const managerOpts: AgentSessionManagerOptions = {
     gatewayBaseUrl: GATEWAY_URL,
-  });
+    zeroPremium: config.zeroPremium,
+    mockTools: config.mockTools,
+  };
+  if (config.model !== null) managerOpts.model = config.model;
+  const sessionManager = new AgentSessionManager(managerOpts);
 
   const result = await listenIpc(
     socketPath,
