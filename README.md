@@ -15,7 +15,13 @@ cd copilotclaw
 mise install
 pnpm install
 pnpm run build
-cd packages/cli && npm pack && npm install -g copilotclaw-*.tgz && rm copilotclaw-*.tgz && cd ../..
+node --input-type=module -e "
+  import { rewriteWorkspaceDeps } from './packages/gateway/dist/update.js';
+  import { resolve } from 'node:path';
+  rewriteWorkspaceDeps(resolve('packages/cli'), process.cwd());
+"
+npm install -g ./packages/cli
+git checkout packages/cli/package.json
 ```
 
 After installation, the `copilotclaw` command is available globally.
