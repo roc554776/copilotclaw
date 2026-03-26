@@ -157,6 +157,11 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
           const event = JSON.parse(e.data);
           if (event.type === "new_message") {
             refreshChat();
+            // Agent sent a message — hide processing indicator and refresh status
+            if (event.data && event.data.sender === "agent") {
+              processingIndicator.classList.remove("visible");
+            }
+            refreshStatus();
           } else if (event.type === "status_update") {
             updateStatusBar(event.data);
           }
