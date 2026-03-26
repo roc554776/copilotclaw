@@ -26,6 +26,7 @@ interface AgentSessionEntry {
 export interface AgentSessionManagerOptions {
   gatewayBaseUrl: string;
   staleTimeoutMs?: number;
+  maxSessionAgeMs?: number;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -34,6 +35,7 @@ export interface StartSessionOptions {
 }
 
 const DEFAULT_STALE_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_MAX_SESSION_AGE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 
 export class AgentSessionManager {
   private readonly sessions = new Map<string, AgentSessionEntry>();
@@ -41,12 +43,14 @@ export class AgentSessionManager {
   private readonly restartCounts = new Map<string, number>(); // channelId → count (persists across session restarts)
   private readonly gatewayBaseUrl: string;
   private readonly staleTimeoutMs: number;
+  private readonly maxSessionAgeMs: number;
   private readonly fetchFn: typeof globalThis.fetch;
   private generationCounter = 0;
 
   constructor(options: AgentSessionManagerOptions) {
     this.gatewayBaseUrl = options.gatewayBaseUrl;
     this.staleTimeoutMs = options.staleTimeoutMs ?? DEFAULT_STALE_TIMEOUT_MS;
+    this.maxSessionAgeMs = options.maxSessionAgeMs ?? DEFAULT_MAX_SESSION_AGE_MS;
     this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -249,6 +253,7 @@ export class AgentSessionManager {
     if (restarts >= 1) {
       // Already restarted once and still stuck — flush and give up
       console.error(`[agent] session ${sessionId.slice(0, 8)} stuck after ${restarts} restart(s), flushing inputs`);
+      this.notifyChannelSessionTimedOut(boundChannelId);
       this.stopSession(sessionId);
       this.restartCounts.delete(countKey);
       return "flushed";
@@ -271,13 +276,37 @@ export class AgentSessionManager {
   private notifyChannelSessionStopped(channelId: string | undefined): void {
     if (channelId === undefined) return;
     const message = "[SYSTEM] Agent session stopped unexpectedly. A new session will start when you send a message.";
+    this.postChannelMessage(channelId, message);
+  }
+
+  private notifyChannelSessionTimedOut(channelId: string | undefined): void {
+    if (channelId === undefined) return;
+    const message = "[SYSTEM] Agent session timed out (stuck processing). A new session will start when you send a message.";
+    this.postChannelMessage(channelId, message);
+  }
+
+  private postChannelMessage(channelId: string, message: string): void {
     this.fetchFn(`${this.gatewayBaseUrl}/api/channels/${channelId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sender: "agent", message }),
     }).catch((err: unknown) => {
-      console.error(`[agent] failed to notify channel ${channelId} of session stop:`, err);
+      console.error(`[agent] failed to notify channel ${channelId}:`, err);
     });
+  }
+
+  /** Check if session has exceeded max age and should be stopped */
+  checkSessionMaxAge(sessionId: string): boolean {
+    const entry = this.sessions.get(sessionId);
+    if (entry === undefined) return false;
+    if (entry.info.status !== "waiting") return false;
+
+    const age = Date.now() - new Date(entry.info.startedAt).getTime();
+    if (age < this.maxSessionAgeMs) return false;
+
+    console.error(`[agent] session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), stopping`);
+    this.stopSession(sessionId);
+    return true;
   }
 
   /** Get the sessionId bound to a channel, if any */
