@@ -81,8 +81,8 @@ copilotclaw_list_messages(limit?)   — list recent channel messages (reverse-ch
 ### Key Files
 
 ```
-src/index.ts                    — singleton entry, gateway polling loop, max-age check then stale detection per cycle
-src/agent-session-manager.ts    — per-session lifecycle, channel binding, stale restart, max-age replace (disconnect + resumeSession, 2-day default), copilotSessionId stored on AgentSessionEntry, channel notifications (stopped/timed-out via postChannelMessage)
+src/index.ts                    — singleton entry, gateway polling loop, max-age check then stale detection per cycle; checks for saved sessions (hasSavedSession) when pending messages found, consumes saved copilotSessionId for deferred resume via startSession
+src/agent-session-manager.ts    — per-session lifecycle, channel binding, deferred resume pattern: checkSessionMaxAge and checkStaleAndHandle save copilotSessionId to savedCopilotSessionIds map and stop session (no immediate restart/retry); hasSavedSession/consumeSavedSession for retrieval; max-age 2-day default; channel notifications (stopped/timed-out via postChannelMessage)
 src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop), version reporting
 src/ipc-paths.ts                — socket path generation
 src/session-loop.ts             — session idle loop (subscribe/send/disconnect, no continuePrompt); runSession supports both createSession and resumeSession
