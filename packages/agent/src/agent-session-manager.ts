@@ -188,16 +188,18 @@ export class AgentSessionManager {
         console.error(`[agent] WARNING: invalid bindings file at ${this.persistPath}, ignoring`);
         return;
       }
-      const snapshot = parsed as BindingSnapshot;
-      for (const s of snapshot.sessions) {
-        if (typeof s.sessionId !== "string" || typeof s.startedAt !== "string") continue;
+      const sessions = (parsed as { sessions: unknown[] }).sessions;
+      for (const raw of sessions) {
+        if (typeof raw !== "object" || raw === null) continue;
+        const s = raw as Record<string, unknown>;
+        if (typeof s["sessionId"] !== "string" || typeof s["startedAt"] !== "string") continue;
         const entry: AgentSessionEntry = {
-          sessionId: s.sessionId,
-          copilotSessionId: typeof s.copilotSessionId === "string" ? s.copilotSessionId : undefined,
+          sessionId: s["sessionId"],
+          copilotSessionId: typeof s["copilotSessionId"] === "string" ? s["copilotSessionId"] : undefined,
           info: {
             status: "suspended",
-            startedAt: s.startedAt,
-            boundChannelId: typeof s.boundChannelId === "string" ? s.boundChannelId : undefined,
+            startedAt: s["startedAt"],
+            boundChannelId: typeof s["boundChannelId"] === "string" ? s["boundChannelId"] : undefined,
           },
           // Placeholder client — suspended sessions don't use it. Replaced on revive.
           client: new CopilotClient(),
@@ -205,13 +207,13 @@ export class AgentSessionManager {
           sessionPromise: Promise.resolve(),
           generation: ++this.generationCounter,
         };
-        this.sessions.set(s.sessionId, entry);
-        if (s.boundChannelId !== undefined) {
-          this.channelBindings.set(s.boundChannelId, s.sessionId);
+        this.sessions.set(entry.sessionId, entry);
+        if (entry.info.boundChannelId !== undefined) {
+          this.channelBindings.set(entry.info.boundChannelId, entry.sessionId);
         }
       }
-      if (snapshot.sessions.length > 0) {
-        console.error(`[agent] restored ${snapshot.sessions.length} suspended session binding(s) from disk`);
+      if (sessions.length > 0) {
+        console.error(`[agent] restored ${sessions.length} suspended session binding(s) from disk`);
       }
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
