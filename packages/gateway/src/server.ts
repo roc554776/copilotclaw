@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
 import type { ChannelProvider } from "./channel-provider.js";
+import { DEFAULT_PORT } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
 import { Store } from "./store.js";
-import { DEFAULT_PORT } from "./config.js";
 import { WsBroadcaster } from "./ws.js";
 
 export { DEFAULT_PORT };
