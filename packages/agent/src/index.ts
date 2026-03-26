@@ -1,12 +1,32 @@
-import { AgentSessionManager } from "./agent-session-manager.js";
+import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { listenIpc } from "./ipc-server.js";
 
 const GATEWAY_URL = process.env["COPILOTCLAW_GATEWAY_URL"] ?? "http://localhost:19741";
 const POLL_INTERVAL_MS = 5000;
 
+interface GatewayConfig {
+  model: string | null;
+  zeroPremium: boolean;
+  debugMockCopilotUnsafeTools: boolean;
+  workspaceRoot: string | null;
+}
+
 function log(message: string): void {
   console.error(`[agent] ${message}`);
+}
+
+async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
+  try {
+    const res = await fetch(`${gatewayUrl}/api/status`);
+    if (res.ok) {
+      const data = await res.json() as { config?: GatewayConfig };
+      if (data.config !== undefined) return data.config;
+    }
+  } catch (err: unknown) {
+    log(`failed to fetch gateway config: ${String(err)}`);
+  }
+  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, workspaceRoot: null };
 }
 
 async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, number>> {
@@ -38,9 +58,18 @@ async function main(): Promise<void> {
   const socketPath = getAgentSocketPath();
   let stopRequested = false;
 
-  const sessionManager = new AgentSessionManager({
+  // Fetch config from gateway
+  const config = await fetchGatewayConfig(GATEWAY_URL);
+  log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, debugMockCopilotUnsafeTools=${config.debugMockCopilotUnsafeTools}`);
+
+  const managerOpts: AgentSessionManagerOptions = {
     gatewayBaseUrl: GATEWAY_URL,
-  });
+    zeroPremium: config.zeroPremium,
+    debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
+  };
+  if (config.model !== null) managerOpts.model = config.model;
+  if (config.workspaceRoot !== null) managerOpts.workingDirectory = config.workspaceRoot;
+  const sessionManager = new AgentSessionManager(managerOpts);
 
   const result = await listenIpc(
     socketPath,
@@ -65,16 +94,11 @@ async function main(): Promise<void> {
       const pending = await fetchPendingCounts(GATEWAY_URL);
 
       for (const [channelId, count] of Object.entries(pending)) {
-        if (count > 0 && !sessionManager.hasSessionForChannel(channelId)) {
-          // Check for saved session to resume (deferred resume from max-age or stale timeout)
-          const savedCopilotSessionId = sessionManager.consumeSavedSession(channelId);
-          if (savedCopilotSessionId !== undefined) {
-            log(`resuming saved session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
-            sessionManager.startSession({ boundChannelId: channelId, copilotSessionId: savedCopilotSessionId });
-          } else {
-            log(`starting new session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
-            sessionManager.startSession({ boundChannelId: channelId });
-          }
+        if (count > 0 && !sessionManager.hasActiveSessionForChannel(channelId)) {
+          // startSession will revive a suspended session (with its saved copilotSessionId)
+          // or create a new one if no abstract session exists for this channel.
+          log(`starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
+          sessionManager.startSession({ boundChannelId: channelId });
         }
       }
 

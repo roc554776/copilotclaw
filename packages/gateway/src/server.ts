@@ -5,10 +5,11 @@ import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
 import type { ChannelProvider } from "./channel-provider.js";
-import { DEFAULT_PORT } from "./config.js";
+import { DEFAULT_PORT, getProfileName, loadConfig } from "./config.js";
+import { getWorkspaceRoot } from "./workspace.js";
 import { LogBuffer } from "./log-buffer.js";
 import { Store } from "./store.js";
-import { WsBroadcaster } from "./ws.js";
+import { SseBroadcaster } from "./sse-broadcaster.js";
 
 export { DEFAULT_PORT };
 
@@ -66,7 +67,7 @@ export interface ServerDeps {
   store?: Store;
   onStop?: () => void;
   agentManager?: AgentManager | null;
-  wsBroadcaster?: WsBroadcaster;
+  sseBroadcaster?: SseBroadcaster;
   channelProviders?: ChannelProvider[];
   logBuffer?: LogBuffer;
 }
@@ -113,11 +114,51 @@ function createRequestHandler(
     if (fullPathname === "/api/status" && method === "GET") {
       const agentStatus = agentManager !== null ? await agentManager.getStatus() : null;
       const agentCompatibility = agentManager !== null ? await agentManager.checkCompatibility() : "unavailable";
+      const config = loadConfig();
       json(res, 200, {
-        gateway: { status: "running", version: GATEWAY_VERSION },
+        gateway: { status: "running", version: GATEWAY_VERSION, profile: getProfileName() ?? null },
         agent: agentStatus,
         agentCompatibility,
+        config: {
+          model: config.model ?? null,
+          zeroPremium: config.zeroPremium ?? false,
+          debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
+          workspaceRoot: getWorkspaceRoot(),
+        },
       });
+      return;
+    }
+
+    if (fullPathname === "/api/quota" && method === "GET") {
+      const quota = agentManager !== null ? await agentManager.getQuota() : null;
+      if (quota !== null) {
+        json(res, 200, quota);
+      } else {
+        json(res, 503, { error: "quota not available (no active agent session)" });
+      }
+      return;
+    }
+
+    if (fullPathname === "/api/models" && method === "GET") {
+      const models = agentManager !== null ? await agentManager.getModels() : null;
+      if (models !== null) {
+        json(res, 200, models);
+      } else {
+        json(res, 503, { error: "models not available (no active agent session)" });
+      }
+      return;
+    }
+
+    // Session messages (physical session context detail)
+    const sessionMsgMatch = /^\/api\/sessions\/([^/]+)\/messages$/.exec(fullPathname);
+    if (sessionMsgMatch !== null && method === "GET") {
+      const sessionId = decodeURIComponent(sessionMsgMatch[1]!);
+      const messages = agentManager !== null ? await agentManager.getSessionMessages(sessionId) : null;
+      if (messages !== null) {
+        json(res, 200, messages);
+      } else {
+        json(res, 404, { error: "session not found or no messages available" });
+      }
       return;
     }
 
@@ -221,7 +262,7 @@ export interface ServerHandle {
   server: Server;
   port: number;
   store: Store;
-  wsBroadcaster: WsBroadcaster;
+  sseBroadcaster: SseBroadcaster;
   close: () => Promise<void>;
 }
 
@@ -232,12 +273,12 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const agentManager = options?.agentManager === null
     ? null
     : options?.agentManager ?? new AgentManager({ gatewayPort: port });
-  const wsBroadcaster = options?.wsBroadcaster ?? new WsBroadcaster();
+  const sseBroadcaster = options?.sseBroadcaster ?? new SseBroadcaster();
   const logBuffer = options?.logBuffer ?? new LogBuffer();
 
   // Channel providers: use provided list or default to built-in chat
   const channelProviders = options?.channelProviders ?? [
-    new BuiltinChatChannel({ store, agentManager, wsBroadcaster }),
+    new BuiltinChatChannel({ store, agentManager, sseBroadcaster }),
   ];
 
   const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer);
@@ -265,7 +306,7 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
         server,
         port: actualPort,
         store,
-        wsBroadcaster,
+        sseBroadcaster,
         close: async () => {
           for (const provider of channelProviders) {
             provider.close?.();

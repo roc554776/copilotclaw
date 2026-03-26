@@ -83,6 +83,46 @@ describe("IPC server", () => {
     expect(res["error"]).toBe("missing sessionId");
   });
 
+  it("responds to quota with error when no session manager", async () => {
+    const path = randomSocketPath();
+    const result = await listenIpc(path, () => {});
+    if (result.kind !== "server") return;
+    cleanup = () => result.handle.close();
+
+    const res = await sendIpcRequest(path, "quota");
+    expect(res["error"]).toBeTruthy();
+  });
+
+  it("responds to models with error when no session manager", async () => {
+    const path = randomSocketPath();
+    const result = await listenIpc(path, () => {});
+    if (result.kind !== "server") return;
+    cleanup = () => result.handle.close();
+
+    const res = await sendIpcRequest(path, "models");
+    expect(res["error"]).toBeTruthy();
+  });
+
+  it("responds to session_messages with error when no session manager", async () => {
+    const path = randomSocketPath();
+    const result = await listenIpc(path, () => {});
+    if (result.kind !== "server") return;
+    cleanup = () => result.handle.close();
+
+    const res = await sendIpcRequest(path, "session_messages", { sessionId: "nonexistent" });
+    expect(res["error"]).toBeTruthy();
+  });
+
+  it("responds to session_messages with error when sessionId is missing", async () => {
+    const path = randomSocketPath();
+    const result = await listenIpc(path, () => {});
+    if (result.kind !== "server") return;
+    cleanup = () => result.handle.close();
+
+    const res = await sendIpcRequest(path, "session_messages");
+    expect(res["error"]).toBe("missing sessionId");
+  });
+
   it("detects already-running instance", async () => {
     const path = randomSocketPath();
     const result1 = await listenIpc(path, () => {});

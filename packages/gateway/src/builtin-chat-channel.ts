@@ -1,14 +1,20 @@
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentManager } from "./agent-manager.js";
 import type { ChannelProvider } from "./channel-provider.js";
 import { renderDashboard, type DashboardAgentStatus } from "./dashboard.js";
 import type { Store } from "./store.js";
-import type { WsBroadcaster } from "./ws.js";
+import type { SseBroadcaster } from "./sse-broadcaster.js";
+
+const thisDir = dirname(fileURLToPath(import.meta.url));
+const GATEWAY_VERSION = (JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string }).version;
 
 export interface BuiltinChatChannelDeps {
   store: Store;
   agentManager: AgentManager | null;
-  wsBroadcaster: WsBroadcaster;
+  sseBroadcaster: SseBroadcaster;
 }
 
 /**
@@ -22,12 +28,12 @@ export class BuiltinChatChannel implements ChannelProvider {
   readonly type = "builtin-chat";
   private readonly store: Store;
   private readonly agentManager: AgentManager | null;
-  private readonly wsBroadcaster: WsBroadcaster;
+  private readonly sseBroadcaster: SseBroadcaster;
 
   constructor(deps: BuiltinChatChannelDeps) {
     this.store = deps.store;
     this.agentManager = deps.agentManager;
-    this.wsBroadcaster = deps.wsBroadcaster;
+    this.sseBroadcaster = deps.sseBroadcaster;
   }
 
   async handleRequest(req: IncomingMessage, res: ServerResponse, params: URLSearchParams): Promise<boolean> {
@@ -56,6 +62,7 @@ export class BuiltinChatChannel implements ChannelProvider {
               }
             }
             dashboardAgentStatus = {
+              gatewayVersion: GATEWAY_VERSION,
               sessionStatus: sessionStatus ?? "no session",
             };
             if (agentInfo.version !== undefined) {
@@ -81,7 +88,7 @@ export class BuiltinChatChannel implements ChannelProvider {
     // SSE events route
     if (pathname === "/api/events" && method === "GET") {
       const channelId = params.get("channel") ?? undefined;
-      this.wsBroadcaster.addClient(res, channelId);
+      this.sseBroadcaster.addClient(res, channelId);
       return true;
     }
 
@@ -89,7 +96,7 @@ export class BuiltinChatChannel implements ChannelProvider {
   }
 
   onMessage(channelId: string, sender: "user" | "agent", message: string): void {
-    this.wsBroadcaster.broadcast({
+    this.sseBroadcaster.broadcast({
       type: "new_message",
       channelId,
       data: { sender, message },
@@ -97,6 +104,6 @@ export class BuiltinChatChannel implements ChannelProvider {
   }
 
   close(): void {
-    this.wsBroadcaster.closeAll();
+    this.sseBroadcaster.closeAll();
   }
 }

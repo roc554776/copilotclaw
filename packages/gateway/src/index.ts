@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { resolvePort } from "./config.js";
+import { fileURLToPath } from "node:url";
+import { getProfileName, resolvePort } from "./config.js";
+
+const thisDir = dirname(fileURLToPath(import.meta.url));
+const GATEWAY_VERSION = (JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string }).version;
 
 const HEALTH_RETRY_COUNT = 5;
 const HEALTH_RETRY_INTERVAL_MS = 1000;
@@ -27,7 +31,6 @@ function sleep(ms: number): Promise<void> {
 }
 
 function spawnDaemon(options?: { forceAgentRestart?: boolean }): void {
-  const thisDir = dirname(fileURLToPath(import.meta.url));
   const daemonScript = join(thisDir, "daemon.js");
 
   const env = { ...process.env };
@@ -93,7 +96,24 @@ async function main(): Promise<void> {
   const initialStatus = await checkHealth(port);
 
   if (initialStatus === "healthy") {
-    log(`already running on port ${port}`);
+    // Check if the running gateway belongs to a different profile
+    const myProfile = getProfileName() ?? null;
+    try {
+      const statusRes = await fetch(`http://localhost:${port}/api/status`);
+      if (statusRes.ok) {
+        const status = await statusRes.json() as { gateway?: { profile?: string | null } };
+        const runningProfile = status.gateway?.profile ?? null;
+        if (runningProfile !== myProfile) {
+          const mine = myProfile ?? "(default)";
+          const theirs = runningProfile ?? "(default)";
+          log(`ERROR: port ${port} is occupied by a gateway with profile ${theirs}, but this is profile ${mine}`);
+          process.exit(1);
+        }
+      }
+    } catch {
+      // Cannot determine profile — proceed normally
+    }
+    log(`v${GATEWAY_VERSION} already running on port ${port}`);
     await checkAgentCompatibility(port, forceAgentRestart);
     log(`open http://localhost:${port} in your browser to chat with the agent`);
     log(`run 'copilotclaw stop' to shut down`);
@@ -106,7 +126,7 @@ async function main(): Promise<void> {
       await sleep(HEALTH_RETRY_INTERVAL_MS);
       const status = await checkHealth(port);
       if (status === "healthy") {
-        log("became healthy");
+        log(`v${GATEWAY_VERSION} became healthy`);
         await checkAgentCompatibility(port, forceAgentRestart);
         log(`open http://localhost:${port} in your browser to chat with the agent`);
         log(`run 'copilotclaw stop' to shut down`);
@@ -116,7 +136,7 @@ async function main(): Promise<void> {
         log("port freed, starting daemon...");
         spawnDaemon({ forceAgentRestart });
         if (await waitForHealthy(port)) {
-          log(`running on http://localhost:${port}`);
+          log(`v${GATEWAY_VERSION} running on http://localhost:${port}`);
           await checkAgentCompatibility(port, forceAgentRestart);
           log(`open http://localhost:${port} in your browser to chat with the agent`);
           log(`run 'copilotclaw stop' to shut down`);
@@ -135,7 +155,7 @@ async function main(): Promise<void> {
     throw new Error("daemon failed to start");
   }
 
-  log(`running on http://localhost:${port}`);
+  log(`v${GATEWAY_VERSION} running on http://localhost:${port}`);
   await checkAgentCompatibility(port, forceAgentRestart);
   log(`open http://localhost:${port} in your browser to chat with the agent`);
   log(`run 'copilotclaw stop' to shut down`);

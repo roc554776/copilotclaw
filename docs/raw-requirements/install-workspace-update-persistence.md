@@ -7,6 +7,20 @@
 - GitHub リポジトリからの取得が基本
 - ローカルに clone したものをソースとして npm グローバルインストールする方式は可
 
+<!-- 2026-03-26 -->
+## パッケージ構成の修正
+
+- root パッケージは `private: true` にして公開しない。root パッケージを `npm install -g` するのは間違い
+- CLI エントリポイント用のサブパッケージを作る（例: `packages/cli/`）
+  - `bin` フィールド、`files` フィールドはこのサブパッケージに持たせる
+  - このサブパッケージが `npm pack` / `npm install -g` の対象になる
+- サブパッケージ同士の依存関係は `dependencies` に `workspace:*` で宣言する
+  - 例: `packages/cli/` が `packages/gateway/` と `packages/agent/` に依存する場合、`"@copilotclaw/gateway": "workspace:*"` 等
+- 現状の問題:
+  - root パッケージを `npm install -g` しているため、monorepo の子パッケージの依存（`@github/copilot-sdk` 等）が解決されない
+  - `npm pack` した tgz に `node_modules/` が含まれず、インストール先で依存が見つからない
+  - agent が起動時に `ERR_MODULE_NOT_FOUND: Cannot find package '@github/copilot-sdk'` でクラッシュする
+
 ## Workspace 機能
 
 - copilotclaw の作業ディレクトリ兼設定ストレージとしての workspace がほしい
@@ -18,6 +32,11 @@
 - GitHub リポジトリからの git pull ベースの更新が基本
 - ローカル開発を考慮して、file URL をアップストリームとして設定して update もできるようにしたい
 - 参考: openclaw は `openclaw update` でセルフアップデート（git/npm 両対応）
+<!-- 2026-03-26 -->
+- update はインストール先とは分離された作業ディレクトリ（`~/.copilotclaw/source/`）で fetch → build → npm pack → npm install -g tgz する
+  - 理由: npm install -g 先に .git/ が存在する前提は fragile。作業ディレクトリを分離することで、file:// upstream の特別扱いも不要になる
+- デフォルトの upstream は https://github.com/roc554776/copilotclaw.git
+- file:// upstream も正常に動作する（開発用途）
 
 ## バージョン管理ポリシー
 
@@ -65,6 +84,26 @@
 - openclaw のような config set / get コマンドがほしい
   - CLI から設定ファイルを直接編集せずに設定値を変更・確認できるようにしたい
   - 参考: openclaw は `openclaw config set <key> <value>` / `openclaw config get <key>` を提供している
+<!-- 2026-03-26 -->
+- Config 設定追加: デフォルトで使用するモデル
+  - 設定がない場合には、プレミアムリクエストが最も少ないモデルを動的に選択する
+- Config 設定追加: ゼロプレミアムリクエストモード
+  - 用途: プレミアムリクエストを消費せずに利用したいユーザー向け
+  - オプショナルで、デフォルト false
+  - ゼロプレミアムリクエストモードが有効な場合、かつ、デフォルトモデルが指定されており、かつ、そのモデルがプレミアムリクエストを消費するモデルである場合には、プレミアムリクエストを消費しないモデルに自動的に切り替える
+  - ゼロプレミアムリクエストモードが有効かつ、プレミアムリクエストを消費しないモデルが存在しない場合には、ユーザーにエラーを通知する
+    - doctor でもチェックする
+- Config 設定追加: debug mock copilot unsafe tools for copilot enabled
+  - 目的: 開発中は、開発者のホストマシン上で動かすことになるので、危険なツールは使わせないようにしたい
+    - 例えば、ファイルシステムにアクセスするツールやシェル実行ツールは、開発中はモックに置き換えるなど
+    - web fetch 等はまあ問題ないと思う
+  - 設定ファイルで設定できる。オプショナルで、デフォルトは false
+  - これが true のときには、一部のツールはモックに置き換わる
+  - 置き換わるという表現をしているが、実際には、allow するツールを明示的に指定する
+    - 一部の安全なビルトインツール
+    - 通常の `copilotclaw_*` ツール
+    - `copilotclaw_debug_mock_*` という、危険なビルトインツールをモックに置き換えたツール
+  - `copilotclaw_*` ツールは基本的にはモックに置き換えない
 - 仕様検討の参考に openclaw の codebase を参照すべき
   - openclaw はあくまで参考であって、完全に同じにする必要はない
   - openclaw のよい点を取り入れる

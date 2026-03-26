@@ -1,7 +1,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getConfigFilePath, saveConfig } from "../../src/config.js";
-import { checkConfig, checkWorkspace, runDoctor } from "../../src/doctor.js";
+import { checkConfig, checkWorkspace, checkZeroPremium, runDoctor } from "../../src/doctor.js";
 import { ensureWorkspace, getDataDir } from "../../src/workspace.js";
 
 describe("doctor", () => {
@@ -15,6 +15,9 @@ describe("doctor", () => {
     delete process.env["COPILOTCLAW_UPSTREAM"];
     delete process.env["COPILOTCLAW_PORT"];
     delete process.env["COPILOTCLAW_PROFILE"];
+    delete process.env["COPILOTCLAW_MODEL"];
+    delete process.env["COPILOTCLAW_ZERO_PREMIUM"];
+    delete process.env["COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS"];
   });
 
   describe("checkWorkspace", () => {
@@ -66,6 +69,32 @@ describe("doctor", () => {
       writeFileSync(getConfigFilePath(), JSON.stringify({ port: 99999 }), "utf-8");
       const result = checkConfig();
       expect(result.result).toBe("warn");
+    });
+  });
+
+  describe("checkZeroPremium", () => {
+    it("returns pass when zeroPremium is disabled", () => {
+      saveConfig({});
+      const result = checkZeroPremium();
+      expect(result.result).toBe("pass");
+    });
+
+    it("returns warn when zeroPremium is enabled with a premium model", () => {
+      saveConfig({ zeroPremium: true, model: "gpt-4.1" });
+      const result = checkZeroPremium();
+      expect(result.result).toBe("warn");
+    });
+
+    it("returns pass when zeroPremium is enabled with a non-premium model", () => {
+      saveConfig({ zeroPremium: true, model: "gpt-4.1-nano" });
+      const result = checkZeroPremium();
+      expect(result.result).toBe("pass");
+    });
+
+    it("returns pass when zeroPremium is enabled with no model specified", () => {
+      saveConfig({ zeroPremium: true });
+      const result = checkZeroPremium();
+      expect(result.result).toBe("pass");
     });
   });
 

@@ -1,10 +1,16 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
+import { getUpdateDir } from "./workspace.js";
 
-const thisDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(thisDir, "..", "..", "..");
+const DEFAULT_UPSTREAM = "https://github.com/roc554776/copilotclaw.git";
+const PNPM_VERSION = "10.26.2";
+
+/** Run pnpm via npx so the user doesn't need pnpm globally installed. */
+function pnpm(args: string[], cwd: string): string {
+  return run(["npx", "-y", `pnpm@${PNPM_VERSION}`, ...args], cwd);
+}
 
 function log(message: string): void {
   console.error(`[update] ${message}`);
@@ -21,72 +27,98 @@ function run(args: string[], cwd: string): string {
   return (result.stdout ?? "").trim();
 }
 
-async function main(): Promise<void> {
-  // Determine upstream: env var > config file > default git remote
-  const config = loadConfig();
-  const upstream = config.upstream;
+/**
+ * Rewrite workspace:* dependencies to file: paths in the CLI package.json
+ * so that `npm install -g` can resolve them locally.
+ */
+export function rewriteWorkspaceDeps(cliDir: string, sourceRoot: string): void {
+  const pkgPath = join(cliDir, "package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as Record<string, unknown>;
+  const deps = pkg["dependencies"] as Record<string, string> | undefined;
+  if (deps === undefined) return;
 
-  try {
-    // Check if we're in a git repo
-    run(["git", "rev-parse", "--git-dir"], repoRoot);
-  } catch {
-    console.error("[update] not a git repository — update requires a git clone installation");
-    process.exit(1);
-  }
-
-  const beforeSha = run(["git", "rev-parse", "HEAD"], repoRoot);
-  log(`current: ${beforeSha.slice(0, 8)}`);
-
-  // If custom upstream is set (e.g. file:///path/to/repo), configure it
-  if (upstream !== undefined) {
-    log(`upstream: ${upstream}`);
-    try {
-      run(["git", "remote", "set-url", "origin", upstream], repoRoot);
-    } catch {
-      log("failed to set upstream URL");
-      process.exit(1);
+  for (const [name, version] of Object.entries(deps)) {
+    if (version.startsWith("workspace:")) {
+      // @copilotclaw/gateway → packages/gateway, @copilotclaw/agent → packages/agent
+      const shortName = name.replace("@copilotclaw/", "");
+      deps[name] = `file:${join(sourceRoot, "packages", shortName)}`;
     }
   }
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
+}
 
-  // Fetch and pull
+async function main(): Promise<void> {
+  const config = loadConfig();
+  const upstream = config.upstream ?? DEFAULT_UPSTREAM;
+  const updateDir = getUpdateDir();
+
+  log(`upstream: ${upstream}`);
+
+  // Ensure update directory exists with git init
+  if (!existsSync(join(updateDir, ".git"))) {
+    mkdirSync(updateDir, { recursive: true });
+    run(["git", "init"], updateDir);
+    log(`initialized source directory: ${updateDir}`);
+  }
+
+  // Get current SHA (may be empty on first run)
+  let beforeSha = "";
+  try {
+    beforeSha = run(["git", "rev-parse", "HEAD"], updateDir);
+  } catch {
+    // No commits yet — first fetch
+  }
+  if (beforeSha !== "") {
+    log(`current: ${beforeSha.slice(0, 8)}`);
+  }
+
+  // Fetch from upstream (shallow)
   log("fetching...");
   try {
-    run(["git", "fetch", "origin"], repoRoot);
+    run(["git", "fetch", "--depth", "1", upstream], updateDir);
   } catch (err: unknown) {
     console.error("[update] fetch failed:", err);
     process.exit(1);
   }
 
-  const branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repoRoot);
-  log(`branch: ${branch}`);
-
+  // Checkout FETCH_HEAD (detached HEAD)
   try {
-    run(["git", "pull", "origin", branch, "--ff-only"], repoRoot);
+    run(["git", "checkout", "FETCH_HEAD"], updateDir);
   } catch (err: unknown) {
-    console.error("[update] pull failed (non-fast-forward?):", err);
+    console.error("[update] checkout failed:", err);
     process.exit(1);
   }
 
-  const afterSha = run(["git", "rev-parse", "HEAD"], repoRoot);
+  const afterSha = run(["git", "rev-parse", "HEAD"], updateDir);
 
   if (beforeSha === afterSha) {
     log("already up to date");
     return;
   }
 
-  log(`updated: ${beforeSha.slice(0, 8)} → ${afterSha.slice(0, 8)}`);
+  log(`updated: ${(beforeSha || "(none)").slice(0, 8)} → ${afterSha.slice(0, 8)}`);
 
-  // Rebuild
+  // Build
   log("installing dependencies...");
-  run(["pnpm", "install", "--frozen-lockfile"], repoRoot);
+  pnpm(["install", "--frozen-lockfile"], updateDir);
 
   log("building...");
-  run(["pnpm", "run", "build"], repoRoot);
+  pnpm(["run", "build"], updateDir);
 
-  log("update complete — restart gateway and agent to apply");
+  // Rewrite workspace:* to file: paths for npm compatibility, then install globally
+  const cliDir = join(updateDir, "packages", "cli");
+  const cliPkgPath = join(cliDir, "package.json");
+  const originalPkgJson = readFileSync(cliPkgPath, "utf-8");
+  log("installing...");
+  try {
+    rewriteWorkspaceDeps(cliDir, updateDir);
+    run(["npm", "install", "-g", "."], cliDir);
+  } finally {
+    // Restore original package.json to keep working tree clean
+    writeFileSync(cliPkgPath, originalPkgJson, "utf-8");
+  }
+
+  log("update complete — restart gateway to apply");
 }
 
-main().catch((err: unknown) => {
-  console.error("Error:", err);
-  process.exit(1);
-});
+export { main as runUpdate };

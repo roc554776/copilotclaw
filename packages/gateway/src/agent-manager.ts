@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type AgentStatusResponse, getAgentStatus, stopAgent } from "./ipc-client.js";
+import { type AgentStatusResponse, getAgentModels, getAgentQuota, getAgentSessionMessages, getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 
 export const MIN_AGENT_VERSION = "0.3.0";
@@ -30,8 +31,17 @@ export class AgentManager {
 
   constructor(options: AgentManagerOptions) {
     this.gatewayPort = options.gatewayPort;
-    const thisDir = dirname(fileURLToPath(import.meta.url));
-    this.agentScript = options.agentScript ?? join(thisDir, "..", "..", "agent", "dist", "index.js");
+    const require = createRequire(import.meta.url);
+    let defaultAgentScript: string;
+    try {
+      defaultAgentScript = join(dirname(require.resolve("@copilotclaw/agent/package.json")), "dist", "index.js");
+    } catch {
+      // Fallback for monorepo dev (workspace symlinks)
+      console.error("[gateway] @copilotclaw/agent not found via package resolution, using relative path fallback");
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      defaultAgentScript = join(thisDir, "..", "..", "agent", "dist", "index.js");
+    }
+    this.agentScript = options.agentScript ?? defaultAgentScript;
   }
 
   /** Ensure agent process is running and compatible.
@@ -121,6 +131,21 @@ export class AgentManager {
 
   getMinAgentVersion(): string {
     return MIN_AGENT_VERSION;
+  }
+
+  async getQuota(): Promise<Record<string, unknown> | null> {
+    const socketPath = getAgentSocketPath();
+    return getAgentQuota(socketPath);
+  }
+
+  async getModels(): Promise<Record<string, unknown> | null> {
+    const socketPath = getAgentSocketPath();
+    return getAgentModels(socketPath);
+  }
+
+  async getSessionMessages(sessionId: string): Promise<unknown[] | null> {
+    const socketPath = getAgentSocketPath();
+    return getAgentSessionMessages(socketPath, sessionId);
   }
 
   async stopAgent(): Promise<void> {

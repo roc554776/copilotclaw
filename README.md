@@ -15,7 +15,7 @@ cd copilotclaw
 mise install
 pnpm install
 pnpm run build
-npm install -g .
+cd packages/cli && npm pack && npm install -g copilotclaw-*.tgz && rm copilotclaw-*.tgz && cd ../..
 ```
 
 After installation, the `copilotclaw` command is available globally.
@@ -26,7 +26,7 @@ After installation, the `copilotclaw` command is available globally.
 copilotclaw setup
 ```
 
-This creates `~/.copilotclaw/` with the data directory for persistent storage.
+This creates `~/.copilotclaw/` with the data directory and config file.
 
 ## Usage
 
@@ -36,16 +36,21 @@ This creates `~/.copilotclaw/` with the data directory for persistent storage.
 copilotclaw start
 ```
 
-The gateway starts as a background daemon on http://localhost:19741. Channel and message data is persisted to `~/.copilotclaw/data/store.json` and survives restarts.
+The gateway starts as a background daemon. Channel and message data is persisted to `~/.copilotclaw/data/store.json` and survives restarts.
 
 ### Chat
 
-Open http://localhost:19741 in your browser.
+Open the gateway URL shown at startup in your browser.
 
 - Type a message and press Send (or Enter)
 - Use the "+" button to create additional channels for parallel conversations
-- Click the status bar for detailed gateway/agent status
+- Click the status bar for detailed status (gateway, agent, Copilot sessions, premium requests, models)
 - A typing indicator shows when the agent is processing
+- Agent responses appear in the chat automatically — even when the agent responds with text instead of using the send message tool
+- The agent periodically reinforces its critical operating instructions to maintain stability during long sessions
+- Custom agent architecture: channel-operator handles user interaction, worker handles delegated subtasks
+- Subagent completion notifications are delivered to the parent agent in real time
+- Sessions survive physical disconnections — the agent automatically resumes with conversation history intact
 
 ### Stop
 
@@ -61,13 +66,7 @@ copilotclaw agent stop    # Stop agent only
 copilotclaw update
 ```
 
-Pulls the latest code from the upstream repository, installs dependencies, and rebuilds. Restart the gateway and agent after updating.
-
-For local development, set a file URL as the upstream:
-
-```sh
-COPILOTCLAW_UPSTREAM=file:///path/to/local/repo copilotclaw update
-```
+Pulls the latest code from the upstream repository, installs dependencies, rebuilds, and reinstalls. Restart the gateway after updating.
 
 ### Force-restart outdated agent
 
@@ -75,14 +74,56 @@ COPILOTCLAW_UPSTREAM=file:///path/to/local/repo copilotclaw update
 copilotclaw start --force-agent-restart
 ```
 
+### Diagnose environment
+
+```sh
+copilotclaw doctor        # Check workspace, config, gateway, agent
+copilotclaw doctor --fix  # Auto-fix fixable issues
+```
+
+## Configuration
+
+Config file: `~/.copilotclaw/config.json` (created by `copilotclaw setup`)
+
+```sh
+copilotclaw config get <key>          # Show config value
+copilotclaw config set <key> <value>  # Set config value
+```
+
+### Settings
+
+| Key | Type | Env var | Description |
+|:---|:---|:---|:---|
+| `upstream` | string | `COPILOTCLAW_UPSTREAM` | Git remote URL for update (e.g. `file:///path/to/repo`) |
+| `port` | number | `COPILOTCLAW_PORT` | Gateway HTTP port (default: 19741) |
+| `model` | string | `COPILOTCLAW_MODEL` | Default Copilot model. Unset = auto-select least premium model |
+| `zeroPremium` | boolean | `COPILOTCLAW_ZERO_PREMIUM` | Zero premium request mode (default: false) |
+| `debugMockCopilotUnsafeTools` | boolean | `COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS` | Dev mode: replace dangerous tools with mocks (default: false) |
+
+Environment variables override config file values.
+
+### Profiles
+
+Use `COPILOTCLAW_PROFILE` to run multiple independent instances:
+
+```sh
+COPILOTCLAW_PROFILE=staging copilotclaw setup
+COPILOTCLAW_PROFILE=staging copilotclaw start
+```
+
+Each profile gets its own workspace, config, gateway, agent, and IPC socket.
+
 ## Commands
 
 ```
-copilotclaw setup                Initialize workspace (~/.copilotclaw/)
+copilotclaw setup                Initialize workspace
 copilotclaw start [options]      Start the gateway daemon
 copilotclaw stop                 Stop the gateway (agent keeps running)
 copilotclaw restart              Restart the gateway (stop + start)
 copilotclaw update               Update copilotclaw (git pull + build)
+copilotclaw config get <key>     Show config value
+copilotclaw config set <key> <v> Set config value
+copilotclaw doctor [--fix]       Diagnose environment
 copilotclaw agent stop           Stop the agent process only
 ```
 
@@ -92,6 +133,7 @@ All persistent data is stored under `~/.copilotclaw/`:
 
 | Path | Purpose |
 |:---|:---|
+| `config.json` | Configuration |
 | `data/store.json` | Channels and message history |
 
 ## Contributing

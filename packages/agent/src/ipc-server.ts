@@ -77,6 +77,45 @@ function handleConnection(
               onStop();
             });
             break;
+          case "quota":
+            if (sessionManager !== null) {
+              sessionManager.getQuota().then((quota) => {
+                socket.write(JSON.stringify(quota ?? { error: "no active session" }) + "\n");
+              }).catch(() => {
+                socket.write(JSON.stringify({ error: "quota fetch failed" }) + "\n");
+              });
+            } else {
+              socket.write(JSON.stringify({ error: "no session manager" }) + "\n");
+            }
+            break;
+          case "models":
+            if (sessionManager !== null) {
+              sessionManager.getModels().then((models) => {
+                socket.write(JSON.stringify(models ?? { error: "no active session" }) + "\n");
+              }).catch(() => {
+                socket.write(JSON.stringify({ error: "models fetch failed" }) + "\n");
+              });
+            } else {
+              socket.write(JSON.stringify({ error: "no session manager" }) + "\n");
+            }
+            break;
+          case "session_messages": {
+            const sid = req.params?.["sessionId"] as string | undefined;
+            if (sid === undefined) {
+              socket.write(JSON.stringify({ error: "missing sessionId" }) + "\n");
+              break;
+            }
+            if (sessionManager !== null) {
+              sessionManager.getSessionMessages(sid).then((messages) => {
+                socket.write(JSON.stringify(messages ?? { error: "session not found" }) + "\n");
+              }).catch(() => {
+                socket.write(JSON.stringify({ error: "messages fetch failed" }) + "\n");
+              });
+            } else {
+              socket.write(JSON.stringify({ error: "no session manager" }) + "\n");
+            }
+            break;
+          }
           default:
             socket.write(JSON.stringify({ error: "unknown method" }) + "\n");
         }

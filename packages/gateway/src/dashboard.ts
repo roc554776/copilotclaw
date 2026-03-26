@@ -22,6 +22,7 @@ function renderTab(channel: Channel, isActive: boolean): string {
 
 export interface DashboardAgentStatus {
   version?: string;
+  gatewayVersion?: string;
   sessionStatus?: string;
   compatibility?: string;
 }
@@ -69,7 +70,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     #status-bar { padding: 0.3rem 1rem; background: #161b22; border-bottom: 1px solid #30363d; font-size: 0.75rem; color: #8b949e; cursor: pointer; user-select: none; }
     #status-bar:hover { color: #c9d1d9; }
     #status-modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 100; }
-    #status-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #161b22; border: 1px solid #30363d; border-radius: 0.75rem; padding: 1.5rem; min-width: 400px; max-width: 600px; z-index: 101; color: #c9d1d9; font-size: 0.85rem; }
+    #status-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #161b22; border: 1px solid #30363d; border-radius: 0.75rem; padding: 1.5rem; min-width: 400px; max-width: 600px; max-height: 80vh; overflow-y: auto; z-index: 101; color: #c9d1d9; font-size: 0.85rem; }
     #status-modal h3 { margin-bottom: 1rem; font-size: 1rem; color: #58a6ff; }
     #status-modal .section { margin-bottom: 1rem; }
     #status-modal .section-title { font-weight: 600; color: #8b949e; margin-bottom: 0.3rem; }
@@ -78,9 +79,9 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     #status-modal .value { color: #c9d1d9; }
     #status-modal .close-btn { position: absolute; top: 0.75rem; right: 1rem; background: none; border: none; color: #8b949e; cursor: pointer; font-size: 1.2rem; }
     #status-modal .close-btn:hover { color: #c9d1d9; }
-    .ws-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
-    .ws-connected { background: #3fb950; }
-    .ws-disconnected { background: #f85149; }
+    .sse-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
+    .sse-connected { background: #3fb950; }
+    .sse-disconnected { background: #f85149; }
     #processing-indicator { display: none; align-self: flex-start; }
     #processing-indicator.visible { display: flex; }
     .typing-dots { display: flex; gap: 0.3rem; padding: 0.6rem 1rem; background: #21262d; border-radius: 1rem; border-bottom-left-radius: 0.25rem; align-items: center; }
@@ -101,8 +102,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
 <body>
   <div id="status-bar">
     <button id="logs-btn" onclick="event.stopPropagation(); toggleLogs()">Logs</button>
-    <span class="ws-indicator ws-disconnected" id="ws-dot"></span>
-    <span id="status-text">gateway: running | agent: v${agentVersion}${compatLabel} | session: ${sessionState}</span>
+    <span class="sse-indicator sse-disconnected" id="sse-dot"></span>
+    <span id="status-text">gateway: v${escapeHtml(agentStatus?.gatewayVersion ?? "—")} | agent: v${agentVersion}${compatLabel} | session: ${sessionState}</span>
   </div>
   <div id="logs-panel"></div>
   <div id="status-modal-overlay" onclick="closeStatusModal()"></div>
@@ -134,7 +135,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     const statusModal = document.getElementById("status-modal");
     const statusModalOverlay = document.getElementById("status-modal-overlay");
     const statusModalContent = document.getElementById("status-modal-content");
-    const wsDot = document.getElementById("ws-dot");
+    const sseDot = document.getElementById("sse-dot");
     let processingIndicator = document.getElementById("processing-indicator");
 
     function escHtml(s) {
@@ -142,7 +143,18 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;");
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+    function elapsed(isoStr) {
+      const ms = Date.now() - new Date(isoStr).getTime();
+      if (isNaN(ms) || ms < 0) return "—";
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return s + "s";
+      const m = Math.floor(s / 60);
+      if (m < 60) return m + "m " + (s % 60) + "s";
+      const h = Math.floor(m / 60);
+      return h + "h " + (m % 60) + "m";
     }
 
     // --- Server-Sent Events ---
@@ -150,8 +162,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     function connectSSE() {
       if (!CHANNEL_ID) return;
       evtSource = new EventSource("/api/events?channel=" + encodeURIComponent(CHANNEL_ID));
-      evtSource.onopen = () => { wsDot.className = "ws-indicator ws-connected"; };
-      evtSource.onerror = () => { wsDot.className = "ws-indicator ws-disconnected"; };
+      evtSource.onopen = () => { sseDot.className = "sse-indicator sse-connected"; };
+      evtSource.onerror = () => { sseDot.className = "sse-indicator sse-disconnected"; };
       evtSource.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data);
@@ -174,7 +186,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       const sessStatus = data.sessionStatus || "—";
       const compat = data.compatibility || "";
       const compatLabel = compat && compat !== "compatible" ? " [" + compat + "]" : "";
-      statusText.textContent = "gateway: running | agent: v" + agentVer + compatLabel + " | session: " + sessStatus;
+      const gwVer = data.gatewayVersion || "—";
+      statusText.textContent = "gateway: v" + gwVer + " | agent: v" + agentVer + compatLabel + " | session: " + sessStatus;
       // Re-query in case innerHTML replacement created a new node
       processingIndicator = document.getElementById("processing-indicator") || processingIndicator;
       if (sessStatus === "processing") {
@@ -200,7 +213,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
           const bound = sessions.find(s => s.boundChannelId === CHANNEL_ID);
           sessStatus = bound ? bound.status : (sessions.length > 0 ? "other channel" : "no session");
         }
-        updateStatusBar({ agentVersion: agentVer, sessionStatus: sessStatus, compatibility: body.agentCompatibility || "unknown" });
+        updateStatusBar({ gatewayVersion: body.gateway?.version || "—", agentVersion: agentVer, sessionStatus: sessStatus, compatibility: body.agentCompatibility || "unknown" });
       } catch {}
     }
     setInterval(refreshStatus, 5000);
@@ -218,6 +231,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         const body = await statusRes.json();
         let html = '<div class="section"><div class="section-title">Gateway</div>';
         html += '<div class="row"><span class="label">Status</span><span class="value">' + escHtml(body.gateway?.status || "unknown") + '</span></div>';
+        html += '<div class="row"><span class="label">Version</span><span class="value">' + escHtml(body.gateway?.version || "—") + '</span></div>';
         html += '</div>';
         if (body.agent) {
           html += '<div class="section"><div class="section-title">Agent</div>';
@@ -231,6 +245,38 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
             for (const [id, sess] of entries) {
               const chLabel = sess.boundChannelId ? ' → ch:' + escHtml(sess.boundChannelId.slice(0,8)) : '';
               html += '<div class="row"><span class="label">' + escHtml(id.slice(0,8)) + chLabel + '</span><span class="value">' + escHtml(sess.status) + '</span></div>';
+              // Physical session details
+              if (sess.physicalSession) {
+                const ps = sess.physicalSession;
+                const psId = escHtml(ps.sessionId);
+                html += '<div style="margin-left:1rem;font-size:0.8rem;color:#8b949e">';
+                html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(ps.sessionId.slice(0,12)) + '</span></div>';
+                html += '<div class="row"><span class="label">Model</span><span class="value">' + escHtml(ps.model) + '</span></div>';
+                html += '<div class="row"><span class="label">State</span><span class="value">' + escHtml(ps.currentState) + '</span></div>';
+                if (ps.currentTokens != null && ps.tokenLimit != null) {
+                  const pct = Math.round(ps.currentTokens / ps.tokenLimit * 100);
+                  html += '<div class="row"><span class="label">Context</span><span class="value">' + escHtml(String(ps.currentTokens)) + ' / ' + escHtml(String(ps.tokenLimit)) + ' (' + pct + '%)</span></div>';
+                }
+                if (ps.totalInputTokens != null || ps.totalOutputTokens != null) {
+                  const inp = ps.totalInputTokens ?? 0;
+                  const out = ps.totalOutputTokens ?? 0;
+                  html += '<div class="row"><span class="label">Tokens used</span><span class="value">in: ' + escHtml(String(inp)) + ' / out: ' + escHtml(String(out)) + ' / total: ' + escHtml(String(inp + out)) + '</span></div>';
+                }
+                html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + ' (' + elapsed(ps.startedAt) + ')</span></div>';
+                html += '<div style="margin-top:0.3rem"><a href="#" style="color:#58a6ff;text-decoration:none" data-session-id="' + psId + '" onclick="showSessionDetail(this.dataset.sessionId);return false;">Show context detail</a></div>';
+                html += '</div>';
+                html += '<div id="session-detail-' + psId + '" style="display:none;margin-left:1rem;margin-top:0.5rem;font-size:0.75rem;max-height:300px;overflow-y:auto;border:1px solid #30363d;padding:0.5rem;border-radius:0.5rem;white-space:pre-wrap;color:#8b949e"></div>';
+              }
+              // Subagent sessions
+              const subs = sess.subagentSessions || [];
+              if (subs.length > 0) {
+                html += '<div style="margin-left:1rem;font-size:0.8rem">';
+                html += '<div class="section-title">Subagents (' + escHtml(String(subs.length)) + ')</div>';
+                for (const sub of subs) {
+                  html += '<div class="row"><span class="label">' + escHtml(sub.agentDisplayName || sub.agentName) + '</span><span class="value">' + escHtml(sub.status) + '</span></div>';
+                }
+                html += '</div>';
+              }
             }
             html += '</div>';
           } else {
@@ -239,6 +285,60 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         } else {
           html += '<div class="section"><div class="section-title">Agent</div><div class="row"><span class="label">Not running</span></div></div>';
         }
+        // Quota — try /api/quota first, fall back to latestQuotaSnapshots from session data
+        let quotaSnapshots = null;
+        try {
+          const quotaRes = await fetch("/api/quota");
+          if (quotaRes.ok) {
+            const quotaData = await quotaRes.json();
+            quotaSnapshots = quotaData.quotaSnapshots || null;
+          }
+        } catch { /* quota API not available */ }
+        // Fallback: use latestQuotaSnapshots from any active physical session
+        if (quotaSnapshots === null && body.agent?.sessions) {
+          for (const sess of Object.values(body.agent.sessions)) {
+            if (sess.physicalSession?.latestQuotaSnapshots) {
+              quotaSnapshots = sess.physicalSession.latestQuotaSnapshots;
+              break;
+            }
+          }
+        }
+        {
+          const snapshots = quotaSnapshots || {};
+          const keys = Object.keys(snapshots);
+          if (keys.length > 0) {
+            html += '<div class="section"><div class="section-title">Premium Requests</div>';
+            for (const key of keys) {
+              const q = snapshots[key];
+              const used = q.usedRequests ?? 0;
+              const total = q.entitlementRequests ?? 0;
+              const remaining = total - used;
+              html += '<div class="row"><span class="label">' + escHtml(key) + '</span><span class="value">' + escHtml(String(remaining)) + ' / ' + escHtml(String(total)) + '</span></div>';
+              if (q.overage > 0) {
+                html += '<div class="row"><span class="label">Overage</span><span class="value">' + escHtml(String(q.overage)) + '</span></div>';
+              }
+            }
+            html += '</div>';
+          }
+        }
+
+        // Models
+        try {
+          const modelsRes = await fetch("/api/models");
+          if (modelsRes.ok) {
+            const modelsData = await modelsRes.json();
+            const models = modelsData.models || [];
+            if (models.length > 0) {
+              html += '<div class="section"><div class="section-title">Available Models</div>';
+              for (const m of models) {
+                const multiplier = m.billing?.multiplier ?? "?";
+                html += '<div class="row"><span class="label">' + escHtml(m.id) + '</span><span class="value">x' + escHtml(String(multiplier)) + '</span></div>';
+              }
+              html += '</div>';
+            }
+          }
+        } catch { /* models not available */ }
+
         statusModalContent.innerHTML = html;
       } catch {
         statusModalContent.textContent = "Failed to load status";
@@ -249,6 +349,46 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       statusModal.style.display = "none";
       statusModalOverlay.style.display = "none";
     }
+
+    async function showSessionDetail(sessionId) {
+      const detailEl = document.getElementById("session-detail-" + sessionId);
+      if (!detailEl) return;
+      if (detailEl.style.display !== "none") {
+        detailEl.style.display = "none";
+        return;
+      }
+      detailEl.textContent = "Loading context...";
+      detailEl.style.display = "block";
+      try {
+        const res = await fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/messages");
+        if (!res.ok) {
+          detailEl.textContent = "Failed to load: " + res.status;
+          return;
+        }
+        const messages = await res.json();
+        if (!Array.isArray(messages) || messages.length === 0) {
+          detailEl.textContent = "(no messages)";
+          return;
+        }
+        let text = "";
+        for (const msg of messages) {
+          const type = msg.type || "unknown";
+          if (type === "user.message") {
+            text += "[user] " + (msg.data?.content || "") + "\\n\\n";
+          } else if (type === "assistant.message") {
+            text += "[assistant] " + (msg.data?.content || "") + "\\n\\n";
+          } else if (type === "tool.execution_start") {
+            text += "[tool:" + (msg.data?.toolName || "?") + "] started\\n";
+          } else if (type === "session.start" || type === "session.resume") {
+            text += "[" + type + "]\\n";
+          }
+        }
+        detailEl.textContent = text || "(no displayable messages)";
+      } catch (err) {
+        detailEl.textContent = "Error: " + err.message;
+      }
+    }
+    window.showSessionDetail = showSessionDetail;
 
     // --- Chat ---
     async function sendMessage() {

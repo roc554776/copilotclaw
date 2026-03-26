@@ -10,6 +10,17 @@ const KEEPALIVE_INSTRUCTION = `[SYSTEM] No user message received (keepalive cycl
 
 export type AgentStatusChange = "waiting" | "processing";
 
+export interface SubagentCompletionInfo {
+  toolCallId: string;
+  agentName: string;
+  status: "completed" | "failed";
+  error?: string | undefined;
+  model?: string | undefined;
+  totalToolCalls?: number | undefined;
+  totalTokens?: number | undefined;
+  durationMs?: number | undefined;
+}
+
 export interface ChannelToolDeps {
   gatewayBaseUrl: string;
   channelId: string;
@@ -18,6 +29,8 @@ export interface ChannelToolDeps {
   fetch?: typeof globalThis.fetch;
   abortSignal?: AbortSignal;
   onStatusChange?: (status: AgentStatusChange) => void;
+  /** Drain all pending subagent completion events. Returns and clears the queue. */
+  drainSubagentCompletions?: () => SubagentCompletionInfo[];
 }
 
 interface NextInputResponse {
@@ -106,12 +119,28 @@ export function createChannelTools(deps: ChannelToolDeps) {
     handler: async () => {
       deps.onStatusChange?.("waiting");
       const inputs = await pollNextInputs(deps);
+
+      // Drain subagent completions that occurred while waiting
+      const subagentCompletions = deps.drainSubagentCompletions?.() ?? [];
+      const subagentNotice = subagentCompletions.length > 0
+        ? "[SUBAGENT COMPLETED] " + subagentCompletions.map((c) =>
+            `${c.agentName} ${c.status}${c.error ? ` (error: ${c.error})` : ""}` +
+            `${c.totalTokens !== undefined ? ` [tokens: ${c.totalTokens}]` : ""}` +
+            `${c.durationMs !== undefined ? ` [${c.durationMs}ms]` : ""}`
+          ).join("; ")
+        : "";
+
       if (inputs.length === 0) {
+        if (subagentCompletions.length > 0) {
+          // Subagent finished while no user message — return subagent info
+          deps.onStatusChange?.("processing");
+          return { userMessage: subagentNotice + RECEIVE_INSTRUCTION };
+        }
         return { userMessage: KEEPALIVE_INSTRUCTION };
       }
       deps.onStatusChange?.("processing");
       const combined = combineMessages(inputs);
-      return { userMessage: combined + RECEIVE_INSTRUCTION };
+      return { userMessage: combined + "\n\n" + subagentNotice + RECEIVE_INSTRUCTION };
     },
     skipPermission: true,
   });
