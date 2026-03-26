@@ -10,6 +10,11 @@ function log(message: string): void {
   console.error(`[update] ${message}`);
 }
 
+/** Extract .tgz filename from npm pack output. */
+export function parseTgzFilename(packOutput: string): string | undefined {
+  return packOutput.split("\n").filter((l) => l.trim().endsWith(".tgz")).pop()?.trim() || undefined;
+}
+
 function run(args: string[], cwd: string): string {
   const [cmd, ...rest] = args;
   if (cmd === undefined) throw new Error("run: empty command");
@@ -82,7 +87,10 @@ async function main(): Promise<void> {
   // Pack and reinstall
   log("packing...");
   const packOutput = run(["npm", "pack"], updateDir);
-  const tgzFile = packOutput.split("\n").pop() ?? "";
+  const tgzFile = parseTgzFilename(packOutput);
+  if (tgzFile === undefined) {
+    throw new Error("npm pack produced no .tgz file");
+  }
   const tgzPath = join(updateDir, tgzFile);
 
   log("installing...");
