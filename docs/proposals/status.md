@@ -55,6 +55,7 @@
 - パッケージ構成の修正（root `private: true`、`packages/cli/` 新設、`workspace:*` 依存宣言、`npm pack` + `npm install -g tgz`）
 
 **今後の課題:**
+- Profile 機能の完成（setup/daemon/doctor/config-cli/stop/restart/server の全コンポーネントで profile パラメータ伝搬が欠落 — 8ファイル29箇所の修正が必要）
 - Workspace Bootstrap Files（SOUL.md, AGENTS.md, USER.md, TOOLS.md のテンプレート生成と自発的ロード）
 - Memory（MEMORY.md + memory/YYYY-MM-DD.md による永続記憶）
 - Workspace Git 管理（setup 時の git init）

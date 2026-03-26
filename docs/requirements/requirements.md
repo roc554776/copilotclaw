@@ -14,3 +14,4 @@
 | [testing.md](testing.md) | 自動テストの義務化 |
 | [infrastructure.md](infrastructure.md) | monorepo 構成・Dashboard・Session 可視化・Profile・設定・CLI 設計 |
 | [workspace.md](workspace.md) | Workspace Bootstrap Files・Memory・Git 管理 |
+| [profile.md](profile.md) | Profile 機能の完成（profile 別動作の網羅的修正） |
