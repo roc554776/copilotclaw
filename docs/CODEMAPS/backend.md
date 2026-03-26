@@ -56,7 +56,7 @@ src/ipc-paths.ts           — socket path: ${tmpdir}/copilotclaw-agent.sock
 
 ```
 → {"method":"status"}
-← {"version":"0.1.0","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id"}}}
+← {"version":"0.1.0","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"..."}}}
 
 → {"method":"session_status","params":{"sessionId":"sess-id"}}
 ← {"status":"processing","startedAt":"...","processingStartedAt":"...","boundChannelId":"ch-id"}
@@ -82,10 +82,10 @@ copilotclaw_list_messages(limit?)   — list recent channel messages (reverse-ch
 
 ```
 src/index.ts                    — singleton entry, gateway polling loop, max-age check then stale detection per cycle
-src/agent-session-manager.ts    — per-session lifecycle, channel binding, stale restart, max-age enforcement (2-day default), channel notifications (stopped/timed-out via postChannelMessage)
+src/agent-session-manager.ts    — per-session lifecycle, channel binding, stale restart, max-age replace (disconnect + resumeSession, 2-day default), copilotSessionId stored on AgentSessionEntry, channel notifications (stopped/timed-out via postChannelMessage)
 src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop), version reporting
 src/ipc-paths.ts                — socket path generation
-src/session-loop.ts             — session idle loop (subscribe/send/disconnect, no continuePrompt)
+src/session-loop.ts             — session idle loop (subscribe/send/disconnect, no continuePrompt); runSession supports both createSession and resumeSession
 src/copilot-session-adapter.ts  — CopilotSession → SessionLike adapter
 src/stop.ts                     — CLI stop command (IPC stop)
 src/tools/channel.ts            — send_message, receive_input, list_messages tools

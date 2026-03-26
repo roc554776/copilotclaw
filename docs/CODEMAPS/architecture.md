@@ -58,7 +58,7 @@ copilotclaw agent stop           → stop agent process only
 
 - Session ends normally (idle) → status set to "stopped" → gateway notified via POST messages
 - Session error → status "stopped" → gateway notified
-- Max age enforcement: sessions exceeding 2 days (default, configurable via maxSessionAgeMs) are stopped when in "waiting" status; checked each poll cycle before stale detection
+- Max age enforcement: sessions exceeding 2 days (default, configurable via maxSessionAgeMs) are replaced (disconnect + resumeSession) when in "waiting" status; channel binding is maintained across the replace; checked each poll cycle before stale detection
 - Stale detection: if processing >10 min with pending inputs, restart once; if stuck again, notify channel with timeout message, flush inputs
 - Channel notifications: session stopped and session timed out events post system messages to the bound channel via postChannelMessage helper
 
