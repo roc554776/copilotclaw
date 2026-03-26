@@ -142,10 +142,12 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;");
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
     }
     function elapsed(isoStr) {
       const ms = Date.now() - new Date(isoStr).getTime();
+      if (isNaN(ms) || ms < 0) return "—";
       const s = Math.floor(ms / 1000);
       if (s < 60) return s + "s";
       const m = Math.floor(s / 60);
@@ -323,7 +325,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       statusModalOverlay.style.display = "none";
     }
 
-    window.showSessionDetail = async function(sessionId) {
+    async function showSessionDetail(sessionId) {
       const detailEl = document.getElementById("session-detail-" + sessionId);
       if (!detailEl) return;
       if (detailEl.style.display !== "none") {
@@ -360,7 +362,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       } catch (err) {
         detailEl.textContent = "Error: " + err.message;
       }
-    };
+    }
+    window.showSessionDetail = showSessionDetail;
 
     // --- Chat ---
     async function sendMessage() {
