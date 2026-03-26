@@ -31,7 +31,6 @@ function sleep(ms: number): Promise<void> {
 }
 
 function spawnDaemon(options?: { forceAgentRestart?: boolean }): void {
-  const thisDir = dirname(fileURLToPath(import.meta.url));
   const daemonScript = join(thisDir, "daemon.js");
 
   const env = { ...process.env };
@@ -127,7 +126,7 @@ async function main(): Promise<void> {
       await sleep(HEALTH_RETRY_INTERVAL_MS);
       const status = await checkHealth(port);
       if (status === "healthy") {
-        log("became healthy");
+        log(`v${GATEWAY_VERSION} became healthy`);
         await checkAgentCompatibility(port, forceAgentRestart);
         log(`open http://localhost:${port} in your browser to chat with the agent`);
         log(`run 'copilotclaw stop' to shut down`);
