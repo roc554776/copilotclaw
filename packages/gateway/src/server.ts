@@ -7,14 +7,14 @@ import { BuiltinChatChannel } from "./builtin-chat-channel.js";
 import type { ChannelProvider } from "./channel-provider.js";
 import { LogBuffer } from "./log-buffer.js";
 import { Store } from "./store.js";
+import { DEFAULT_PORT } from "./config.js";
 import { WsBroadcaster } from "./ws.js";
+
+export { DEFAULT_PORT };
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string };
 const GATEWAY_VERSION = pkgJson.version;
-
-import { DEFAULT_PORT } from "./config.js";
-export { DEFAULT_PORT };
 
 const MAX_BODY_SIZE = 1_048_576; // 1 MB
 

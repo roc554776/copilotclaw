@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { loadConfig, saveConfig } from "./config.js";
-import { DEFAULT_PORT } from "./server.js";
+import { DEFAULT_PORT } from "./config.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
 
 function log(message: string): void {
