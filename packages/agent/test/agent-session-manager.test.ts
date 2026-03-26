@@ -844,14 +844,14 @@ describe("AgentSessionManager — subagent completion notification", () => {
       data: { toolCallId: "tc-1", agentName: "worker", agentDisplayName: "Worker" },
     });
 
-    // Next onPostToolUse (parent tool) should include subagent notification
+    // Next onPostToolUse (parent tool) should include subagent peek notification
     const result = await hook({ toolName: "copilotclaw_receive_input" });
-    expect(result?.additionalContext).toContain("[SUBAGENT COMPLETED]");
+    expect(result?.additionalContext).toContain("[SUBAGENT UPDATE]");
     expect(result?.additionalContext).toContain("worker completed");
-
-    // Second call should NOT include it (queue drained)
+    // onPostToolUse peeks the queue (does not drain) — receiveInput is the sole drain point.
+    // So the second call still sees the same completion info.
     const result2 = await hook({ toolName: "copilotclaw_receive_input" });
-    expect(result2?.additionalContext ?? "").not.toContain("[SUBAGENT COMPLETED]");
+    expect(result2?.additionalContext).toContain("[SUBAGENT UPDATE]");
 
     mockSession.emit("session.idle");
     await wait(30);
@@ -884,7 +884,7 @@ describe("AgentSessionManager — subagent completion notification", () => {
     });
 
     const result = await hook({ toolName: "copilotclaw_receive_input" });
-    expect(result?.additionalContext).toContain("[SUBAGENT COMPLETED]");
+    expect(result?.additionalContext).toContain("[SUBAGENT UPDATE]");
     expect(result?.additionalContext).toContain("worker failed");
     expect(result?.additionalContext).toContain("timeout");
 

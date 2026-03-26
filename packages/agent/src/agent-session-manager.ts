@@ -36,6 +36,8 @@ const CHANNEL_OPERATOR_PROMPT =
   "║ copilotclaw_receive_input.                                     ║\n" +
   "╚══════════════════════════════════════════════════════════════════╝";
 
+// Deliberate triple-NEVER in description: LLM-attention technique to strongly
+// discourage the CLI runtime from ever selecting this agent as a subagent.
 const CHANNEL_OPERATOR_CONFIG = {
   name: "channel-operator",
   displayName: "Channel Operator",
@@ -358,15 +360,15 @@ export class AgentSessionManager {
               parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_receive_input immediately to read it.`);
             }
 
-            // Notify parent about subagent completions that occurred during tool execution
-            const completions = subagentCompletionQueue.splice(0);
-            if (completions.length > 0) {
-              const notices = completions.map((c) =>
+            // Peek (don't drain) subagent completions — receiveInput is the sole drain point
+            // to avoid double-reporting from two consumers draining the same queue.
+            if (subagentCompletionQueue.length > 0) {
+              const notices = subagentCompletionQueue.map((c) =>
                 `${c.agentName} ${c.status}${c.error ? ` (error: ${c.error})` : ""}` +
                 `${c.totalTokens !== undefined ? ` [tokens: ${c.totalTokens}]` : ""}` +
                 `${c.durationMs !== undefined ? ` [${c.durationMs}ms]` : ""}`
               );
-              parts.push(`[SUBAGENT COMPLETED] ${notices.join("; ")}`);
+              parts.push(`[SUBAGENT UPDATE] ${notices.join("; ")} — call copilotclaw_receive_input to get full details.`);
             }
 
             if (shouldRemind) {
@@ -465,19 +467,24 @@ export class AgentSessionManager {
         }
       }
     });
+    // Type-safe helpers for extracting optional fields from SDK event data.
+    // The SDK's typed event handler narrows to base fields only; stats fields
+    // exist in the generated schema but are not exposed in the narrow type.
+    const asStr = (v: unknown): string | undefined => typeof v === "string" ? v : undefined;
+    const asNum = (v: unknown): number | undefined => typeof v === "number" ? v : undefined;
+
     session.on("subagent.completed", (event) => {
       const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
       if (sub !== undefined) sub.status = "completed";
-      // SDK typed event handler narrows to base fields; cast to access optional stats fields
       const d = event.data as Record<string, unknown>;
       subagentCompletionQueue.push({
         toolCallId: event.data.toolCallId,
         agentName: event.data.agentName,
         status: "completed",
-        model: d["model"] as string | undefined,
-        totalToolCalls: d["totalToolCalls"] as number | undefined,
-        totalTokens: d["totalTokens"] as number | undefined,
-        durationMs: d["durationMs"] as number | undefined,
+        model: asStr(d["model"]),
+        totalToolCalls: asNum(d["totalToolCalls"]),
+        totalTokens: asNum(d["totalTokens"]),
+        durationMs: asNum(d["durationMs"]),
       });
     });
     session.on("subagent.failed", (event) => {
@@ -488,11 +495,11 @@ export class AgentSessionManager {
         toolCallId: event.data.toolCallId,
         agentName: event.data.agentName,
         status: "failed",
-        error: d["error"] as string | undefined,
-        model: d["model"] as string | undefined,
-        totalToolCalls: d["totalToolCalls"] as number | undefined,
-        totalTokens: d["totalTokens"] as number | undefined,
-        durationMs: d["durationMs"] as number | undefined,
+        error: asStr(d["error"]),
+        model: asStr(d["model"]),
+        totalToolCalls: asNum(d["totalToolCalls"]),
+        totalTokens: asNum(d["totalTokens"]),
+        durationMs: asNum(d["durationMs"]),
       });
     });
     session.on("session.model_change", (event) => {

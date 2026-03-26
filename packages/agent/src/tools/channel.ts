@@ -123,7 +123,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
       // Drain subagent completions that occurred while waiting
       const subagentCompletions = deps.drainSubagentCompletions?.() ?? [];
       const subagentNotice = subagentCompletions.length > 0
-        ? "\n\n[SUBAGENT COMPLETED] " + subagentCompletions.map((c) =>
+        ? "[SUBAGENT COMPLETED] " + subagentCompletions.map((c) =>
             `${c.agentName} ${c.status}${c.error ? ` (error: ${c.error})` : ""}` +
             `${c.totalTokens !== undefined ? ` [tokens: ${c.totalTokens}]` : ""}` +
             `${c.durationMs !== undefined ? ` [${c.durationMs}ms]` : ""}`
@@ -134,13 +134,13 @@ export function createChannelTools(deps: ChannelToolDeps) {
         if (subagentCompletions.length > 0) {
           // Subagent finished while no user message — return subagent info
           deps.onStatusChange?.("processing");
-          return { userMessage: subagentNotice.trim() + RECEIVE_INSTRUCTION };
+          return { userMessage: subagentNotice + RECEIVE_INSTRUCTION };
         }
         return { userMessage: KEEPALIVE_INSTRUCTION };
       }
       deps.onStatusChange?.("processing");
       const combined = combineMessages(inputs);
-      return { userMessage: combined + subagentNotice + RECEIVE_INSTRUCTION };
+      return { userMessage: combined + "\n\n" + subagentNotice + RECEIVE_INSTRUCTION };
     },
     skipPermission: true,
   });
