@@ -24,3 +24,8 @@ export function getStoreFilePath(profile?: string): string {
 export function ensureWorkspace(profile?: string): void {
   mkdirSync(getDataDir(profile), { recursive: true });
 }
+
+/** Source directory for update (profile-independent — shared across all profiles). */
+export function getUpdateDir(): string {
+  return join(homedir(), ".copilotclaw", "source");
+}

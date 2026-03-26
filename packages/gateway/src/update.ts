@@ -1,22 +1,13 @@
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
+import { getUpdateDir } from "./workspace.js";
 
-const thisDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(thisDir, "..", "..", "..");
+const DEFAULT_UPSTREAM = "https://github.com/roc554776/copilotclaw.git";
 
 function log(message: string): void {
   console.error(`[update] ${message}`);
-}
-
-/** Determine if a rebuild is needed based on SHA comparison and upstream type. */
-export function shouldRebuild(beforeSha: string, afterSha: string, upstream: string | undefined): "up-to-date" | "sha-changed" | "file-upstream-rebuild" {
-  const isFileUpstream = upstream !== undefined && upstream.startsWith("file://");
-  const shaChanged = beforeSha !== afterSha;
-  if (shaChanged) return "sha-changed";
-  if (isFileUpstream) return "file-upstream-rebuild";
-  return "up-to-date";
 }
 
 function run(args: string[], cwd: string): string {
@@ -31,70 +22,76 @@ function run(args: string[], cwd: string): string {
 }
 
 async function main(): Promise<void> {
-  // Determine upstream: env var > config file > default git remote (origin)
   const config = loadConfig();
-  const upstream = config.upstream;
+  const upstream = config.upstream ?? DEFAULT_UPSTREAM;
+  const updateDir = getUpdateDir();
 
+  log(`upstream: ${upstream}`);
+
+  // Ensure update directory exists with git init
+  if (!existsSync(join(updateDir, ".git"))) {
+    mkdirSync(updateDir, { recursive: true });
+    run(["git", "init"], updateDir);
+    log(`initialized source directory: ${updateDir}`);
+  }
+
+  // Get current SHA (may be empty on first run)
+  let beforeSha = "";
   try {
-    // Check if we're in a git repo
-    run(["git", "rev-parse", "--git-dir"], repoRoot);
+    beforeSha = run(["git", "rev-parse", "HEAD"], updateDir);
   } catch {
-    console.error("[update] not a git repository — update requires a git clone installation");
-    process.exit(1);
+    // No commits yet — first fetch
+  }
+  if (beforeSha !== "") {
+    log(`current: ${beforeSha.slice(0, 8)}`);
   }
 
-  const beforeSha = run(["git", "rev-parse", "HEAD"], repoRoot);
-  log(`current: ${beforeSha.slice(0, 8)}`);
-
-  // Determine fetch source: custom upstream or default origin
-  const fetchSource = upstream ?? "origin";
-  if (upstream !== undefined) {
-    log(`upstream: ${upstream}`);
-  }
-
-  // Fetch from upstream (without modifying origin remote)
+  // Fetch from upstream (shallow)
   log("fetching...");
   try {
-    run(["git", "fetch", fetchSource], repoRoot);
+    run(["git", "fetch", "--depth", "1", upstream], updateDir);
   } catch (err: unknown) {
     console.error("[update] fetch failed:", err);
     process.exit(1);
   }
 
-  const branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repoRoot);
-  log(`branch: ${branch}`);
-
+  // Checkout FETCH_HEAD (detached HEAD)
   try {
-    run(["git", "pull", fetchSource, branch, "--ff-only"], repoRoot);
+    run(["git", "checkout", "FETCH_HEAD"], updateDir);
   } catch (err: unknown) {
-    console.error("[update] pull failed (non-fast-forward?):", err);
+    console.error("[update] checkout failed:", err);
     process.exit(1);
   }
 
-  const afterSha = run(["git", "rev-parse", "HEAD"], repoRoot);
+  const afterSha = run(["git", "rev-parse", "HEAD"], updateDir);
 
-  const rebuildDecision = shouldRebuild(beforeSha, afterSha, upstream);
-  if (rebuildDecision === "up-to-date") {
+  if (beforeSha === afterSha) {
     log("already up to date");
     return;
   }
 
-  if (rebuildDecision === "sha-changed") {
-    log(`updated: ${beforeSha.slice(0, 8)} → ${afterSha.slice(0, 8)}`);
-  } else {
-    log("file:// upstream — rebuilding");
-  }
+  log(`updated: ${(beforeSha || "(none)").slice(0, 8)} → ${afterSha.slice(0, 8)}`);
 
-  // Rebuild
+  // Build
   log("installing dependencies...");
-  run(["pnpm", "install", "--frozen-lockfile"], repoRoot);
+  run(["pnpm", "install", "--frozen-lockfile"], updateDir);
 
   log("building...");
-  run(["pnpm", "run", "build"], repoRoot);
+  run(["pnpm", "run", "build"], updateDir);
 
-  // Reinstall globally so the installed copy gets the new dist
-  log("reinstalling...");
-  run(["npm", "install", "-g", "."], repoRoot);
+  // Pack and reinstall
+  log("packing...");
+  const packOutput = run(["npm", "pack"], updateDir);
+  const tgzFile = packOutput.split("\n").pop() ?? "";
+  const tgzPath = join(updateDir, tgzFile);
+
+  log("installing...");
+  try {
+    run(["npm", "install", "-g", tgzPath], updateDir);
+  } finally {
+    // Clean up tgz
+    try { unlinkSync(tgzPath); } catch { /* ignore */ }
+  }
 
   log("update complete — restart gateway to apply");
 }

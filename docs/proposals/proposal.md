@@ -572,9 +572,16 @@ copilotclaw のセルフアップデート機能。
 
 - `copilotclaw update` コマンド
 - デフォルト upstream: `https://github.com/roc554776/copilotclaw.git`（config の `upstream` で変更可能）
-- 動作フロー: upstream から `git fetch` → `git pull --ff-only` → `pnpm install --frozen-lockfile` → `pnpm run build` → `npm install -g .`（再インストール）
+- 作業ディレクトリ: `~/.copilotclaw/source/`（profile 非依存 — ソースは全 profile で共有）
+- 動作フロー:
+  - `~/.copilotclaw/source/` が存在しなければ `git init`
+  - `git fetch <upstream> --depth 1` → `git checkout FETCH_HEAD`
+  - SHA 変更なし → `already up to date`
+  - `pnpm install --frozen-lockfile` → `pnpm run build`
+  - `npm pack` → tgz 生成
+  - `npm install -g <tgz>` → グローバルインストール更新
+  - tgz を削除
 - file URL アップストリーム対応（ローカル開発時に別ディレクトリのリポジトリを upstream に指定して update 可能）
-- file:// upstream の場合は SHA 比較をスキップして常にビルド + 再インストールする（`npm install -g` で SHA が一致してしまう問題を回避）
 - gateway 起動時のバージョンチェック通知
 
 ### Doctor

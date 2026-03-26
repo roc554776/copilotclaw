@@ -1,28 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { shouldRebuild } from "../../src/update.js";
+import { getUpdateDir } from "../../src/workspace.js";
 
-describe("shouldRebuild", () => {
-  it("returns sha-changed when SHAs differ with no upstream", () => {
-    expect(shouldRebuild("aaa", "bbb", undefined)).toBe("sha-changed");
+describe("update infrastructure", () => {
+  it("getUpdateDir returns a path under ~/.copilotclaw/", () => {
+    const dir = getUpdateDir();
+    expect(dir).toContain(".copilotclaw");
+    expect(dir).toContain("source");
   });
 
-  it("returns sha-changed when SHAs differ with https upstream", () => {
-    expect(shouldRebuild("aaa", "bbb", "https://github.com/org/repo.git")).toBe("sha-changed");
-  });
-
-  it("returns sha-changed when SHAs differ with file:// upstream", () => {
-    expect(shouldRebuild("aaa", "bbb", "file:///path/to/repo")).toBe("sha-changed");
-  });
-
-  it("returns up-to-date when SHAs match with no upstream", () => {
-    expect(shouldRebuild("aaa", "aaa", undefined)).toBe("up-to-date");
-  });
-
-  it("returns up-to-date when SHAs match with https upstream", () => {
-    expect(shouldRebuild("aaa", "aaa", "https://github.com/org/repo.git")).toBe("up-to-date");
-  });
-
-  it("returns file-upstream-rebuild when SHAs match with file:// upstream", () => {
-    expect(shouldRebuild("aaa", "aaa", "file:///path/to/repo")).toBe("file-upstream-rebuild");
+  it("getUpdateDir is profile-independent", () => {
+    const original = process.env["COPILOTCLAW_PROFILE"];
+    process.env["COPILOTCLAW_PROFILE"] = "test-profile";
+    try {
+      const dir = getUpdateDir();
+      // Should NOT contain the profile name — source dir is shared
+      expect(dir).not.toContain("test-profile");
+      expect(dir).toContain("source");
+    } finally {
+      if (original !== undefined) {
+        process.env["COPILOTCLAW_PROFILE"] = original;
+      } else {
+        delete process.env["COPILOTCLAW_PROFILE"];
+      }
+    }
   });
 });

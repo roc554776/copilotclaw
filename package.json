@@ -1,6 +1,6 @@
 {
   "name": "copilotclaw",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "packageManager": "pnpm@10.26.2",
   "bin": {

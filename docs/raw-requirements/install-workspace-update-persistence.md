@@ -19,10 +19,10 @@
 - ローカル開発を考慮して、file URL をアップストリームとして設定して update もできるようにしたい
 - 参考: openclaw は `openclaw update` でセルフアップデート（git/npm 両対応）
 <!-- 2026-03-26 -->
-- update の動作: upstream から fetch → pull → pnpm install → pnpm build → npm install -g .（再インストール）
-- file:// upstream の場合は SHA 比較をスキップして常にビルド + 再インストールする
-  - 理由: 開発中は file:// で自分のリポジトリを upstream に指定するが、npm install -g で SHA が一致してしまい更新がスキップされる
+- update はインストール先とは分離された作業ディレクトリ（`~/.copilotclaw/source/`）で fetch → build → npm pack → npm install -g tgz する
+  - 理由: npm install -g 先に .git/ が存在する前提は fragile。作業ディレクトリを分離することで、file:// upstream の特別扱いも不要になる
 - デフォルトの upstream は https://github.com/roc554776/copilotclaw.git
+- file:// upstream も正常に動作する（開発用途）
 
 ## バージョン管理ポリシー
 
