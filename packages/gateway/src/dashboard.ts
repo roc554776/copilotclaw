@@ -229,6 +229,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         const body = await statusRes.json();
         let html = '<div class="section"><div class="section-title">Gateway</div>';
         html += '<div class="row"><span class="label">Status</span><span class="value">' + escHtml(body.gateway?.status || "unknown") + '</span></div>';
+        html += '<div class="row"><span class="label">Version</span><span class="value">' + escHtml(body.gateway?.version || "—") + '</span></div>';
         html += '</div>';
         if (body.agent) {
           html += '<div class="section"><div class="section-title">Agent</div>';
