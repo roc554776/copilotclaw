@@ -44,9 +44,9 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   const envPort = process.env["COPILOTCLAW_PORT"];
 
   const result: CopilotclawConfig = {};
-  const upstream = envUpstream ?? fileConfig.upstream;
+  const upstream = (envUpstream !== undefined && envUpstream !== "") ? envUpstream : fileConfig.upstream;
   if (upstream !== undefined) result.upstream = upstream;
-  const port = envPort !== undefined ? parsePort(envPort) : fileConfig.port;
+  const port = (envPort !== undefined && envPort !== "") ? parsePort(envPort) : fileConfig.port;
   if (port !== undefined && Number.isFinite(port) && port > 0) result.port = port;
   return result;
 }
@@ -70,6 +70,7 @@ export const CONFIG_ENV_VARS: Record<string, string> = {
 
 export function saveConfig(config: CopilotclawConfig, profile?: string): void {
   const filePath = getConfigFilePath(profile);
+  mkdirSync(BASE_DIR, { recursive: true });
   writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
