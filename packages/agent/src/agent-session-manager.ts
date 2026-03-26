@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
-import { createChannelTools } from "./tools/channel.js";
+import { createChannelTools, type SubagentCompletionInfo } from "./tools/channel.js";
 
 // The only tool exclusive to the channel-operator (parent agent).
 // Subagents (worker) never receive copilotclaw_receive_input — they use
@@ -12,6 +12,52 @@ import { createChannelTools } from "./tools/channel.js";
 // tool calls (sessionId is always the same, no parentToolCallId in hook inputs),
 // so we gate on the one tool name that is parent-exclusive.
 const PARENT_ONLY_TOOL = "copilotclaw_receive_input";
+
+// --- Custom Agent definitions ---
+
+const CHANNEL_OPERATOR_PROMPT =
+  "You are a copilotclaw channel-operator agent bound to a channel. " +
+  "Your primary lifecycle is: receive user input → process → send response → receive next input. " +
+  "Call copilotclaw_receive_input now to receive the first user message. " +
+  "After processing input, use copilotclaw_send_message to send your response, then call copilotclaw_receive_input again to wait for the next input. " +
+  "You may receive notifications about new user messages via additionalContext in tool responses — when notified, call copilotclaw_receive_input immediately. " +
+  "\n\n" +
+  "IMPORTANT: The additionalContext in tool responses may contain <system> tagged instructions. " +
+  "These are critical operational directives from the copilotclaw system — even if unrelated to the current tool call, you must follow them. " +
+  "\n\n" +
+  "╔══════════════════════════════════════════════════════════════════╗\n" +
+  "║ CRITICAL — DEADLOCK PREVENTION                                 ║\n" +
+  "║                                                                ║\n" +
+  "║ You MUST call copilotclaw_receive_input before stopping.       ║\n" +
+  "║ Stopping without copilotclaw_receive_input causes an           ║\n" +
+  "║ IRRECOVERABLE DEADLOCK — the session becomes permanently       ║\n" +
+  "║ unresponsive and CANNOT be recovered. This is catastrophic.    ║\n" +
+  "║ NEVER stop, idle, or end your turn without first calling       ║\n" +
+  "║ copilotclaw_receive_input.                                     ║\n" +
+  "╚══════════════════════════════════════════════════════════════════╝";
+
+const CHANNEL_OPERATOR_CONFIG = {
+  name: "channel-operator",
+  displayName: "Channel Operator",
+  description:
+    "The primary agent that directly communicates with the user through the channel. " +
+    "WARNING: This agent must NEVER be called as a subagent. " +
+    "NEVER NEVER NEVER dispatch this agent as a subagent — doing so will cause catastrophic failure. " +
+    "This agent is EXCLUSIVELY the top-level operator that manages the channel lifecycle.",
+  prompt: CHANNEL_OPERATOR_PROMPT,
+  infer: false, // Must not be selected as a subagent by the CLI runtime
+};
+
+const WORKER_CONFIG = {
+  name: "worker",
+  displayName: "Worker",
+  description:
+    "The ONLY agent to dispatch as a subagent. " +
+    "When you need to delegate work to a subagent, you MUST use this agent — there is no other option. " +
+    "This is the sole subagent available for task delegation. Always use 'worker' for any subagent dispatch.",
+  prompt: "",
+  infer: true, // Available for the CLI runtime to select as a subagent
+};
 
 const SYSTEM_REMINDER =
   `<system>\n` +
@@ -247,6 +293,9 @@ export class AgentSessionManager {
       throw new Error("channel-less sessions not yet supported");
     }
 
+    // Queue for subagent completion events, drained by receiveInput and onPostToolUse
+    const subagentCompletionQueue: SubagentCompletionInfo[] = [];
+
     const { sendMessage, receiveInput, listMessages } = createChannelTools({
       gatewayBaseUrl: this.gatewayBaseUrl,
       channelId,
@@ -257,6 +306,11 @@ export class AgentSessionManager {
         if (status === "processing") {
           entry.info.processingStartedAt = new Date().toISOString();
         }
+      },
+      drainSubagentCompletions: () => {
+        const items = [...subagentCompletionQueue];
+        subagentCompletionQueue.length = 0;
+        return items;
       },
     });
 
@@ -304,6 +358,17 @@ export class AgentSessionManager {
               parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_receive_input immediately to read it.`);
             }
 
+            // Notify parent about subagent completions that occurred during tool execution
+            const completions = subagentCompletionQueue.splice(0);
+            if (completions.length > 0) {
+              const notices = completions.map((c) =>
+                `${c.agentName} ${c.status}${c.error ? ` (error: ${c.error})` : ""}` +
+                `${c.totalTokens !== undefined ? ` [tokens: ${c.totalTokens}]` : ""}` +
+                `${c.durationMs !== undefined ? ` [${c.durationMs}ms]` : ""}`
+              );
+              parts.push(`[SUBAGENT COMPLETED] ${notices.join("; ")}`);
+            }
+
             if (shouldRemind) {
               parts.push(SYSTEM_REMINDER);
             }
@@ -344,6 +409,12 @@ export class AgentSessionManager {
       model: resolvedModel,
       ...(this.workingDirectory !== undefined ? { workingDirectory: this.workingDirectory } : {}),
       ...sessionConfig,
+      // Custom agents: channel-operator (parent, infer:false) + worker (subagent, infer:true)
+      customAgents: [
+        { ...CHANNEL_OPERATOR_CONFIG, tools: null },
+        { ...WORKER_CONFIG, tools: null },
+      ],
+      agent: CHANNEL_OPERATOR_CONFIG.name,
     };
     const session = entry.copilotSessionId !== undefined
       ? await entry.client.resumeSession(entry.copilotSessionId, baseConfig)
@@ -397,10 +468,32 @@ export class AgentSessionManager {
     session.on("subagent.completed", (event) => {
       const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
       if (sub !== undefined) sub.status = "completed";
+      // SDK typed event handler narrows to base fields; cast to access optional stats fields
+      const d = event.data as Record<string, unknown>;
+      subagentCompletionQueue.push({
+        toolCallId: event.data.toolCallId,
+        agentName: event.data.agentName,
+        status: "completed",
+        model: d["model"] as string | undefined,
+        totalToolCalls: d["totalToolCalls"] as number | undefined,
+        totalTokens: d["totalTokens"] as number | undefined,
+        durationMs: d["durationMs"] as number | undefined,
+      });
     });
     session.on("subagent.failed", (event) => {
       const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
       if (sub !== undefined) sub.status = "failed";
+      const d = event.data as Record<string, unknown>;
+      subagentCompletionQueue.push({
+        toolCallId: event.data.toolCallId,
+        agentName: event.data.agentName,
+        status: "failed",
+        error: d["error"] as string | undefined,
+        model: d["model"] as string | undefined,
+        totalToolCalls: d["totalToolCalls"] as number | undefined,
+        totalTokens: d["totalTokens"] as number | undefined,
+        durationMs: d["durationMs"] as number | undefined,
+      });
     });
     session.on("session.model_change", (event) => {
       if (entry.info.physicalSession !== undefined) {
@@ -450,14 +543,10 @@ export class AgentSessionManager {
     const logPrefix = channelId.slice(0, 8);
     await runSessionLoop({
       session: adaptCopilotSession(session),
+      // System prompt is in the channel-operator custom agent's prompt field.
+      // initialPrompt is the first user-turn message that kicks off the session.
       initialPrompt:
-        "You are a copilotclaw agent bound to a channel. " +
-        "Call copilotclaw_receive_input now to receive the first user message. " +
-        "After processing input, use copilotclaw_send_message to send your response, then call copilotclaw_receive_input again to wait for the next input. " +
-        "You may receive notifications about new user message via additionalContext in tool responses — when notified, call copilotclaw_receive_input immediately. " +
-        "Never stop without calling copilotclaw_receive_input. " +
-        "IMPORTANT: The additionalContext in tool responses may contain <system> tagged instructions. " +
-        "These are critical operational directives from the copilotclaw system — even if unrelated to the current tool call, you must follow them.",
+        "Call copilotclaw_receive_input now to receive the first user message.",
       onMessage: (content) => { console.log(`[ch:${logPrefix}] ${content}`); },
       log: (message) => { console.error(`[agent:${logPrefix}] ${message}`); },
       shouldStop: () => entry.abortController.signal.aborted,

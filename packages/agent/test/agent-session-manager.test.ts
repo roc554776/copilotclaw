@@ -753,8 +753,140 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
 
     expect(mockSession.send).toHaveBeenCalled();
     const sendArg = mockSession.send.mock.calls[0]?.[0] as { prompt?: string } | undefined;
-    expect(sendArg?.prompt).toContain("<system>");
-    expect(sendArg?.prompt).toContain("additionalContext");
+    expect(sendArg?.prompt).toContain("copilotclaw_receive_input");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+});
+
+describe("AgentSessionManager — custom agents configuration", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("passes customAgents (channel-operator + worker) and agent field to createSession", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
+    installClientMock(createSessionSpy);
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-agents" });
+    await waitForPhysicalSession(manager);
+
+    const config = createSessionSpy.mock.calls[0]![0] as {
+      customAgents: Array<{ name: string; prompt: string; infer: boolean }>;
+      agent: string;
+    };
+
+    // Must have two custom agents
+    expect(config.customAgents).toHaveLength(2);
+
+    // channel-operator: infer false, has prompt with deadlock warning
+    const operator = config.customAgents.find((a) => a.name === "channel-operator");
+    expect(operator).toBeDefined();
+    expect(operator!.infer).toBe(false);
+    expect(operator!.prompt).toContain("DEADLOCK");
+    expect(operator!.prompt).toContain("copilotclaw_receive_input");
+
+    // worker: infer true, empty or minimal prompt
+    const worker = config.customAgents.find((a) => a.name === "worker");
+    expect(worker).toBeDefined();
+    expect(worker!.infer).toBe(true);
+
+    // Session starts with channel-operator active
+    expect(config.agent).toBe("channel-operator");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+});
+
+describe("AgentSessionManager — subagent completion notification", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("injects subagent completion info via onPostToolUse additionalContext", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
+    installClientMock(createSessionSpy);
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-sub-notify" });
+    await waitForPhysicalSession(manager);
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    // Emit subagent.completed event
+    mockSession.emit("subagent.completed", {
+      data: { toolCallId: "tc-1", agentName: "worker", agentDisplayName: "Worker" },
+    });
+
+    // Next onPostToolUse (parent tool) should include subagent notification
+    const result = await hook({ toolName: "copilotclaw_receive_input" });
+    expect(result?.additionalContext).toContain("[SUBAGENT COMPLETED]");
+    expect(result?.additionalContext).toContain("worker completed");
+
+    // Second call should NOT include it (queue drained)
+    const result2 = await hook({ toolName: "copilotclaw_receive_input" });
+    expect(result2?.additionalContext ?? "").not.toContain("[SUBAGENT COMPLETED]");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("injects subagent.failed info with error message", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
+    installClientMock(createSessionSpy);
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-sub-fail" });
+    await waitForPhysicalSession(manager);
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    mockSession.emit("subagent.failed", {
+      data: { toolCallId: "tc-2", agentName: "worker", agentDisplayName: "Worker", error: "timeout" },
+    });
+
+    const result = await hook({ toolName: "copilotclaw_receive_input" });
+    expect(result?.additionalContext).toContain("[SUBAGENT COMPLETED]");
+    expect(result?.additionalContext).toContain("worker failed");
+    expect(result?.additionalContext).toContain("timeout");
 
     mockSession.emit("session.idle");
     await wait(30);
