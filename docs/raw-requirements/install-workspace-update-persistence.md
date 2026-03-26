@@ -18,6 +18,11 @@
 - GitHub リポジトリからの git pull ベースの更新が基本
 - ローカル開発を考慮して、file URL をアップストリームとして設定して update もできるようにしたい
 - 参考: openclaw は `openclaw update` でセルフアップデート（git/npm 両対応）
+<!-- 2026-03-26 -->
+- update の動作: upstream から fetch → pull → pnpm install → pnpm build → npm install -g .（再インストール）
+- file:// upstream の場合は SHA 比較をスキップして常にビルド + 再インストールする
+  - 理由: 開発中は file:// で自分のリポジトリを upstream に指定するが、npm install -g で SHA が一致してしまい更新がスキップされる
+- デフォルトの upstream は https://github.com/roc554776/copilotclaw.git
 
 ## バージョン管理ポリシー
 

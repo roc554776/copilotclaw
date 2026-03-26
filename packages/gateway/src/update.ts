@@ -25,6 +25,7 @@ async function main(): Promise<void> {
   // Determine upstream: env var > config file > default git remote (origin)
   const config = loadConfig();
   const upstream = config.upstream;
+  const isFileUpstream = upstream !== undefined && upstream.startsWith("file://");
 
   try {
     // Check if we're in a git repo
@@ -64,12 +65,18 @@ async function main(): Promise<void> {
 
   const afterSha = run(["git", "rev-parse", "HEAD"], repoRoot);
 
-  if (beforeSha === afterSha) {
+  // file:// upstream: always rebuild (npm install -g copies the repo, so SHA matches even when source changed)
+  const shaChanged = beforeSha !== afterSha;
+  if (!shaChanged && !isFileUpstream) {
     log("already up to date");
     return;
   }
 
-  log(`updated: ${beforeSha.slice(0, 8)} → ${afterSha.slice(0, 8)}`);
+  if (shaChanged) {
+    log(`updated: ${beforeSha.slice(0, 8)} → ${afterSha.slice(0, 8)}`);
+  } else {
+    log("file:// upstream — rebuilding");
+  }
 
   // Rebuild
   log("installing dependencies...");
@@ -78,7 +85,11 @@ async function main(): Promise<void> {
   log("building...");
   run(["pnpm", "run", "build"], repoRoot);
 
-  log("update complete — restart gateway and agent to apply");
+  // Reinstall globally so the installed copy gets the new dist
+  log("reinstalling...");
+  run(["npm", "install", "-g", "."], repoRoot);
+
+  log("update complete — restart gateway to apply");
 }
 
 main().catch((err: unknown) => {

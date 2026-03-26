@@ -61,7 +61,7 @@ copilotclaw agent stop    # Stop agent only
 copilotclaw update
 ```
 
-Pulls the latest code from the upstream repository, installs dependencies, and rebuilds. Restart the gateway and agent after updating.
+Pulls the latest code from the upstream repository, installs dependencies, rebuilds, and reinstalls. Restart the gateway after updating.
 
 ### Force-restart outdated agent
 

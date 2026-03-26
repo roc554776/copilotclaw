@@ -571,8 +571,10 @@ copilotclaw の作業ディレクトリ兼設定ストレージ。
 copilotclaw のセルフアップデート機能。
 
 - `copilotclaw update` コマンド
-- アップストリーム（GitHub リポジトリ or file URL）から git pull → build で更新
+- デフォルト upstream: `https://github.com/roc554776/copilotclaw.git`（config の `upstream` で変更可能）
+- 動作フロー: upstream から `git fetch` → `git pull --ff-only` → `pnpm install --frozen-lockfile` → `pnpm run build` → `npm install -g .`（再インストール）
 - file URL アップストリーム対応（ローカル開発時に別ディレクトリのリポジトリを upstream に指定して update 可能）
+- file:// upstream の場合は SHA 比較をスキップして常にビルド + 再インストールする（`npm install -g` で SHA が一致してしまう問題を回避）
 - gateway 起動時のバージョンチェック通知
 
 ### Doctor
