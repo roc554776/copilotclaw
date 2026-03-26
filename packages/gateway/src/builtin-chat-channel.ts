@@ -1,9 +1,15 @@
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentManager } from "./agent-manager.js";
 import type { ChannelProvider } from "./channel-provider.js";
 import { renderDashboard, type DashboardAgentStatus } from "./dashboard.js";
 import type { Store } from "./store.js";
 import type { WsBroadcaster } from "./ws.js";
+
+const thisDir = dirname(fileURLToPath(import.meta.url));
+const GATEWAY_VERSION = (JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string }).version;
 
 export interface BuiltinChatChannelDeps {
   store: Store;
@@ -56,6 +62,7 @@ export class BuiltinChatChannel implements ChannelProvider {
               }
             }
             dashboardAgentStatus = {
+              gatewayVersion: GATEWAY_VERSION,
               sessionStatus: sessionStatus ?? "no session",
             };
             if (agentInfo.version !== undefined) {

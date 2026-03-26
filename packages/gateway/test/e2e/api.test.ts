@@ -262,7 +262,7 @@ describe("GET / (dashboard status bar)", () => {
     const res = await fetch(`${baseUrl}/`);
     const html = await res.text();
     expect(html).toContain("status-bar");
-    expect(html).toContain("gateway: running");
+    expect(html).toContain("gateway: v");
   });
 });
 

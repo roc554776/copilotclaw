@@ -22,6 +22,7 @@ function renderTab(channel: Channel, isActive: boolean): string {
 
 export interface DashboardAgentStatus {
   version?: string;
+  gatewayVersion?: string;
   sessionStatus?: string;
   compatibility?: string;
 }
@@ -102,7 +103,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
   <div id="status-bar">
     <button id="logs-btn" onclick="event.stopPropagation(); toggleLogs()">Logs</button>
     <span class="ws-indicator ws-disconnected" id="ws-dot"></span>
-    <span id="status-text">gateway: running | agent: v${agentVersion}${compatLabel} | session: ${sessionState}</span>
+    <span id="status-text">gateway: v${escapeHtml(agentStatus?.gatewayVersion ?? "—")} | agent: v${agentVersion}${compatLabel} | session: ${sessionState}</span>
   </div>
   <div id="logs-panel"></div>
   <div id="status-modal-overlay" onclick="closeStatusModal()"></div>
@@ -185,7 +186,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       const sessStatus = data.sessionStatus || "—";
       const compat = data.compatibility || "";
       const compatLabel = compat && compat !== "compatible" ? " [" + compat + "]" : "";
-      statusText.textContent = "gateway: running | agent: v" + agentVer + compatLabel + " | session: " + sessStatus;
+      const gwVer = data.gatewayVersion || "—";
+      statusText.textContent = "gateway: v" + gwVer + " | agent: v" + agentVer + compatLabel + " | session: " + sessStatus;
       // Re-query in case innerHTML replacement created a new node
       processingIndicator = document.getElementById("processing-indicator") || processingIndicator;
       if (sessStatus === "processing") {
@@ -211,7 +213,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
           const bound = sessions.find(s => s.boundChannelId === CHANNEL_ID);
           sessStatus = bound ? bound.status : (sessions.length > 0 ? "other channel" : "no session");
         }
-        updateStatusBar({ agentVersion: agentVer, sessionStatus: sessStatus, compatibility: body.agentCompatibility || "unknown" });
+        updateStatusBar({ gatewayVersion: body.gateway?.version || "—", agentVersion: agentVer, sessionStatus: sessStatus, compatibility: body.agentCompatibility || "unknown" });
       } catch {}
     }
     setInterval(refreshStatus, 5000);
