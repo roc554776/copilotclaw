@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getProfileName, resolvePort } from "./config.js";
+
+const thisDir = dirname(fileURLToPath(import.meta.url));
+const GATEWAY_VERSION = (JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string }).version;
 
 const HEALTH_RETRY_COUNT = 5;
 const HEALTH_RETRY_INTERVAL_MS = 1000;
@@ -110,7 +114,7 @@ async function main(): Promise<void> {
     } catch {
       // Cannot determine profile — proceed normally
     }
-    log(`already running on port ${port}`);
+    log(`v${GATEWAY_VERSION} already running on port ${port}`);
     await checkAgentCompatibility(port, forceAgentRestart);
     log(`open http://localhost:${port} in your browser to chat with the agent`);
     log(`run 'copilotclaw stop' to shut down`);
@@ -133,7 +137,7 @@ async function main(): Promise<void> {
         log("port freed, starting daemon...");
         spawnDaemon({ forceAgentRestart });
         if (await waitForHealthy(port)) {
-          log(`running on http://localhost:${port}`);
+          log(`v${GATEWAY_VERSION} running on http://localhost:${port}`);
           await checkAgentCompatibility(port, forceAgentRestart);
           log(`open http://localhost:${port} in your browser to chat with the agent`);
           log(`run 'copilotclaw stop' to shut down`);
@@ -152,7 +156,7 @@ async function main(): Promise<void> {
     throw new Error("daemon failed to start");
   }
 
-  log(`running on http://localhost:${port}`);
+  log(`v${GATEWAY_VERSION} running on http://localhost:${port}`);
   await checkAgentCompatibility(port, forceAgentRestart);
   log(`open http://localhost:${port} in your browser to chat with the agent`);
   log(`run 'copilotclaw stop' to shut down`);
