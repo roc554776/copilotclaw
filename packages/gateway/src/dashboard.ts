@@ -257,7 +257,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
                 if (ps.totalInputTokens != null || ps.totalOutputTokens != null) {
                   const inp = ps.totalInputTokens ?? 0;
                   const out = ps.totalOutputTokens ?? 0;
-                  html += '<div class="row"><span class="label">Tokens used</span><span class="value">in:' + escHtml(String(inp)) + ' out:' + escHtml(String(out)) + ' total:' + escHtml(String(inp + out)) + '</span></div>';
+                  html += '<div class="row"><span class="label">Tokens used</span><span class="value">in: ' + escHtml(String(inp)) + ' / out: ' + escHtml(String(out)) + ' / total: ' + escHtml(String(inp + out)) + '</span></div>';
                 }
                 html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + ' (' + elapsed(ps.startedAt) + ')</span></div>';
                 html += '<div style="margin-top:0.3rem"><a href="#" style="color:#58a6ff;text-decoration:none" onclick="showSessionDetail(\'' + psId + '\');return false;">Show context detail</a></div>';

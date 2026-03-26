@@ -22,13 +22,14 @@ import { AgentSessionManager } from "../src/agent-session-manager.js";
 import { CopilotClient } from "@github/copilot-sdk";
 
 /** Builds a fake CopilotSession that fires idle or error after send(). */
-function makeMockCopilotSession(behavior: "idle" | "error"): object {
+function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit: (event: string, ...args: unknown[]) => void; sessionId: string; getMessages: ReturnType<typeof vi.fn> } {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
   const on = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
     const list = listeners.get(event) ?? [];
     list.push(cb);
     listeners.set(event, list);
+    return () => {};
   });
 
   const emit = (event: string, ...args: unknown[]) => {
@@ -44,8 +45,9 @@ function makeMockCopilotSession(behavior: "idle" | "error"): object {
   });
 
   const disconnect = vi.fn().mockResolvedValue(undefined);
+  const getMessages = vi.fn().mockResolvedValue([]);
 
-  return { on, send, disconnect };
+  return { on, send, disconnect, emit, sessionId: "mock-sdk-session", getMessages };
 }
 
 function wait(ms: number): Promise<void> {
@@ -57,6 +59,10 @@ function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
     (this as Record<string, unknown>)["createSession"] = createSession;
     (this as Record<string, unknown>)["resumeSession"] = createSession; // reuse same mock for resume
     (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+    (this as Record<string, unknown>)["rpc"] = {
+      models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
+      account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+    };
   });
 }
 
@@ -395,7 +401,7 @@ describe("AgentSessionManager — stale deferred resume", () => {
     expect(sessionCountAfter).toBeLessThanOrEqual(1);
   });
 
-  it("does not save copilotSessionId when oldestInputId is undefined (nothing pending)", async () => {
+  it("does not save copilotSessionId when oldestInputId is undefined (nothing pending - stale check)", async () => {
     installClientMock(vi.fn().mockImplementation(async () => makeStuckSession("sdk-noop-id")));
 
     const fetchSpy = vi.fn().mockResolvedValue({
@@ -422,5 +428,101 @@ describe("AgentSessionManager — stale deferred resume", () => {
     const result = await manager.checkStaleAndHandle(sessionId, undefined);
     expect(result).toBe("ok");
     expect(manager.hasSavedSession("ch-nopending")).toBe(false);
+  });
+});
+
+describe("AgentSessionManager — assistant.usage token accumulation", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("accumulates inputTokens and outputTokens from assistant.usage events", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    // Override send to NOT auto-emit idle — we control events manually, then emit idle to end
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-usage" });
+    await wait(50);
+
+    // Emit assistant.usage events
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 } });
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 200, outputTokens: 75 } });
+
+    const statuses = manager.getSessionStatuses();
+    const session = Object.values(statuses)[0];
+    expect(session?.physicalSession?.totalInputTokens).toBe(300);
+    expect(session?.physicalSession?.totalOutputTokens).toBe(125);
+
+    // End session cleanly
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("caches quotaSnapshots from assistant.usage events", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-quota" });
+    await wait(50);
+
+    const snapshot = { premium_interactions: { usedRequests: 5, entitlementRequests: 100, remainingPercentage: 0.95 } };
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 10, quotaSnapshots: snapshot } });
+
+    const statuses = manager.getSessionStatuses();
+    const session = Object.values(statuses)[0];
+    expect(session?.physicalSession?.latestQuotaSnapshots).toEqual(snapshot);
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("does not update latestQuotaSnapshots when event has no quotaSnapshots", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-noquota" });
+    await wait(50);
+
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 10 } });
+
+    const statuses = manager.getSessionStatuses();
+    const session = Object.values(statuses)[0];
+    expect(session?.physicalSession?.latestQuotaSnapshots).toBeUndefined();
+
+    mockSession.emit("session.idle");
+    await wait(30);
   });
 });
