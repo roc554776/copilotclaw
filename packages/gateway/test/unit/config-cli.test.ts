@@ -1,27 +1,13 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-// We test configGet and configSet by mocking the config module's file path.
-// Since config.ts uses homedir() for BASE_DIR, we mock the relevant functions
-// and test the exported configGet/configSet functions directly.
-
-// Instead of mocking the module, we test the logic by calling the exported
-// functions from config-cli.ts and verifying the results via config.ts functions.
-
-import { configGet, configSet } from "../../src/config-cli.js";
-import { loadConfig, loadFileConfig, saveConfig } from "../../src/config.js";
+import { configGet, configSet, main } from "../../src/config-cli.js";
+import { loadFileConfig, saveConfig } from "../../src/config.js";
 
 describe("config CLI", () => {
-  const testDir = join(tmpdir(), `copilotclaw-config-cli-test-${Date.now()}`);
   const testProfile = `test-cli-${Date.now()}`;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
     delete process.env["COPILOTCLAW_UPSTREAM"];
     delete process.env["COPILOTCLAW_PORT"];
-    // Use a unique profile to isolate test config files
     process.env["COPILOTCLAW_PROFILE"] = testProfile;
   });
 
@@ -33,7 +19,6 @@ describe("config CLI", () => {
 
   describe("configSet", () => {
     it("sets upstream value in config file", () => {
-      // First create the config file
       saveConfig({});
       configSet("upstream", "file:///test/repo");
       const config = loadFileConfig();
@@ -55,6 +40,13 @@ describe("config CLI", () => {
       expect(config.port).toBe(9999);
     });
 
+    it("creates config file if it does not exist", () => {
+      // No saveConfig call — file doesn't exist yet
+      configSet("upstream", "file:///new");
+      const config = loadFileConfig();
+      expect(config.upstream).toBe("file:///new");
+    });
+
     it("exits with error for unknown key", () => {
       const mockExit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("exit"); });
       try {
@@ -71,6 +63,18 @@ describe("config CLI", () => {
       const mockExit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("exit"); });
       try {
         configSet("port", "abc");
+      } catch {
+        // expected
+      }
+      expect(mockExit).toHaveBeenCalledWith(1);
+      mockExit.mockRestore();
+    });
+
+    it("exits with error for port above 65535", () => {
+      saveConfig({});
+      const mockExit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("exit"); });
+      try {
+        configSet("port", "99999");
       } catch {
         // expected
       }
@@ -127,6 +131,51 @@ describe("config CLI", () => {
       }
       expect(mockExit).toHaveBeenCalledWith(1);
       mockExit.mockRestore();
+    });
+  });
+
+  describe("main", () => {
+    it("dispatches config get", () => {
+      saveConfig({ upstream: "file:///test" });
+      const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+      main(["config", "get", "upstream"]);
+      expect(spy).toHaveBeenCalledWith("file:///test");
+      spy.mockRestore();
+    });
+
+    it("dispatches config set", () => {
+      saveConfig({});
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      main(["config", "set", "port", "8080"]);
+      const config = loadFileConfig();
+      expect(config.port).toBe(8080);
+      errSpy.mockRestore();
+    });
+
+    it("exits with usage when subcommand is missing", () => {
+      const mockExit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("exit"); });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        main(["config"]);
+      } catch {
+        // expected
+      }
+      expect(mockExit).toHaveBeenCalledWith(1);
+      mockExit.mockRestore();
+      errSpy.mockRestore();
+    });
+
+    it("exits with usage when get has no key", () => {
+      const mockExit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("exit"); });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        main(["config", "get"]);
+      } catch {
+        // expected
+      }
+      expect(mockExit).toHaveBeenCalledWith(1);
+      mockExit.mockRestore();
+      errSpy.mockRestore();
     });
   });
 });

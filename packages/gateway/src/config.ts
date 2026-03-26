@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -73,10 +73,11 @@ export function saveConfig(config: CopilotclawConfig, profile?: string): void {
   writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
-/** Ensure config file exists. Creates an empty config if missing. */
+/** Ensure config file exists. Creates parent directory and empty config if missing. */
 export function ensureConfigFile(profile?: string): void {
   const filePath = getConfigFilePath(profile);
   if (!existsSync(filePath)) {
+    mkdirSync(BASE_DIR, { recursive: true });
     writeFileSync(filePath, "{}\n", "utf-8");
   }
 }

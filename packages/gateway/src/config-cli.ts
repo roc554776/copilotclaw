@@ -1,6 +1,6 @@
-import { CONFIG_ENV_VARS, type CopilotclawConfig, loadConfig, loadFileConfig, saveConfig } from "./config.js";
+import { CONFIG_ENV_VARS, type CopilotclawConfig, ensureConfigFile, loadConfig, loadFileConfig, saveConfig } from "./config.js";
 
-const VALID_KEYS: readonly string[] = ["upstream", "port"];
+const VALID_KEYS: readonly string[] = Object.keys(CONFIG_ENV_VARS);
 
 function log(message: string): void {
   console.error(`[config] ${message}`);
@@ -9,8 +9,8 @@ function log(message: string): void {
 function parseValue(key: string, raw: string): string | number {
   if (key === "port") {
     const n = parseInt(raw, 10);
-    if (!Number.isFinite(n) || n <= 0) {
-      log(`invalid port value: ${raw}`);
+    if (!Number.isFinite(n) || n <= 0 || n > 65535) {
+      log(`invalid port value: ${raw} (must be 1-65535)`);
       process.exit(1);
     }
     return n;
@@ -33,7 +33,7 @@ export function configGet(key: string): void {
   } else {
     console.log(String(value));
     const envVar = CONFIG_ENV_VARS[key];
-    if (envVar !== undefined && process.env[envVar] !== undefined) {
+    if (envVar !== undefined && process.env[envVar] !== undefined && process.env[envVar] !== "") {
       log(`(overridden by ${envVar})`);
     }
   }
@@ -47,13 +47,14 @@ export function configSet(key: string, rawValue: string): void {
   }
 
   const value = parseValue(key, rawValue);
+  ensureConfigFile();
   const fileConfig = loadFileConfig();
   (fileConfig as Record<string, unknown>)[key] = value;
   saveConfig(fileConfig);
   log(`${key} = ${String(value)}`);
 
   const envVar = CONFIG_ENV_VARS[key];
-  if (envVar !== undefined && process.env[envVar] !== undefined) {
+  if (envVar !== undefined && process.env[envVar] !== undefined && process.env[envVar] !== "") {
     log(`WARNING: ${envVar} is set — environment variable takes precedence over config file`);
   }
 }
