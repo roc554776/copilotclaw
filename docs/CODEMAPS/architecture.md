@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-26 | Updated: 2026-03-26 | Packages: 3 (cli, gateway, agent) | Version: 0.15.0 | Token estimate: ~1400 -->
+<!-- Generated: 2026-03-26 | Updated: 2026-03-26 | Packages: 3 (cli, gateway, agent) | Version: 0.16.0 | Token estimate: ~1500 -->
 
 # Architecture
 
@@ -69,6 +69,19 @@ Environment variables:
 - Tool execution keeps Copilot SDK session active (CLI idle timeout = 30 min)
 - On keepalive timeout: tool returns empty → keepalive instruction → LLM re-invokes tool
 - Premium request consumption: ~1 per 30 min (idle), plus 1 per user interaction cycle
+
+## Custom Agents (v0.16.0+)
+
+- **Channel-operator**: parent agent exclusively bound to the channel (infer:false, cannot be used as subagent); receives full system prompts including deadlock prevention warnings; subscribes to `copilotclaw_receive_input` tool to manage session lifecycle
+- **Worker**: subagent available for task delegation (infer:true); can only access `copilotclaw_send_message` and `copilotclaw_list_messages` (never receives `copilotclaw_receive_input`); started by parent agent via subagent dispatch
+- Session begins with `agent: "channel-operator"` configuration; custom agent definitions passed to SDK createSession/resumeSession
+
+## Subagent Completion Notification (v0.16.0+)
+
+- SDK events `subagent.completed` and `subagent.failed` push completion info (agentName, status, totalTokens, durationMs, error) to a completion queue
+- Queue drained in two places: (1) `copilotclaw_receive_input` handler returns subagent info alongside user messages, (2) `onPostToolUse` hook injects `[SUBAGENT COMPLETED]` into additionalContext
+- Parent agent can distinguish subagent completions from pending user messages and react accordingly
+- SubagentCompletionInfo type exported from tools/channel.ts
 
 ## Session Lifecycle
 
