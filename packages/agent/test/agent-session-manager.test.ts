@@ -54,6 +54,16 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
+async function waitForPhysicalSession(manager: AgentSessionManager, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const statuses = manager.getSessionStatuses();
+    const session = Object.values(statuses)[0];
+    if (session?.physicalSession !== undefined) return;
+    await wait(5);
+  }
+}
+
 function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
   (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
     (this as Record<string, unknown>)["createSession"] = createSession;
@@ -453,7 +463,7 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     });
 
     manager.startSession({ boundChannelId: "ch-usage" });
-    await wait(50);
+    await waitForPhysicalSession(manager);
 
     // Emit assistant.usage events
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 } });
@@ -485,7 +495,7 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     });
 
     manager.startSession({ boundChannelId: "ch-quota" });
-    await wait(50);
+    await waitForPhysicalSession(manager);
 
     const snapshot = { premium_interactions: { usedRequests: 5, entitlementRequests: 100, remainingPercentage: 0.95 } };
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 10, quotaSnapshots: snapshot } });
@@ -514,7 +524,7 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     });
 
     manager.startSession({ boundChannelId: "ch-noquota" });
-    await wait(50);
+    await waitForPhysicalSession(manager);
 
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 10 } });
 
