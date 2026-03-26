@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock @github/copilot-sdk before importing the module under test.
 // CopilotClient is used with `new`, so we use a vi.fn() that is a constructor.
@@ -401,18 +401,17 @@ describe("AgentSessionManager — binding persistence", () => {
   let tmpDir: string;
   let persistPath: string;
 
-  afterEach(() => {
-    vi.clearAllMocks();
-    try { rmSync(tmpDir, { recursive: true }); } catch {}
-  });
-
-  function setup(): void {
+  beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-test-"));
     persistPath = join(tmpDir, "agent-bindings.json");
-  }
+  });
 
-  it("persists suspended session bindings to disk and restores on new manager", async () => {
-    setup();
+  afterEach(() => {
+    vi.clearAllMocks();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("persists suspended session bindings (including copilotSessionId) and restores on new manager", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
     const fetchSpy = vi.fn().mockResolvedValue({
@@ -428,12 +427,13 @@ describe("AgentSessionManager — binding persistence", () => {
     const sessionId = manager.startSession({ boundChannelId: "ch-persist" });
     await wait(50); // session idles → suspended → saved to disk
 
-    // Verify file was written
+    // Verify file was written with copilotSessionId
     const raw = readFileSync(persistPath, "utf-8");
-    const snapshot = JSON.parse(raw) as { sessions: Array<{ sessionId: string; boundChannelId: string }> };
+    const snapshot = JSON.parse(raw) as { sessions: Array<{ sessionId: string; boundChannelId: string; copilotSessionId?: string }> };
     expect(snapshot.sessions).toHaveLength(1);
     expect(snapshot.sessions[0]!.sessionId).toBe(sessionId);
     expect(snapshot.sessions[0]!.boundChannelId).toBe("ch-persist");
+    expect(snapshot.sessions[0]!.copilotSessionId).toBe("mock-sdk-session");
 
     // Create a new manager from the same persist file — simulates agent restart
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
@@ -454,7 +454,6 @@ describe("AgentSessionManager — binding persistence", () => {
   });
 
   it("removes binding from persist file on explicit stopSession", async () => {
-    setup();
     const mockSession = makeMockCopilotSession("idle");
     mockSession.send.mockImplementation(async () => "msg-id");
     installClientMock(vi.fn().mockResolvedValue(mockSession));

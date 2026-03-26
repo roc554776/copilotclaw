@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
@@ -179,19 +179,28 @@ export class AgentSessionManager {
   private loadBindings(): void {
     if (this.persistPath === undefined) return;
     try {
-      if (!existsSync(this.persistPath)) return;
       const raw = readFileSync(this.persistPath, "utf-8");
-      const snapshot = JSON.parse(raw) as BindingSnapshot;
+      const parsed: unknown = JSON.parse(raw);
+      if (
+        typeof parsed !== "object" || parsed === null ||
+        !("sessions" in parsed) || !Array.isArray((parsed as { sessions: unknown }).sessions)
+      ) {
+        console.error(`[agent] WARNING: invalid bindings file at ${this.persistPath}, ignoring`);
+        return;
+      }
+      const snapshot = parsed as BindingSnapshot;
       for (const s of snapshot.sessions) {
+        if (typeof s.sessionId !== "string" || typeof s.startedAt !== "string") continue;
         const entry: AgentSessionEntry = {
           sessionId: s.sessionId,
-          copilotSessionId: s.copilotSessionId,
+          copilotSessionId: typeof s.copilotSessionId === "string" ? s.copilotSessionId : undefined,
           info: {
             status: "suspended",
             startedAt: s.startedAt,
-            boundChannelId: s.boundChannelId,
+            boundChannelId: typeof s.boundChannelId === "string" ? s.boundChannelId : undefined,
           },
-          client: new CopilotClient(), // placeholder — will be replaced on revive
+          // Placeholder client — suspended sessions don't use it. Replaced on revive.
+          client: new CopilotClient(),
           abortController: new AbortController(),
           sessionPromise: Promise.resolve(),
           generation: ++this.generationCounter,
@@ -206,9 +215,8 @@ export class AgentSessionManager {
       }
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        console.error(`[agent] WARNING: could not load bindings from ${this.persistPath}: ${String(err)}`);
-      }
+      if (code === "ENOENT") return; // normal on first run
+      console.error(`[agent] WARNING: could not load bindings from ${this.persistPath}: ${String(err)}`);
     }
   }
 
@@ -230,7 +238,7 @@ export class AgentSessionManager {
     try {
       mkdirSync(dirname(this.persistPath), { recursive: true });
       const tmp = `${this.persistPath}.tmp`;
-      writeFileSync(tmp, JSON.stringify(snapshot, null, 2), "utf-8");
+      writeFileSync(tmp, JSON.stringify(snapshot), "utf-8");
       renameSync(tmp, this.persistPath);
     } catch (err: unknown) {
       console.error(`[agent] WARNING: could not save bindings to ${this.persistPath}: ${String(err)}`);
@@ -769,6 +777,7 @@ export class AgentSessionManager {
       }
       this.sessions.delete(sessionId);
     }
+    this.saveBindings();
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((r) => { timeoutHandle = setTimeout(r, 5000); });
     await Promise.race([
