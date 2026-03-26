@@ -214,8 +214,19 @@ Agent session を channel から独立した概念として導入し、agent pro
 - Agent session は Copilot SDK の session に対応し、独自の sessionId を持つ
 - Channel には最大 1 つの agent session が紐づく
 - Agent session には最大 1 つの channel が紐づく
-- Channel に未処理のユーザー input があるが agent session がない場合、agent session が開始され channel と紐づく
-- Channel のユーザー input が全て処理されても agent session は終了せずに生かし続ける（agent session は高価なので壊さない）- Channel に紐づかない agent session も存在しうる（まだ実装はないが） <!-- TODO: 未実装 -->
+- Channel に紐づかない agent session も存在しうる（まだ実装はないが） <!-- TODO: 未実装 -->
+
+### 方針: Agent Session のコスト意識
+
+Agent session はコストが高い（プレミアムリクエスト消費）。以下の原則に従う:
+
+- **起動条件**: channel に agent にまだ読まれていない user message（pending message）がある場合にのみ新規起動する。channel が存在するだけでは起動しない
+- **維持**: 起動した session はできるだけ長く使い続ける。pending message がない状態が続いていることは session 終了の理由にならない
+- **終了条件**: session を終了するのは以下の場合のみ:
+  - session が意図せず idle になった場合（LLM が tool を呼ばなかった）
+  - session 寿命制限に到達した場合（デフォルト 2 日）
+  - stale session タイムアウト（processing 状態が 10 分超過）
+  - 明示的な停止要求（`copilotclaw agent stop` 等）
 
 ### Session Keepalive 方針
 
@@ -289,8 +300,7 @@ Agent session が wait に遷移:
   → 停止の場合: 次の user message で新しい session が起動される（通常フローと同じ）
 ```
 
-#### Session Replace（将来）
-<!-- TODO: 未実装 -->
+#### Session Replace
 
 寿命超過時の session を単純に停止するのではなく、replace する仕組み。状態を保存して停止し、擬似的に同じような状態の新しい session を起動して入れ替える。
 
@@ -584,11 +594,11 @@ gateway と agent のバージョン管理ルールを定める。
 - `/api/status` に gateway version を追加
 - Gateway による agent process 常時監視（30 秒ポーリングで生存確認 + バージョンチェック + 自動再起動）
 - Agent session 実行中タイムアウト時の channel message 通知
-- Agent session 寿命制限（デフォルト 2 日超過で停止）
+- Agent session 寿命制限（デフォルト 2 日超過で replace）
+- Agent session replace（disconnect → resumeSession による透過的な session 入れ替え）
 - 自動テスト基盤（Vitest、mock session、mock fetch による agent テスト）
 
 **今後の課題:**
-- Agent session replace（disconnect → resumeSession による透過的な session 入れ替え）
 - Profile 機能（同一マシン上の複数インスタンス分離、将来）
 - コーディング支援ツール群（ファイル操作・シェル実行・検索・Git）の実装
 - Observability スタックの独立リポジトリへの分離（`.example` パターンの導入を含む）

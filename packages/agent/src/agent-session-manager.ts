@@ -15,6 +15,7 @@ export interface AgentSessionInfo {
 
 interface AgentSessionEntry {
   sessionId: string;
+  copilotSessionId?: string; // SDK session ID for resumeSession
   info: AgentSessionInfo;
   client: CopilotClient;
   abortController: AbortController;
@@ -162,13 +163,11 @@ export class AgentSessionManager {
     const gatewayBaseUrl = this.gatewayBaseUrl;
     const signal = entry.abortController.signal;
 
-    const session = await entry.client.createSession({
-      model: "gpt-4.1",
+    const sessionConfig = {
       onPermissionRequest: approveAll,
       tools: [sendMessage, receiveInput, listMessages],
       hooks: {
         onPostToolUse: async () => {
-          // Check if channel has pending user messages
           try {
             if (signal.aborted) return;
             const fetchOpts: RequestInit = { signal };
@@ -184,8 +183,14 @@ export class AgentSessionManager {
           return;
         },
       },
-    });
+    };
 
+    // Resume existing SDK session or create new one
+    const session = entry.copilotSessionId !== undefined
+      ? await entry.client.resumeSession(entry.copilotSessionId, sessionConfig)
+      : await entry.client.createSession({ model: "gpt-4.1", ...sessionConfig });
+
+    entry.copilotSessionId = session.sessionId;
     entry.info.status = "waiting";
 
     const logPrefix = channelId.slice(0, 8);
@@ -295,9 +300,10 @@ export class AgentSessionManager {
     });
   }
 
-  /** Check if session has exceeded max age and should be stopped.
+  /** Check if session has exceeded max age and should be replaced.
+   * Replaces the session by disconnecting and resuming with the same SDK session ID.
    * Only applies to sessions in "waiting" state with a bound channel. */
-  checkSessionMaxAge(sessionId: string): boolean {
+  async checkSessionMaxAge(sessionId: string): Promise<boolean> {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return false;
     if (entry.info.status !== "waiting") return false;
@@ -306,8 +312,23 @@ export class AgentSessionManager {
     const age = Date.now() - new Date(entry.info.startedAt).getTime();
     if (age < this.maxSessionAgeMs) return false;
 
-    console.error(`[agent] session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), stopping`);
+    const copilotSessionId = entry.copilotSessionId;
+    const boundChannelId = entry.info.boundChannelId;
+
+    console.error(`[agent] session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), replacing`);
+
+    // Stop old session — restarting flag prevents restartCounts cleanup
+    entry.restarting = true;
     this.stopSession(sessionId);
+
+    // Don't await sessionPromise — old session cleans up asynchronously.
+    // Start replacement with the same SDK session ID for resume.
+    const newSessionId = this.startSession({ boundChannelId });
+    const newEntry = this.sessions.get(newSessionId);
+    if (newEntry !== undefined && copilotSessionId !== undefined) {
+      newEntry.copilotSessionId = copilotSessionId;
+    }
+
     return true;
   }
 

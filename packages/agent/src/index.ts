@@ -74,8 +74,8 @@ async function main(): Promise<void> {
       // Check for stale sessions and max age
       const sessionStatuses = sessionManager.getSessionStatuses();
       for (const [sessionId, info] of Object.entries(sessionStatuses)) {
-        // Check max age (2 days default) — stop old sessions when they enter wait
-        if (sessionManager.checkSessionMaxAge(sessionId)) continue;
+        // Check max age (2 days default) — replace old sessions when they enter wait
+        if (await sessionManager.checkSessionMaxAge(sessionId)) continue;
 
         const channelId = info.boundChannelId;
         if (channelId === undefined) continue;

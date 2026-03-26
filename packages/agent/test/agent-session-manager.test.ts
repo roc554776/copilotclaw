@@ -55,6 +55,7 @@ function wait(ms: number): Promise<void> {
 function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
   (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
     (this as Record<string, unknown>)["createSession"] = createSession;
+    (this as Record<string, unknown>)["resumeSession"] = createSession; // reuse same mock for resume
     (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
   });
 }
@@ -211,7 +212,7 @@ describe("AgentSessionManager — session max age", () => {
     vi.clearAllMocks();
   });
 
-  it("stops session that exceeds max age when in waiting state", async () => {
+  it("replaces session that exceeds max age when in waiting state", async () => {
     installClientMock(vi.fn().mockImplementation(async () => {
       const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
       return {
@@ -238,12 +239,12 @@ describe("AgentSessionManager — session max age", () => {
     const sessionId = manager.startSession({ boundChannelId: "ch-age" });
     await wait(20);
 
-    const stopped = manager.checkSessionMaxAge(sessionId);
+    const stopped = await manager.checkSessionMaxAge(sessionId);
     expect(stopped).toBe(true);
     // stopSession was called — session teardown is async (depends on session loop exiting)
   });
 
-  it("does not stop session that is within max age", async () => {
+  it("does not replace session that is within max age", async () => {
     installClientMock(vi.fn().mockImplementation(async () => {
       const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
       return {
@@ -270,7 +271,7 @@ describe("AgentSessionManager — session max age", () => {
     const sessionId = manager.startSession({ boundChannelId: "ch-young" });
     await wait(20);
 
-    const stopped = manager.checkSessionMaxAge(sessionId);
+    const stopped = await manager.checkSessionMaxAge(sessionId);
     expect(stopped).toBe(false);
     // Session still exists
     const statuses = manager.getSessionStatuses();
