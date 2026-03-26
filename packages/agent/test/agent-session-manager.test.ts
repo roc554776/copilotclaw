@@ -62,6 +62,7 @@ async function waitForPhysicalSession(manager: AgentSessionManager, timeoutMs = 
     if (session?.physicalSession !== undefined) return;
     await wait(5);
   }
+  throw new Error(`waitForPhysicalSession: physicalSession did not appear within ${timeoutMs}ms`);
 }
 
 function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
