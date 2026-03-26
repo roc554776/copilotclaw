@@ -4,7 +4,7 @@
 
 <!-- TODO: 未実装 -->
 
-OpenClaw の workspace bootstrap files に相当するファイルを workspace に配置し、agent がセッション開始時に自発的に読み取る仕組みを提供する。
+OpenClaw の workspace bootstrap files に相当するファイルを workspace に配置し、agent がセッション開始時に自発的に読み取る仕組みを提供する。OpenClaw はシステムプロンプトにファイルを直接埋め込む方式（Project Context 注入）だが、CopilotClaw では agent がビルトインツールで自発的に読む方式とする（Copilot SDK の制約による）。
 
 - SOUL.md（人格・トーン・価値観）、AGENTS.md（操作マニュアル）、USER.md（ユーザー情報）等をデフォルトテンプレートから生成する
 - これらは **ユーザーが自由にカスタマイズするファイル** であり、copilotclaw のシステムプロンプトではない
