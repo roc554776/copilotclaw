@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-26 | Updated: 2026-03-26 | Files scanned: 31 | Version: 0.16.0 | Token estimate: ~2100 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 32 | Version: 0.17.0 | Token estimate: ~2300 -->
 
 # Backend
 
@@ -70,10 +70,10 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 
 ```
 → {"method":"status"}
-← {"version":"0.13.0","bootId":"uuid","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"...","physicalSession":{"sessionId":"...","model":"...","startedAt":"...","totalInputTokens":123,"totalOutputTokens":456,"latestQuotaSnapshots":{...}},"subagentSessions":[{"sessionId":"...","model":"...","status":"...","startedAt":"..."}]}}}
+← {"version":"0.17.0","bootId":"uuid","startedAt":"...","sessions":{"sess-id":{"status":"waiting|suspended","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"...","physicalSession":{...},"subagentSessions":[...]}}}
 
 → {"method":"session_status","params":{"sessionId":"sess-id"}}
-← {"status":"processing","startedAt":"...","processingStartedAt":"...","boundChannelId":"ch-id"}
+← {"status":"waiting|processing|suspended|stopped","startedAt":"...","processingStartedAt":"...","boundChannelId":"ch-id"}
   (or {"status":"not_running"} if no session exists)
 
 → {"method":"stop"}
@@ -88,6 +88,13 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 → {"method":"session_messages","params":{"sessionId":"copilot-sess-id"}}
 ← [ ...message objects ] | {"error":"session not found"} | {"error":"missing sessionId"}
 ```
+
+**Status values (v0.17.0)**:
+- "starting" — session initializing, copilotClient not yet bound
+- "waiting" — idle, awaiting user input (keepalive tool polling gateway)
+- "processing" — handling tool calls or LLM requests
+- "suspended" — physical session ended, abstract session preserved for later revival (copilotSessionId retained)
+- "stopped" — session fully removed via explicit stopSession()
 
 ### Copilot SDK Tools (tools/channel.ts)
 
@@ -111,14 +118,14 @@ Tool availability:
 ### Key Files
 
 ```
-src/index.ts                    — singleton entry, fetches config (model/zeroPremium/debugMockCopilotUnsafeTools) from gateway /api/status at startup, passes to AgentSessionManager; gateway polling loop, max-age check then stale detection per cycle; checks for saved sessions (hasSavedSession) when pending messages found, consumes saved copilotSessionId for deferred resume via startSession
-src/agent-session-manager.ts    — per-session lifecycle, channel binding, model/zeroPremium/debugMockCopilotUnsafeTools fields; PhysicalSessionSummary (includes totalInputTokens, totalOutputTokens, latestQuotaSnapshots) and SubagentInfo types exported; SDK event tracking (tool.execution_start/complete, session.idle, subagent.started/completed/failed, session.model_change, session.usage_info for tracking context usage %, assistant.usage for token accumulation and quota caching, session.compaction_complete to flag reminder after prompt compaction, assistant.message as fallback when LLM responds with text instead of using copilotclaw_send_message tool); getQuota() and getModels() methods (proxy Copilot SDK account API); getSessionMessages() method (retrieves conversation history from stored CopilotSession); stores copilotSession on entry for later message retrieval; resolveModel() method (zeroPremium overrides premium models to non-premium); debugMockCopilotUnsafeTools mode restricts availableTools to copilotclaw_* + debug mock copilot unsafe tools + WebFetch/WebSearch; custom agents (v0.16.0+): defines CHANNEL_OPERATOR_CONFIG (infer:false, deadlock prevention prompt) and WORKER_CONFIG (infer:true, empty prompt); passes customAgents array with tools:null to SDK (inherit channel tools); starts session with agent:"channel-operator"; subagent completion queue (drained by receiveInput and onPostToolUse); onPostToolUse hook gates on copilotclaw_receive_input (parent-exclusive tool) to distinguish parent agent from subagent tool calls, enhances additionalContext with: (1) pending user message notifications, (2) subagent completion notifications [SUBAGENT COMPLETED] with agent name/status/tokens/duration (v0.16.0+), (3) periodic system prompt reinforcement via <system> tagged SYSTEM_REMINDER (fires when context usage crosses 10% increments or after compaction); reminderState tracks needsReminder, lastReminderPercent, and currentUsagePercent; deferred resume pattern: checkSessionMaxAge and checkStaleAndHandle save copilotSessionId to savedCopilotSessionIds map and stop session (no immediate restart/retry); hasSavedSession/consumeSavedSession for retrieval; max-age 2-day default; channel notifications (stopped/timed-out via postChannelMessage); assistant.message events posted to channel timeline via postChannelMessage; initialPrompt mentions <system> tags in additionalContext
-src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop/quota/models/session_messages), version reporting
-src/ipc-paths.ts                — socket path generation (profile-aware, same logic as gateway)
-src/session-loop.ts             — session idle loop (subscribe/send/disconnect, no continuePrompt); runSession supports both createSession and resumeSession
+src/index.ts                    — singleton entry, fetches config from gateway /api/status, polls gateway for pending inputs; uses hasActiveSessionForChannel to avoid starting duplicate sessions; startSession auto-revives suspended sessions (with saved copilotSessionId) or creates new; per-cycle: max-age check (checkSessionMaxAge suspends on expiry), then stale detection (checkStaleAndHandle suspends after 10m+ processing with pending, flushes inputs)
+src/agent-session-manager.ts    — per-session lifecycle with abstract/physical session separation (v0.17.0); channel binding preserved across suspensions; AgentSessionStatus: "starting"|"waiting"|"processing"|"suspended"|"stopped"; startSession auto-detects suspended sessions via hasActiveSessionForChannel and revives via reviveSession; suspendSession transitions to "suspended", clears physicalSession but preserves copilotSessionId for later revival; reviveSession launches new physical session, reusing abstract sessionId and copilotSessionId; stopSession fully removes abstract session and channel binding (explicit termination); checkSessionMaxAge suspends when "waiting" exceeds 2-day max (or configurable maxSessionAgeMs); checkStaleAndHandle suspends when "processing" >10min with pending inputs (staleTimeoutMs), posts timeout notification, returns "flushed" to trigger input flush; PhysicalSessionSummary (totalInputTokens, totalOutputTokens, latestQuotaSnapshots); getQuota/getModels methods proxy Copilot SDK account API; getSessionMessages retrieves CopilotSession conversation history; resolveModel handles zeroPremium override; debugMockCopilotUnsafeTools restricts availableTools; custom agents (v0.16.0+): CHANNEL_OPERATOR_CONFIG (infer:false, deadlock prevention) and WORKER_CONFIG (infer:true); onPostToolUse hook gates on copilotclaw_receive_input, injects: (1) pending message notifications, (2) subagent completion notifications [SUBAGENT COMPLETED], (3) periodic system prompt reminders on context usage 10% increments; channel notifications (stopped, timed-out) via postChannelMessage
+src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop/quota/models/session_messages)
+src/ipc-paths.ts                — socket path generation (profile-aware)
+src/session-loop.ts             — session idle loop (subscribe/send/disconnect); supports both createSession and resumeSession
 src/copilot-session-adapter.ts  — CopilotSession → SessionLike adapter
 src/stop.ts                     — CLI stop command (IPC stop)
-src/tools/channel.ts            — send_message, receive_input (drains subagent completions via drainSubagentCompletions()), list_messages tools; exports SubagentCompletionInfo interface (toolCallId, agentName, status, error, model, totalToolCalls, totalTokens, durationMs); ChannelToolDeps includes optional drainSubagentCompletions callback (v0.16.0+)
+src/tools/channel.ts            — send_message, receive_input (drains subagent completions), list_messages; exports SubagentCompletionInfo
 ```
 
 ## Testing

@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-26 | Updated: 2026-03-26 | Packages: 3 (cli, gateway, agent) | Version: 0.16.0 | Token estimate: ~1500 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.17.0 | Token estimate: ~1600 -->
 
 # Architecture
 
@@ -83,14 +83,18 @@ Environment variables:
 - Parent agent can distinguish subagent completions from pending user messages and react accordingly
 - SubagentCompletionInfo type exported from tools/channel.ts
 
-## Session Lifecycle
+## Session Lifecycle (v0.17.0: Abstract/Physical Separation)
 
-- Session ends normally (idle) → status set to "stopped" → gateway notified via POST messages
-- Session error → status "stopped" → gateway notified
-- Max age enforcement: sessions exceeding 2 days (default, configurable via maxSessionAgeMs) save copilotSessionId to savedCopilotSessionIds map when in "waiting" status, then stop session (no immediate restart); checked each poll cycle before stale detection
-- Stale detection: if processing >10 min with pending inputs, save copilotSessionId and stop session; notify channel with timeout message, flush inputs (single detection, no restart/retry logic)
-- Deferred resume: main polling loop checks for saved sessions when pending messages are found; consumeSavedSession retrieves and removes the saved copilotSessionId, then startSession resumes with that copilotSessionId
-- Channel notifications: session stopped and session timed out events post system messages to the bound channel via postChannelMessage helper
+- **Abstract vs. Physical Sessions**: Abstract session (sessionId, bound to channel) is separate from physical session (Copilot SDK session). When physical session ends unexpectedly, abstract session transitions to "suspended" (not deleted), preserving channel binding.
+- **Session Status**: "starting" → "waiting" → "processing" → "suspended" or "stopped"
+  - "suspended": physical session stopped unexpectedly or max age reached; abstract session preserved for revival
+  - "stopped": explicit stopSession() — fully removes abstract session and channel binding
+- **Suspension via checkStaleAndHandle**: if processing >10 min with pending inputs, suspend (abstract survives), notify channel with timeout message, flush inputs; deferred resume on next pending message
+- **Suspension via checkSessionMaxAge**: if "waiting" session exceeds 2 days (default, configurable), suspend and save copilotSessionId for resume
+- **Revival via reviveSession**: suspended sessions auto-revive with new physical session when triggered (e.g., user message arrives for the channel); same abstract sessionId reused, copilotSessionId preserved for resumeSession
+- **Auto-revival in polling**: startSession auto-detects suspended sessions for a channel via hasActiveSessionForChannel; if suspended, revives with saved copilotSessionId
+- **savedCopilotSessionIds map**: no longer the primary resume mechanism — copilotSessionId lives on the suspended entry; map kept for potential compatibility
+- **Channel notifications**: session stopped (unexpected end) and session timed out (stale processing) post system messages to bound channel
 
 ## Key Constraints
 
