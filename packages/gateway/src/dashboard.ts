@@ -79,9 +79,9 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     #status-modal .value { color: #c9d1d9; }
     #status-modal .close-btn { position: absolute; top: 0.75rem; right: 1rem; background: none; border: none; color: #8b949e; cursor: pointer; font-size: 1.2rem; }
     #status-modal .close-btn:hover { color: #c9d1d9; }
-    .ws-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
-    .ws-connected { background: #3fb950; }
-    .ws-disconnected { background: #f85149; }
+    .sse-indicator { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
+    .sse-connected { background: #3fb950; }
+    .sse-disconnected { background: #f85149; }
     #processing-indicator { display: none; align-self: flex-start; }
     #processing-indicator.visible { display: flex; }
     .typing-dots { display: flex; gap: 0.3rem; padding: 0.6rem 1rem; background: #21262d; border-radius: 1rem; border-bottom-left-radius: 0.25rem; align-items: center; }
@@ -102,7 +102,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
 <body>
   <div id="status-bar">
     <button id="logs-btn" onclick="event.stopPropagation(); toggleLogs()">Logs</button>
-    <span class="ws-indicator ws-disconnected" id="ws-dot"></span>
+    <span class="sse-indicator sse-disconnected" id="sse-dot"></span>
     <span id="status-text">gateway: v${escapeHtml(agentStatus?.gatewayVersion ?? "—")} | agent: v${agentVersion}${compatLabel} | session: ${sessionState}</span>
   </div>
   <div id="logs-panel"></div>
@@ -135,7 +135,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     const statusModal = document.getElementById("status-modal");
     const statusModalOverlay = document.getElementById("status-modal-overlay");
     const statusModalContent = document.getElementById("status-modal-content");
-    const wsDot = document.getElementById("ws-dot");
+    const sseDot = document.getElementById("sse-dot");
     let processingIndicator = document.getElementById("processing-indicator");
 
     function escHtml(s) {
@@ -162,8 +162,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     function connectSSE() {
       if (!CHANNEL_ID) return;
       evtSource = new EventSource("/api/events?channel=" + encodeURIComponent(CHANNEL_ID));
-      evtSource.onopen = () => { wsDot.className = "ws-indicator ws-connected"; };
-      evtSource.onerror = () => { wsDot.className = "ws-indicator ws-disconnected"; };
+      evtSource.onopen = () => { sseDot.className = "sse-indicator sse-connected"; };
+      evtSource.onerror = () => { sseDot.className = "sse-indicator sse-disconnected"; };
       evtSource.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data);

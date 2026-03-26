@@ -137,7 +137,7 @@ describe("SSE /api/events", () => {
   it("tracks connected clients", async () => {
     // Use a fresh server to avoid interference from prior tests
     const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
-    expect(freshHandle.wsBroadcaster.clientCount).toBe(0);
+    expect(freshHandle.sseBroadcaster.clientCount).toBe(0);
 
     const freshUrl = `http://localhost:${freshHandle.port}`;
     const channels = await (await fetch(`${freshUrl}/api/channels`)).json() as Array<{ id: string }>;
@@ -146,12 +146,12 @@ describe("SSE /api/events", () => {
     const controller = new AbortController();
     const resPromise = fetch(`${freshUrl}/api/events?channel=${chId}`, { signal: controller.signal });
     await new Promise((r) => { setTimeout(r, 50); });
-    expect(freshHandle.wsBroadcaster.clientCount).toBe(1);
+    expect(freshHandle.sseBroadcaster.clientCount).toBe(1);
 
     controller.abort();
     await resPromise.catch(() => {});
     await new Promise((r) => { setTimeout(r, 50); });
-    expect(freshHandle.wsBroadcaster.clientCount).toBe(0);
+    expect(freshHandle.sseBroadcaster.clientCount).toBe(0);
 
     await freshHandle.close();
   });

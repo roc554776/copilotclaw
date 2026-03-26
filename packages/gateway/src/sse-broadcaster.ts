@@ -10,7 +10,7 @@ export interface SseClient {
  * because Node.js 22 has no built-in WebSocketServer and SSE
  * requires no external dependencies.
  */
-export class WsBroadcaster {
+export class SseBroadcaster {
   private readonly clients = new Set<SseClient>();
 
   addClient(res: ServerResponse, channelId: string | undefined): void {

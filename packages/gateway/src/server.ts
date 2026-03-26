@@ -9,7 +9,7 @@ import { DEFAULT_PORT, getProfileName, loadConfig } from "./config.js";
 import { getWorkspaceRoot } from "./workspace.js";
 import { LogBuffer } from "./log-buffer.js";
 import { Store } from "./store.js";
-import { WsBroadcaster } from "./ws.js";
+import { SseBroadcaster } from "./sse-broadcaster.js";
 
 export { DEFAULT_PORT };
 
@@ -67,7 +67,7 @@ export interface ServerDeps {
   store?: Store;
   onStop?: () => void;
   agentManager?: AgentManager | null;
-  wsBroadcaster?: WsBroadcaster;
+  sseBroadcaster?: SseBroadcaster;
   channelProviders?: ChannelProvider[];
   logBuffer?: LogBuffer;
 }
@@ -262,7 +262,7 @@ export interface ServerHandle {
   server: Server;
   port: number;
   store: Store;
-  wsBroadcaster: WsBroadcaster;
+  sseBroadcaster: SseBroadcaster;
   close: () => Promise<void>;
 }
 
@@ -273,12 +273,12 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const agentManager = options?.agentManager === null
     ? null
     : options?.agentManager ?? new AgentManager({ gatewayPort: port });
-  const wsBroadcaster = options?.wsBroadcaster ?? new WsBroadcaster();
+  const sseBroadcaster = options?.sseBroadcaster ?? new SseBroadcaster();
   const logBuffer = options?.logBuffer ?? new LogBuffer();
 
   // Channel providers: use provided list or default to built-in chat
   const channelProviders = options?.channelProviders ?? [
-    new BuiltinChatChannel({ store, agentManager, wsBroadcaster }),
+    new BuiltinChatChannel({ store, agentManager, sseBroadcaster }),
   ];
 
   const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer);
@@ -306,7 +306,7 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
         server,
         port: actualPort,
         store,
-        wsBroadcaster,
+        sseBroadcaster,
         close: async () => {
           for (const provider of channelProviders) {
             provider.close?.();
