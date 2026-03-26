@@ -26,7 +26,8 @@ GET  /                                     → 200 HTML dashboard (status bar + 
 
 ```
 src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents
-src/config.ts              — config file module: loadConfig, saveConfig, resolvePort, getConfigFilePath; profile-aware (~/.copilotclaw/config.json or config-{{profile}}.json); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM) take precedence over file values
+src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, CONFIG_ENV_VARS; profile-aware (~/.copilotclaw/config.json or config-{{profile}}.json); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM) take precedence over file values
+src/config-cli.ts          — `copilotclaw config` CLI: configGet (resolve + display, notes env var override), configSet (validate + save, warns if env var shadows); valid keys: upstream, port
 src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + LogBuffer creation + console intercept + startServer on resolvePort() + periodic agent monitor every 30s, max 3 retries)
 src/index.ts               — CLI entry point (health check on resolvePort() → detached spawn → exit); after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible; checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart)
 src/log-buffer.ts          — LogBuffer class (ring buffer for recent log lines), interceptConsole() to capture stdout/stderr
@@ -108,10 +109,10 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (155 total: 147 vitest + 8 Playwright)
+### Test Suites (165 total: 157 vitest + 8 Playwright)
 
 ```
-Gateway vitest (101 tests) — unit + E2E tests with mock agent (includes config, ipc-paths, setup, workspace tests)
+Gateway vitest (111 tests) — unit + E2E tests with mock agent (includes config, config-cli, ipc-paths, setup, workspace tests)
 Agent vitest (46 tests)    — unit + E2E tests with mock Copilot SDK session
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```
