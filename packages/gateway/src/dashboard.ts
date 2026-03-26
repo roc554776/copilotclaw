@@ -70,7 +70,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     #status-bar { padding: 0.3rem 1rem; background: #161b22; border-bottom: 1px solid #30363d; font-size: 0.75rem; color: #8b949e; cursor: pointer; user-select: none; }
     #status-bar:hover { color: #c9d1d9; }
     #status-modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 100; }
-    #status-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #161b22; border: 1px solid #30363d; border-radius: 0.75rem; padding: 1.5rem; min-width: 400px; max-width: 600px; z-index: 101; color: #c9d1d9; font-size: 0.85rem; }
+    #status-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #161b22; border: 1px solid #30363d; border-radius: 0.75rem; padding: 1.5rem; min-width: 400px; max-width: 600px; max-height: 80vh; overflow-y: auto; z-index: 101; color: #c9d1d9; font-size: 0.85rem; }
     #status-modal h3 { margin-bottom: 1rem; font-size: 1rem; color: #58a6ff; }
     #status-modal .section { margin-bottom: 1rem; }
     #status-modal .section-title { font-weight: 600; color: #8b949e; margin-bottom: 0.3rem; }
