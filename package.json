@@ -6,6 +6,13 @@
   "bin": {
     "copilotclaw": "bin/copilotclaw.mjs"
   },
+  "files": [
+    "bin/",
+    "packages/agent/dist/",
+    "packages/agent/package.json",
+    "packages/gateway/dist/",
+    "packages/gateway/package.json"
+  ],
   "scripts": {
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
