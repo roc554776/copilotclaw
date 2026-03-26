@@ -89,13 +89,33 @@ async function main(): Promise<void> {
   log("starting gateway daemon...");
   spawnDaemon({ forceAgentRestart });
 
-  if (await waitForHealthy()) {
-    log(`running on http://localhost:${DEFAULT_PORT}`);
-    log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
-    log(`run 'copilotclaw stop' to shut down`);
-  } else {
+  if (!(await waitForHealthy())) {
     throw new Error("daemon failed to start");
   }
+
+  log(`running on http://localhost:${DEFAULT_PORT}`);
+
+  // Verify agent compatibility after gateway is up
+  try {
+    const statusRes = await fetch(`http://localhost:${DEFAULT_PORT}/api/status`);
+    if (statusRes.ok) {
+      const status = await statusRes.json() as { agentCompatibility?: string; agent?: { version?: string } | null };
+      const compat = status.agentCompatibility ?? "unavailable";
+      if (compat === "compatible") {
+        log(`agent: compatible (v${status.agent?.version ?? "?"})`);
+      } else if (compat === "incompatible") {
+        log(`ERROR: agent is incompatible (v${status.agent?.version ?? "?"}). Use --force-agent-restart to upgrade.`);
+        process.exit(1);
+      } else {
+        log(`WARNING: agent is not running`);
+      }
+    }
+  } catch {
+    log("WARNING: could not verify agent status");
+  }
+
+  log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+  log(`run 'copilotclaw stop' to shut down`);
 }
 
 main().catch((err: unknown) => {

@@ -61,6 +61,11 @@ export class BuiltinChatChannel implements ChannelProvider {
             if (agentInfo.version !== undefined) {
               dashboardAgentStatus.version = agentInfo.version;
             }
+            // Add compatibility status
+            const compat = await this.agentManager?.checkCompatibility();
+            if (compat !== undefined) {
+              dashboardAgentStatus.compatibility = compat;
+            }
           }
         } catch {
           // Agent not reachable

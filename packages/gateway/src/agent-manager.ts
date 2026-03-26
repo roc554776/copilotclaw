@@ -83,6 +83,19 @@ export class AgentManager {
     return getAgentStatus(socketPath);
   }
 
+  /** Check agent compatibility. Returns "compatible", "incompatible", or "unavailable". */
+  async checkCompatibility(): Promise<"compatible" | "incompatible" | "unavailable"> {
+    const status = await this.getStatus();
+    if (status === null) return "unavailable";
+    if (status.version === undefined) return "incompatible";
+    if (!semverSatisfies(status.version, MIN_AGENT_VERSION)) return "incompatible";
+    return "compatible";
+  }
+
+  getMinAgentVersion(): string {
+    return MIN_AGENT_VERSION;
+  }
+
   async stopAgent(): Promise<void> {
     const socketPath = getAgentSocketPath();
     await stopAgent(socketPath);

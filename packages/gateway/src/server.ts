@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
 import type { ChannelProvider } from "./channel-provider.js";
+import { LogBuffer } from "./log-buffer.js";
 import { Store } from "./store.js";
 import { WsBroadcaster } from "./ws.js";
 
@@ -66,6 +67,7 @@ export interface ServerDeps {
   agentManager?: AgentManager | null;
   wsBroadcaster?: WsBroadcaster;
   channelProviders?: ChannelProvider[];
+  logBuffer?: LogBuffer;
 }
 
 function createRequestHandler(
@@ -73,6 +75,7 @@ function createRequestHandler(
   onStop: () => void,
   agentManager: AgentManager | null,
   channelProviders: ChannelProvider[],
+  logBuffer: LogBuffer,
 ) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
@@ -99,11 +102,20 @@ function createRequestHandler(
       return;
     }
 
+    if (fullPathname === "/api/logs" && method === "GET") {
+      const limitParam = params.get("limit");
+      const limit = limitParam !== null ? parseInt(limitParam, 10) : 50;
+      json(res, 200, logBuffer.list(Number.isFinite(limit) && limit > 0 ? limit : 50));
+      return;
+    }
+
     if (fullPathname === "/api/status" && method === "GET") {
       const agentStatus = agentManager !== null ? await agentManager.getStatus() : null;
+      const agentCompatibility = agentManager !== null ? await agentManager.checkCompatibility() : "unavailable";
       json(res, 200, {
         gateway: { status: "running", version: GATEWAY_VERSION },
         agent: agentStatus,
+        agentCompatibility,
       });
       return;
     }
@@ -220,13 +232,14 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
     ? null
     : options?.agentManager ?? new AgentManager({ gatewayPort: port });
   const wsBroadcaster = options?.wsBroadcaster ?? new WsBroadcaster();
+  const logBuffer = options?.logBuffer ?? new LogBuffer();
 
   // Channel providers: use provided list or default to built-in chat
   const channelProviders = options?.channelProviders ?? [
     new BuiltinChatChannel({ store, agentManager, wsBroadcaster }),
   ];
 
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders);
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {

@@ -23,6 +23,7 @@ function renderTab(channel: Channel, isActive: boolean): string {
 export interface DashboardAgentStatus {
   version?: string;
   sessionStatus?: string;
+  compatibility?: string;
 }
 
 export function renderDashboard(channels: Channel[], chatMessages: Message[], activeChannelId: string | undefined, agentStatus?: DashboardAgentStatus): string {
@@ -32,6 +33,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
 
   const agentVersion = agentStatus?.version ? escapeHtml(agentStatus.version) : "—";
   const sessionState = agentStatus?.sessionStatus ? escapeHtml(agentStatus.sessionStatus) : "—";
+  const compatibility = agentStatus?.compatibility ?? "unknown";
+  const compatLabel = compatibility === "compatible" ? "" : ` [${escapeHtml(compatibility)}]`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -85,13 +88,23 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
     .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
     @keyframes typing { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-4px); } }
+    #logs-btn { float: right; background: none; border: 1px solid #30363d; border-radius: 0.3rem; color: #8b949e; cursor: pointer; font-size: 0.7rem; padding: 0.1rem 0.4rem; }
+    #logs-btn:hover { color: #c9d1d9; border-color: #58a6ff; }
+    #logs-panel { display: none; position: fixed; bottom: 0; left: 0; width: 100%; max-height: 40vh; background: #0d1117; border-top: 1px solid #30363d; overflow-y: auto; z-index: 50; font-family: monospace; font-size: 0.75rem; padding: 0.5rem; }
+    #logs-panel.visible { display: block; }
+    .log-entry { padding: 0.1rem 0; color: #8b949e; white-space: pre-wrap; word-break: break-all; }
+    .log-entry.error { color: #f85149; }
+    .log-time { color: #484f58; margin-right: 0.5rem; }
+    .log-source { color: #58a6ff; margin-right: 0.5rem; }
   </style>
 </head>
 <body>
   <div id="status-bar">
+    <button id="logs-btn" onclick="toggleLogs()">Logs</button>
     <span class="ws-indicator ws-disconnected" id="ws-dot"></span>
-    <span id="status-text">gateway: running | agent: v${agentVersion} | session: ${sessionState}</span>
+    <span id="status-text">gateway: running | agent: v${agentVersion}${compatLabel} | session: ${sessionState}</span>
   </div>
+  <div id="logs-panel"></div>
   <div id="status-modal-overlay" onclick="closeStatusModal()"></div>
   <div id="status-modal" style="display:none">
     <button class="close-btn" onclick="closeStatusModal()">&times;</button>
@@ -157,8 +170,9 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       if (!data) return;
       const agentVer = data.agentVersion || "—";
       const sessStatus = data.sessionStatus || "—";
-      statusText.textContent = "gateway: running | agent: v" + agentVer + " | session: " + sessStatus;
-      // Show/hide processing indicator
+      const compat = data.compatibility || "";
+      const compatLabel = compat && compat !== "compatible" ? " [" + compat + "]" : "";
+      statusText.textContent = "gateway: running | agent: v" + agentVer + compatLabel + " | session: " + sessStatus;
       if (sessStatus === "processing") {
         processingIndicator.classList.add("visible");
         chat.scrollTop = chat.scrollHeight;
@@ -182,7 +196,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
           const bound = sessions.find(s => s.boundChannelId === CHANNEL_ID);
           sessStatus = bound ? bound.status : (sessions.length > 0 ? "other channel" : "no session");
         }
-        updateStatusBar({ agentVersion: agentVer, sessionStatus: sessStatus });
+        updateStatusBar({ agentVersion: agentVer, sessionStatus: sessStatus, compatibility: body.agentCompatibility || "unknown" });
       } catch {}
     }
     setInterval(refreshStatus, 5000);
@@ -287,8 +301,34 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     newTabBtn.addEventListener("click", createChannel);
 
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closeStatusModal();
+      if (e.key === "Escape") { closeStatusModal(); toggleLogs(true); }
     });
+
+    // --- Logs Panel ---
+    const logsPanel = document.getElementById("logs-panel");
+    let logsVisible = false;
+
+    function toggleLogs(forceClose) {
+      if (forceClose === true) { logsPanel.classList.remove("visible"); logsVisible = false; return; }
+      logsVisible = !logsVisible;
+      if (logsVisible) { logsPanel.classList.add("visible"); refreshLogs(); } else { logsPanel.classList.remove("visible"); }
+    }
+
+    async function refreshLogs() {
+      try {
+        const res = await fetch("/api/logs?limit=100");
+        if (!res.ok) return;
+        const logs = await res.json();
+        logsPanel.innerHTML = logs.map(function(entry) {
+          const cls = entry.level === "error" ? "log-entry error" : "log-entry";
+          const time = entry.timestamp ? entry.timestamp.slice(11, 19) : "";
+          return '<div class="' + cls + '"><span class="log-time">' + escHtml(time) + '</span><span class="log-source">[' + escHtml(entry.source) + ']</span>' + escHtml(entry.message) + '</div>';
+        }).join("");
+        logsPanel.scrollTop = 0;
+      } catch {}
+    }
+
+    if (logsVisible) setInterval(refreshLogs, 3000);
 
     chat.scrollTop = chat.scrollHeight;
   </script>
