@@ -13,6 +13,7 @@
       "WebFetch(domain:github.com)",
       "Bash(npm install:*)",
       "Bash(npx tsc:*)",
+      "Bash(grep *)",
       "Bash(node dist/index.js)",
       "WebSearch",
       "Bash(mise --version)",

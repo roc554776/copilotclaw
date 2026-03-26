@@ -20,13 +20,18 @@ Commands:
   stop                 Stop the gateway (agent keeps running)
   restart              Restart the gateway (stop + start)
   update               Update copilotclaw (git pull + build)
+  config get <key>     Show config value
+  config set <key> <v> Set config value
+  doctor [--fix]       Diagnose environment (fix issues with --fix)
   agent stop           Stop the agent process only
 
 Start options:
   --force-agent-restart  Stop outdated agent before starting
 
 Environment:
+  COPILOTCLAW_PROFILE    Profile name (separates workspace, config, gateway, agent)
   COPILOTCLAW_UPSTREAM   Git remote URL for update (e.g. file:///path/to/repo)
+  COPILOTCLAW_PORT       Override gateway HTTP port
 `;
 
 async function run() {
@@ -60,6 +65,14 @@ async function run() {
 
     case "update":
       await import(join(gatewayDist, "update.js"));
+      break;
+
+    case "config":
+      await import(join(gatewayDist, "config-cli.js"));
+      break;
+
+    case "doctor":
+      await import(join(gatewayDist, "doctor.js"));
       break;
 
     case "agent":

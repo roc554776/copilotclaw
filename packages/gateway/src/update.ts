@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadConfig } from "./config.js";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(thisDir, "..", "..", "..");
@@ -21,8 +22,9 @@ function run(args: string[], cwd: string): string {
 }
 
 async function main(): Promise<void> {
-  // Determine upstream: use COPILOTCLAW_UPSTREAM env or default git remote
-  const upstream = process.env["COPILOTCLAW_UPSTREAM"];
+  // Determine upstream: env var > config file > default git remote
+  const config = loadConfig();
+  const upstream = config.upstream;
 
   try {
     // Check if we're in a git repo

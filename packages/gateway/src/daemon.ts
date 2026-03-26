@@ -1,6 +1,7 @@
 import { AgentManager } from "./agent-manager.js";
+import { resolvePort } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
-import { DEFAULT_PORT, startServer } from "./server.js";
+import { startServer } from "./server.js";
 import { Store } from "./store.js";
 import { ensureWorkspace, getStoreFilePath } from "./workspace.js";
 
@@ -14,7 +15,8 @@ async function main(): Promise<void> {
   const logBuffer = new LogBuffer();
   logBuffer.interceptConsole();
   const store = new Store({ persistPath: getStoreFilePath() });
-  const agentManager = new AgentManager({ gatewayPort: DEFAULT_PORT });
+  const port = resolvePort();
+  const agentManager = new AgentManager({ gatewayPort: port });
 
   // Always ensure agent process on gateway start (version check + spawn if absent)
   try {
@@ -33,7 +35,7 @@ async function main(): Promise<void> {
     console.error("[gateway] agent ensure failed:", err);
   }
 
-  await startServer({ store, agentManager, logBuffer });
+  await startServer({ port, store, agentManager, logBuffer });
 
   // Periodic agent process monitoring
   let consecutiveFailures = 0;

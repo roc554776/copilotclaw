@@ -39,3 +39,10 @@
   - 状態を保存して終了だけさせる
   - エラー通知はこれまで通りに行う
   - 次に agent が未読な user message が channel に入ってきたときに、保存しておいた状態をもとに session を再起動する
+
+<!-- 2026-03-26 -->
+### Agent Process 停止時のセッション保存
+
+- agent process は停止する前に、全てのアクティブなセッションの状態を保存してほしい
+  - 停止要因が何であれ（`copilotclaw agent stop`、SIGTERM 等）、セッションは破棄ではなく保存されるべき
+  - 保存された状態は、次回 agent process 起動後に resume できるようにする
