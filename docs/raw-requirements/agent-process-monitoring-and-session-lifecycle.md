@@ -27,3 +27,15 @@
 - 理由: 古い agent session を利用し続けると、プロバイダーに切断される可能性があり、危険であるため
 - 将来的には、単純な停止ではなく replace（状態保存して停止、擬似的に同じ状態のものを起動して入れ替え）できるようにする
   - disconnect して resume すればいいので、将来といわずすぐにでも導入できるかもしれない
+
+<!-- 2026-03-26 -->
+### Session Replace の設計原則（上記の replace 方針を修正）
+
+- 危険性: session replace が無制限に再実行されると、プレミアムリクエストが無駄に消費される
+- session replace の方式原則:
+  - 何かしらの理由で session replace が必要になったら、状態を保存して session を終了させる。基本的には即時再起動はしない
+  - 次にその agent session が必要とされるような状況が発生したら、保存しておいた状態をもとに session を再起動する
+- channel に紐づく agent session が processing のままタイムアウトしたケースでは:
+  - 状態を保存して終了だけさせる
+  - エラー通知はこれまで通りに行う
+  - 次に agent が未読な user message が channel に入ってきたときに、保存しておいた状態をもとに session を再起動する

@@ -66,16 +66,23 @@ async function main(): Promise<void> {
 
       for (const [channelId, count] of Object.entries(pending)) {
         if (count > 0 && !sessionManager.hasSessionForChannel(channelId)) {
-          log(`starting session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
-          sessionManager.startSession({ boundChannelId: channelId });
+          // Check for saved session to resume (deferred resume from max-age or stale timeout)
+          const savedCopilotSessionId = sessionManager.consumeSavedSession(channelId);
+          if (savedCopilotSessionId !== undefined) {
+            log(`resuming saved session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
+            sessionManager.startSession({ boundChannelId: channelId, copilotSessionId: savedCopilotSessionId });
+          } else {
+            log(`starting new session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
+            sessionManager.startSession({ boundChannelId: channelId });
+          }
         }
       }
 
       // Check for stale sessions and max age
       const sessionStatuses = sessionManager.getSessionStatuses();
       for (const [sessionId, info] of Object.entries(sessionStatuses)) {
-        // Check max age (2 days default) — replace old sessions when they enter wait
-        if (await sessionManager.checkSessionMaxAge(sessionId)) continue;
+        // Check max age (2 days default) — save state and stop on expiry (deferred resume on next pending)
+        if (sessionManager.checkSessionMaxAge(sessionId)) continue;
 
         const channelId = info.boundChannelId;
         if (channelId === undefined) continue;

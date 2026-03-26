@@ -212,15 +212,11 @@ describe("AgentSessionManager — session max age", () => {
     vi.clearAllMocks();
   });
 
-  it("replaces session that exceeds max age when in waiting state", async () => {
-    // Track calls to createSession and resumeSession with stable session IDs
-    let callCount = 0;
-    const resumeSessionSpy = vi.fn();
-
-    const makeSession = (id: string) => {
+  it("saves copilotSessionId and stops session on max age (deferred resume)", async () => {
+    installClientMock(vi.fn().mockImplementation(async () => {
       const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
       return {
-        sessionId: id,
+        sessionId: "sdk-session-old",
         on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
           const list = listeners.get(event) ?? [];
           list.push(cb);
@@ -229,20 +225,7 @@ describe("AgentSessionManager — session max age", () => {
         send: vi.fn().mockResolvedValue("msg-id"),
         disconnect: vi.fn().mockResolvedValue(undefined),
       };
-    };
-
-    const createSessionMock = vi.fn().mockImplementation(async () => {
-      callCount++;
-      return makeSession(`sdk-session-${callCount}`);
-    });
-
-    (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
-      (this as Record<string, unknown>)["createSession"] = createSessionMock;
-      (this as Record<string, unknown>)["resumeSession"] = resumeSessionSpy.mockImplementation(
-        async (sid: string) => makeSession(sid),
-      );
-      (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
-    });
+    }));
 
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true, status: 204, json: async () => null, text: async () => "null",
@@ -254,28 +237,62 @@ describe("AgentSessionManager — session max age", () => {
       fetch: fetchSpy,
     });
 
-    const sessionId = manager.startSession({ boundChannelId: "ch-age" });
+    manager.startSession({ boundChannelId: "ch-age" });
     await wait(20);
 
-    // Capture the copilotSessionId that was assigned to the original session
-    const originalEntry = manager.getSessionStatus(sessionId);
-    expect(originalEntry).toBeDefined();
-
-    const stopped = await manager.checkSessionMaxAge(sessionId);
+    // All sessions should be waiting (max age 1ms already exceeded)
+    const statuses = manager.getSessionStatuses();
+    const sessionId = Object.keys(statuses)[0]!;
+    const stopped = manager.checkSessionMaxAge(sessionId);
     expect(stopped).toBe(true);
 
-    // A new session should have been started for the same channel
-    await wait(20);
-    const newSessionId = manager.getSessionIdForChannel("ch-age");
-    expect(newSessionId).toBeDefined();
-    expect(newSessionId).not.toBe(sessionId);
+    // copilotSessionId should be saved for deferred resume
+    expect(manager.hasSavedSession("ch-age")).toBe(true);
 
-    // resumeSession should have been called with the SDK session ID from the original session
-    expect(resumeSessionSpy).toHaveBeenCalledOnce();
-    expect(resumeSessionSpy.mock.calls[0]![0]).toBe("sdk-session-1");
+    // No immediate replacement — no new session started
+    await wait(20);
+    // The old session is being torn down, no new session for this channel yet
   });
 
-  it("does not replace session that is within max age", async () => {
+  it("consumeSavedSession returns and removes the saved ID", async () => {
+    installClientMock(vi.fn().mockImplementation(async () => {
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      return {
+        sessionId: "sdk-to-resume",
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          const list = listeners.get(event) ?? [];
+          list.push(cb);
+          listeners.set(event, list);
+        }),
+        send: vi.fn().mockResolvedValue("msg-id"),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+      };
+    }));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      maxSessionAgeMs: 1,
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-consume" });
+    await wait(20);
+
+    const statuses = manager.getSessionStatuses();
+    const sessionId = Object.keys(statuses)[0]!;
+    manager.checkSessionMaxAge(sessionId);
+
+    // Consume should return and remove
+    const saved = manager.consumeSavedSession("ch-consume");
+    expect(saved).toBe("sdk-to-resume");
+    expect(manager.hasSavedSession("ch-consume")).toBe(false);
+  });
+
+  it("does not stop session that is within max age", async () => {
     installClientMock(vi.fn().mockImplementation(async () => {
       const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
       return {
@@ -302,7 +319,7 @@ describe("AgentSessionManager — session max age", () => {
     const sessionId = manager.startSession({ boundChannelId: "ch-young" });
     await wait(20);
 
-    const stopped = await manager.checkSessionMaxAge(sessionId);
+    const stopped = manager.checkSessionMaxAge(sessionId);
     expect(stopped).toBe(false);
     // Session still exists
     const statuses = manager.getSessionStatuses();

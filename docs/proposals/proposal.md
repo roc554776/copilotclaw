@@ -276,37 +276,49 @@ Agent session idle（LLM が tool を呼ばなかった）
 
 agent session が待機中ではなく実行中（processing）のまま一定時間（デフォルト 10 分）経過した場合:
 
+
 ```
 Agent session processing timeout:
-  → agent session を強制終了
+  → session.disconnect() で状態を保存して session を終了
+  → copilotSessionId を channel binding と共に保存
   → エラーログ出力
   → channel に紐づく session の場合:
     → channel に「agent session がタイムアウトで停止した」旨のシステムメッセージを投稿
-    → dashboard でユーザーが知覚できるようにする
+  → 次に channel に未読 user message が入ったとき、保存された copilotSessionId で resumeSession
 ```
 
 ### Agent Session の寿命制限
 
-agent session が wait 状態になったとき、session が作られてからの経過時間を確認する。一定期間（デフォルト 2 日）を超過していた場合、その session を停止（または replace）する。
+agent session が wait 状態になったとき、session が作られてからの経過時間を確認する。一定期間（デフォルト 2 日）を超過していた場合、session を deferred replace する。
 
 - エラーではないため、通知は不要
 - 理由: 古い agent session を利用し続けると、プロバイダーに切断される可能性があり危険
 
+
 ```
 Agent session が wait に遷移:
   → session 作成時刻からの経過時間を確認
-  → 2 日超過 → session を replace（または graceful に停止）
-  → channel binding を維持（replace の場合）または解除（停止の場合）
-  → 停止の場合: 次の user message で新しい session が起動される（通常フローと同じ）
+  → 2 日超過 → session.disconnect() で状態保存して終了（即時再起動しない）
+  → copilotSessionId を channel binding と共に保存
+  → 次に channel に未読 user message が入ったとき、保存された copilotSessionId で resumeSession
 ```
 
 #### Session Replace
 
-寿命超過時の session を単純に停止するのではなく、replace する仕組み。状態を保存して停止し、擬似的に同じような状態の新しい session を起動して入れ替える。
+session replace が必要になったとき、即座に再起動するのではなく、状態を保存して終了し、次に必要になったタイミングで resume する（deferred resume）。
 
-- Copilot SDK の `session.disconnect()` で状態保存 → `client.resumeSession(sessionId)` で復元
-- channel binding はそのまま維持される（ユーザーから見て透過的）
-- disconnect → resumeSession は SDK が提供する機能なので、比較的早期に導入可能
+方式原則:
+- replace が必要になったら `session.disconnect()` で状態を保存して session を終了させる。即時再起動はしない
+- copilotSessionId（SDK session ID）を channel binding と共に保存しておく
+- 次にその agent session が必要とされる状況（channel に未読 user message が入った等）が発生したら、保存された copilotSessionId を使って `client.resumeSession()` で再起動する
+
+適用ケース:
+- **寿命超過**: wait 遷移時に max age 超過 → disconnect して終了、次の pending で resume
+- **stale timeout**: processing タイムアウト → disconnect して終了 + エラー通知、次の pending で resume
+
+危険性の回避:
+- 即時再起動しないことで、replace の無限ループによるプレミアムリクエストの無駄な消費を防ぐ
+- resume は「次に必要になったとき」にのみ発生するため、不必要な session 起動が起きない
 
 ### Channel ツール
 
@@ -595,7 +607,7 @@ gateway と agent のバージョン管理ルールを定める。
 - Gateway による agent process 常時監視（30 秒ポーリングで生存確認 + バージョンチェック + 自動再起動）
 - Agent session 実行中タイムアウト時の channel message 通知
 - Agent session 寿命制限（デフォルト 2 日超過で replace）
-- Agent session replace（disconnect → resumeSession による透過的な session 入れ替え）
+- Agent session replace（deferred resume 方式: disconnect → 次の pending で resumeSession）
 - 自動テスト基盤（Vitest、mock session、mock fetch による agent テスト）
 
 **今後の課題:**
