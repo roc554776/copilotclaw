@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-25 | Token estimate: ~200 -->
+<!-- Generated: 2026-03-26 | Token estimate: ~220 -->
 
 # Dependencies
 
@@ -16,7 +16,8 @@
 | Package | Purpose |
 |---------|---------|
 | `typescript` ^6.0.2 | Compiler |
-| `vitest` ^4.1.1 | Test runner (unit + E2E) |
+| `vitest` ^4.1.1 | Test runner (unit + E2E, excludes test/browser/) |
+| `@playwright/test` | Browser E2E test runner (test/browser/) |
 | `@types/node` ^22.0.0 | Node.js type definitions |
 
 ## Tooling

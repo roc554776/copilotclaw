@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-26 | Files scanned: 26 | Token estimate: ~1200 -->
+<!-- Generated: 2026-03-26 | Files scanned: 29 | Token estimate: ~1300 -->
 
 # Backend
 
@@ -37,7 +37,7 @@ src/workspace.ts           — workspace paths: ~/.copilotclaw/ root, data/, sto
 src/store.ts               — persistent store (Channel, Message, per-channel pending queue); JSON file via atomic rename
 src/channel-provider.ts    — ChannelProvider interface (plugin contract for chat mediums)
 src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, WS broadcast); passes compatibility info to dashboard
-src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button)
+src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening)
 src/ws.ts                  — WsBroadcaster: SSE event broadcasting to connected clients
 src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); checkCompatibility() and getMinAgentVersion() methods
 src/ipc-client.ts          — IPC client (status/stop to agent process)
@@ -91,4 +91,21 @@ src/session-loop.ts             — session idle loop (subscribe/send/disconnect
 src/copilot-session-adapter.ts  — CopilotSession → SessionLike adapter
 src/stop.ts                     — CLI stop command (IPC stop)
 src/tools/channel.ts            — send_message, receive_input, list_messages tools
+```
+
+## Testing
+
+### Configuration
+
+```
+vitest.config.ts           — vitest config; excludes test/browser/ (Playwright-managed)
+playwright.config.ts       — Playwright config for browser E2E tests
+```
+
+### Test Suites (120 total: 112 vitest + 8 Playwright)
+
+```
+Gateway vitest (80 tests)  — unit + E2E tests with mock agent
+Agent vitest (32 tests)    — unit + E2E tests with mock Copilot SDK session
+Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```
