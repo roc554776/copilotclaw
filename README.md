@@ -93,7 +93,7 @@ copilotclaw config set <key> <value>  # Set config value
 | `port` | number | `COPILOTCLAW_PORT` | Gateway HTTP port (default: 19741) |
 | `model` | string | `COPILOTCLAW_MODEL` | Default Copilot model. Unset = auto-select least premium model |
 | `zeroPremium` | boolean | `COPILOTCLAW_ZERO_PREMIUM` | Zero premium request mode (default: false) |
-| `mockTools` | boolean | `COPILOTCLAW_MOCK_TOOLS` | Dev mode: replace dangerous tools with mocks (default: false) |
+| `debugMockCopilotUnsafeTools` | boolean | `COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS` | Dev mode: replace dangerous tools with mocks (default: false) |
 
 Environment variables override config file values.
 

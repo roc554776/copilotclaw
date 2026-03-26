@@ -17,7 +17,7 @@ describe("doctor", () => {
     delete process.env["COPILOTCLAW_PROFILE"];
     delete process.env["COPILOTCLAW_MODEL"];
     delete process.env["COPILOTCLAW_ZERO_PREMIUM"];
-    delete process.env["COPILOTCLAW_MOCK_TOOLS"];
+    delete process.env["COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS"];
   });
 
   describe("checkWorkspace", () => {

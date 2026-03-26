@@ -121,7 +121,7 @@ function createRequestHandler(
         config: {
           model: config.model ?? null,
           zeroPremium: config.zeroPremium ?? false,
-          mockTools: config.mockTools ?? false,
+          debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
         },
       });
       return;

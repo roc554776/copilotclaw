@@ -9,7 +9,7 @@
 ```
 GET  /healthz                              → 200 { status: "ok" }
 POST /api/stop                             → 200 { status: "stopping" } → gateway exit only (localhost only, agent NOT stopped)
-GET  /api/status                           → 200 { gateway: {status, version, profile}, agent: AgentStatusResponse|null, agentCompatibility: …|null, config: {model, zeroPremium, mockTools} }
+GET  /api/status                           → 200 { gateway: {status, version, profile}, agent: AgentStatusResponse|null, agentCompatibility: …|null, config: {model, zeroPremium, debugMockCopilotUnsafeTools} }
 GET  /api/logs                             → 200 { logs: string[] } (recent log lines from ring buffer)
 GET  /api/channels                         → 200 Channel[]
 POST /api/channels                         → 201 Channel
@@ -26,8 +26,8 @@ GET  /                                     → 200 HTML dashboard (status bar + 
 
 ```
 src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents
-src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, CONFIG_ENV_VARS, parseBool helper; profile-aware (~/.copilotclaw/config.json or config-{{profile}}.json); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_MOCK_TOOLS) take precedence over file values; CopilotclawConfig includes model, zeroPremium, mockTools fields
-src/config-cli.ts          — `copilotclaw config` CLI: configGet (resolve + display, notes env var override), configSet (validate + save, warns if env var shadows); valid keys: upstream, port, model, zeroPremium, mockTools; BOOLEAN_KEYS handling for zeroPremium/mockTools
+src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, CONFIG_ENV_VARS, parseBool helper; profile-aware (~/.copilotclaw/config.json or config-{{profile}}.json); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS) take precedence over file values; CopilotclawConfig includes model, zeroPremium, debugMockCopilotUnsafeTools fields
+src/config-cli.ts          — `copilotclaw config` CLI: configGet (resolve + display, notes env var override), configSet (validate + save, warns if env var shadows); valid keys: upstream, port, model, zeroPremium, debugMockCopilotUnsafeTools; BOOLEAN_KEYS handling for zeroPremium/debugMockCopilotUnsafeTools
 src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + LogBuffer creation + console intercept + startServer on resolvePort() + periodic agent monitor every 30s, max 3 retries)
 src/index.ts               — CLI entry point (health check on resolvePort() → detached spawn → exit); after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible; checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart)
 src/log-buffer.ts          — LogBuffer class (ring buffer for recent log lines), interceptConsole() to capture stdout/stderr
@@ -51,7 +51,7 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 
 ```
 ~/.copilotclaw/
-  config.json                — config file (port, upstream, model, zeroPremium, mockTools); env vars take precedence
+  config.json                — config file (port, upstream, model, zeroPremium, debugMockCopilotUnsafeTools); env vars take precedence
   config-{{profile}}.json    — profile-specific config (when COPILOTCLAW_PROFILE set)
   data/
     store.json               — persisted channels + messages + pending queues (atomic write via .tmp rename)
@@ -91,8 +91,8 @@ copilotclaw_list_messages(limit?)   — list recent channel messages (reverse-ch
 ### Key Files
 
 ```
-src/index.ts                    — singleton entry, fetches config (model/zeroPremium/mockTools) from gateway /api/status at startup, passes to AgentSessionManager; gateway polling loop, max-age check then stale detection per cycle; checks for saved sessions (hasSavedSession) when pending messages found, consumes saved copilotSessionId for deferred resume via startSession
-src/agent-session-manager.ts    — per-session lifecycle, channel binding, model/zeroPremium/mockTools fields; resolveModel() method (zeroPremium overrides premium models to non-premium); mockTools mode restricts availableTools to copilotclaw_* + debug mock tools + WebFetch/WebSearch; deferred resume pattern: checkSessionMaxAge and checkStaleAndHandle save copilotSessionId to savedCopilotSessionIds map and stop session (no immediate restart/retry); hasSavedSession/consumeSavedSession for retrieval; max-age 2-day default; channel notifications (stopped/timed-out via postChannelMessage)
+src/index.ts                    — singleton entry, fetches config (model/zeroPremium/debugMockCopilotUnsafeTools) from gateway /api/status at startup, passes to AgentSessionManager; gateway polling loop, max-age check then stale detection per cycle; checks for saved sessions (hasSavedSession) when pending messages found, consumes saved copilotSessionId for deferred resume via startSession
+src/agent-session-manager.ts    — per-session lifecycle, channel binding, model/zeroPremium/debugMockCopilotUnsafeTools fields; resolveModel() method (zeroPremium overrides premium models to non-premium); debugMockCopilotUnsafeTools mode restricts availableTools to copilotclaw_* + debug debug mock copilot unsafe tools + WebFetch/WebSearch; deferred resume pattern: checkSessionMaxAge and checkStaleAndHandle save copilotSessionId to savedCopilotSessionIds map and stop session (no immediate restart/retry); hasSavedSession/consumeSavedSession for retrieval; max-age 2-day default; channel notifications (stopped/timed-out via postChannelMessage)
 src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop), version reporting
 src/ipc-paths.ts                — socket path generation (profile-aware, same logic as gateway)
 src/session-loop.ts             — session idle loop (subscribe/send/disconnect, no continuePrompt); runSession supports both createSession and resumeSession

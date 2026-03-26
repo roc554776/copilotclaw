@@ -8,7 +8,7 @@ const POLL_INTERVAL_MS = 5000;
 interface GatewayConfig {
   model: string | null;
   zeroPremium: boolean;
-  mockTools: boolean;
+  debugMockCopilotUnsafeTools: boolean;
 }
 
 function log(message: string): void {
@@ -23,7 +23,7 @@ async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
       if (data.config !== undefined) return data.config;
     }
   } catch {}
-  return { model: null, zeroPremium: false, mockTools: false };
+  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false };
 }
 
 async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, number>> {
@@ -57,12 +57,12 @@ async function main(): Promise<void> {
 
   // Fetch config from gateway
   const config = await fetchGatewayConfig(GATEWAY_URL);
-  log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, mockTools=${config.mockTools}`);
+  log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, debugMockCopilotUnsafeTools=${config.debugMockCopilotUnsafeTools}`);
 
   const managerOpts: AgentSessionManagerOptions = {
     gatewayBaseUrl: GATEWAY_URL,
     zeroPremium: config.zeroPremium,
-    mockTools: config.mockTools,
+    debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
   };
   if (config.model !== null) managerOpts.model = config.model;
   const sessionManager = new AgentSessionManager(managerOpts);

@@ -15,7 +15,7 @@ export interface CopilotclawConfig {
   port?: number;
   model?: string;
   zeroPremium?: boolean;
-  mockTools?: boolean;
+  debugMockCopilotUnsafeTools?: boolean;
 }
 
 export function getProfileName(): string | undefined {
@@ -57,7 +57,7 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   const envPort = process.env["COPILOTCLAW_PORT"];
   const envModel = process.env["COPILOTCLAW_MODEL"];
   const envZeroPremium = process.env["COPILOTCLAW_ZERO_PREMIUM"];
-  const envMockTools = process.env["COPILOTCLAW_MOCK_TOOLS"];
+  const envMockTools = process.env["COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS"];
 
   const result: CopilotclawConfig = {};
 
@@ -73,8 +73,8 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   const zeroPremium = (envZeroPremium !== undefined && envZeroPremium !== "") ? parseBool(envZeroPremium) : fileConfig.zeroPremium;
   if (zeroPremium !== undefined) result.zeroPremium = zeroPremium;
 
-  const mockTools = (envMockTools !== undefined && envMockTools !== "") ? parseBool(envMockTools) : fileConfig.mockTools;
-  if (mockTools !== undefined) result.mockTools = mockTools;
+  const debugMockCopilotUnsafeTools = (envMockTools !== undefined && envMockTools !== "") ? parseBool(envMockTools) : fileConfig.debugMockCopilotUnsafeTools;
+  if (debugMockCopilotUnsafeTools !== undefined) result.debugMockCopilotUnsafeTools = debugMockCopilotUnsafeTools;
 
   return result;
 }
@@ -96,7 +96,7 @@ export const CONFIG_ENV_VARS: Record<string, string> = {
   port: "COPILOTCLAW_PORT",
   model: "COPILOTCLAW_MODEL",
   zeroPremium: "COPILOTCLAW_ZERO_PREMIUM",
-  mockTools: "COPILOTCLAW_MOCK_TOOLS",
+  debugMockCopilotUnsafeTools: "COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS",
 };
 
 export function saveConfig(config: CopilotclawConfig, profile?: string): void {

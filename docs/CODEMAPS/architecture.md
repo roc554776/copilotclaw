@@ -18,7 +18,7 @@
                                                             (mocked in tests)
 ```
 
-- **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, zeroPremium, mockTools) via /api/status; serves recent logs via /api/logs (ring buffer)
+- **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, zeroPremium, debugMockCopilotUnsafeTools) via /api/status; serves recent logs via /api/logs (ring buffer)
 - **Agent**: single process, manages agent sessions independently of channels
 - **Agent Session**: wraps a Copilot SDK session with its own sessionId, optionally bound to a channel
 - **ChannelProvider**: plugin interface for chat mediums (built-in chat, Discord, Telegram, etc.); providers handle medium-specific routes and receive message notifications
@@ -44,7 +44,7 @@ Environment variables:
 - `COPILOTCLAW_PORT` — override gateway HTTP port (takes precedence over config file)
 - `COPILOTCLAW_MODEL` — override Copilot SDK model
 - `COPILOTCLAW_ZERO_PREMIUM` — enable zero-premium mode (boolean: true/1/false/0)
-- `COPILOTCLAW_MOCK_TOOLS` — enable mock tools mode (boolean: true/1/false/0)
+- `COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS` — enable debug mock copilot unsafe tools mode (boolean: true/1/false/0)
 
 ## Process Model
 

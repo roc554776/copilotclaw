@@ -7,7 +7,7 @@ describe("config", () => {
     delete process.env["COPILOTCLAW_PROFILE"];
     delete process.env["COPILOTCLAW_MODEL"];
     delete process.env["COPILOTCLAW_ZERO_PREMIUM"];
-    delete process.env["COPILOTCLAW_MOCK_TOOLS"];
+    delete process.env["COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS"];
   });
 
   it("getConfigFilePath returns default path without profile", async () => {
@@ -99,11 +99,11 @@ describe("config", () => {
     expect(config.zeroPremium).toBe(true);
   });
 
-  it("env var COPILOTCLAW_MOCK_TOOLS parses boolean", async () => {
-    process.env["COPILOTCLAW_MOCK_TOOLS"] = "1";
+  it("env var COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS parses boolean", async () => {
+    process.env["COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS"] = "1";
     const { loadConfig } = await import("../../src/config.js");
     const config = loadConfig("nonexistent-profile-" + Date.now());
-    expect(config.mockTools).toBe(true);
+    expect(config.debugMockCopilotUnsafeTools).toBe(true);
   });
 
   it("invalid boolean env var is ignored", async () => {

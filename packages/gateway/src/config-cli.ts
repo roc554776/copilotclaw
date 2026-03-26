@@ -6,7 +6,7 @@ function log(message: string): void {
   console.error(`[config] ${message}`);
 }
 
-const BOOLEAN_KEYS = new Set(["zeroPremium", "mockTools"]);
+const BOOLEAN_KEYS = new Set(["zeroPremium", "debugMockCopilotUnsafeTools"]);
 
 function parseValue(key: string, raw: string): string | number | boolean {
   if (key === "port") {

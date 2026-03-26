@@ -30,7 +30,7 @@ export interface AgentSessionManagerOptions {
   fetch?: typeof globalThis.fetch;
   model?: string;
   zeroPremium?: boolean;
-  mockTools?: boolean;
+  debugMockCopilotUnsafeTools?: boolean;
 }
 
 export interface StartSessionOptions {
@@ -53,7 +53,7 @@ export class AgentSessionManager {
   private readonly fetchFn: typeof globalThis.fetch;
   private readonly model: string | undefined;
   private readonly zeroPremium: boolean;
-  private readonly mockTools: boolean;
+  private readonly debugMockCopilotUnsafeTools: boolean;
   private generationCounter = 0;
 
   constructor(options: AgentSessionManagerOptions) {
@@ -63,7 +63,7 @@ export class AgentSessionManager {
     this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.model = options.model;
     this.zeroPremium = options.zeroPremium ?? false;
-    this.mockTools = options.mockTools ?? false;
+    this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
   }
 
   getSessionStatuses(): Record<string, AgentSessionInfo> {
@@ -193,8 +193,8 @@ export class AgentSessionManager {
           return;
         },
       },
-      // Mock tools mode: restrict to safe built-in tools + copilotclaw_* + debug mock tools
-      ...(this.mockTools ? {
+      // Debug mock copilot unsafe tools mode: restrict to safe built-in tools + copilotclaw_* + debug debug mock copilot unsafe tools
+      ...(this.debugMockCopilotUnsafeTools ? {
         availableTools: [
           "copilotclaw_send_message",
           "copilotclaw_receive_input",
