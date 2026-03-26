@@ -82,7 +82,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
     vi.clearAllMocks();
   });
 
-  it("notifies the channel when session ends normally (idle, unaborted)", async () => {
+  it("suspends session and notifies channel when physical session ends normally (idle, unaborted)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
     const fetchSpy = vi.fn().mockResolvedValue({
@@ -97,9 +97,15 @@ describe("AgentSessionManager — stopped status and channel notification", () =
       fetch: fetchSpy,
     });
 
-    manager.startSession({ boundChannelId: "ch-idle" });
+    const sessionId = manager.startSession({ boundChannelId: "ch-idle" });
 
     await wait(50);
+
+    // Session should be suspended (not deleted), channel binding preserved
+    const statuses = manager.getSessionStatuses();
+    expect(statuses[sessionId]?.status).toBe("suspended");
+    expect(manager.hasSessionForChannel("ch-idle")).toBe(true);
+    expect(manager.hasActiveSessionForChannel("ch-idle")).toBe(false);
 
     const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
       ([url]) => (url as string).includes("/messages"),
@@ -110,7 +116,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
     expect(body.message).toContain("stopped unexpectedly");
   });
 
-  it("notifies the channel when session throws an error (unaborted)", async () => {
+  it("suspends session and notifies channel when physical session throws an error (unaborted)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("error")));
 
     const fetchSpy = vi.fn().mockResolvedValue({
@@ -125,9 +131,14 @@ describe("AgentSessionManager — stopped status and channel notification", () =
       fetch: fetchSpy,
     });
 
-    manager.startSession({ boundChannelId: "ch-error" });
+    const sessionId = manager.startSession({ boundChannelId: "ch-error" });
 
     await wait(50);
+
+    // Session should be suspended (not deleted)
+    const statuses = manager.getSessionStatuses();
+    expect(statuses[sessionId]?.status).toBe("suspended");
+    expect(manager.hasSessionForChannel("ch-error")).toBe(true);
 
     const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
       ([url]) => (url as string).includes("/messages"),
@@ -229,7 +240,7 @@ describe("AgentSessionManager — session max age", () => {
     vi.clearAllMocks();
   });
 
-  it("saves copilotSessionId and stops session on max age (deferred resume)", async () => {
+  it("suspends session on max age (preserving channel binding and copilotSessionId)", async () => {
     installClientMock(vi.fn().mockImplementation(async () => {
       const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
       return {
@@ -257,56 +268,22 @@ describe("AgentSessionManager — session max age", () => {
     manager.startSession({ boundChannelId: "ch-age" });
     await wait(20);
 
-    // All sessions should be waiting (max age 1ms already exceeded)
     const statuses = manager.getSessionStatuses();
     const sessionId = Object.keys(statuses)[0]!;
     const stopped = manager.checkSessionMaxAge(sessionId);
     expect(stopped).toBe(true);
 
-    // copilotSessionId should be saved for deferred resume
-    expect(manager.hasSavedSession("ch-age")).toBe(true);
+    // Session should be suspended, not deleted
+    const afterStatuses = manager.getSessionStatuses();
+    expect(afterStatuses[sessionId]?.status).toBe("suspended");
 
-    // No immediate replacement — no new session started
+    // Channel binding should be preserved
+    expect(manager.hasSessionForChannel("ch-age")).toBe(true);
+
+    // But it should not be "active"
+    expect(manager.hasActiveSessionForChannel("ch-age")).toBe(false);
+
     await wait(20);
-    // The old session is being torn down, no new session for this channel yet
-  });
-
-  it("consumeSavedSession returns and removes the saved ID", async () => {
-    installClientMock(vi.fn().mockImplementation(async () => {
-      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
-      return {
-        sessionId: "sdk-to-resume",
-        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-          const list = listeners.get(event) ?? [];
-          list.push(cb);
-          listeners.set(event, list);
-        }),
-        send: vi.fn().mockResolvedValue("msg-id"),
-        disconnect: vi.fn().mockResolvedValue(undefined),
-      };
-    }));
-
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
-
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      maxSessionAgeMs: 1,
-      fetch: fetchSpy,
-    });
-
-    manager.startSession({ boundChannelId: "ch-consume" });
-    await wait(20);
-
-    const statuses = manager.getSessionStatuses();
-    const sessionId = Object.keys(statuses)[0]!;
-    manager.checkSessionMaxAge(sessionId);
-
-    // Consume should return and remove
-    const saved = manager.consumeSavedSession("ch-consume");
-    expect(saved).toBe("sdk-to-resume");
-    expect(manager.hasSavedSession("ch-consume")).toBe(false);
   });
 
   it("does not stop session that is within max age", async () => {
@@ -341,6 +318,79 @@ describe("AgentSessionManager — session max age", () => {
     // Session still exists
     const statuses = manager.getSessionStatuses();
     expect(statuses[sessionId]).toBeDefined();
+  });
+});
+
+describe("AgentSessionManager — suspended session revival", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("revives a suspended session with the same sessionId and channel binding", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-revive" });
+    await wait(50); // session idles and suspends
+
+    expect(manager.getSessionStatuses()[sessionId]?.status).toBe("suspended");
+    expect(manager.hasSessionForChannel("ch-revive")).toBe(true);
+
+    // Revive by calling startSession again with the same channel
+    const mockSession2 = makeMockCopilotSession("idle");
+    mockSession2.send.mockImplementation(async () => "msg-id");
+    installClientMock(vi.fn().mockResolvedValue(mockSession2));
+
+    const revivedId = manager.startSession({ boundChannelId: "ch-revive" });
+
+    // Must return the SAME abstract session ID
+    expect(revivedId).toBe(sessionId);
+
+    await waitForPhysicalSession(manager);
+
+    // Session should be active again
+    const status = manager.getSessionStatuses()[sessionId]?.status;
+    expect(status).not.toBe("suspended");
+
+    mockSession2.emit("session.idle");
+    await wait(30);
+  });
+
+  it("explicit stopSession fully removes session and channel binding", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-explicit-stop" });
+    await waitForPhysicalSession(manager);
+
+    manager.stopSession(sessionId);
+    await wait(30);
+
+    // Fully removed — not just suspended
+    expect(manager.getSessionStatuses()[sessionId]).toBeUndefined();
+    expect(manager.hasSessionForChannel("ch-explicit-stop")).toBe(false);
+
+    mockSession.emit("session.idle");
+    await wait(30);
   });
 });
 
@@ -393,9 +443,11 @@ describe("AgentSessionManager — stale deferred resume", () => {
     // Must return "flushed" so the caller flushes stale inputs
     expect(result).toBe("flushed");
 
-    // Must have saved the copilotSessionId for deferred resume
-    expect(manager.hasSavedSession("ch-stale-defer")).toBe(true);
-    expect(manager.consumeSavedSession("ch-stale-defer")).toBe("sdk-stale-id");
+    // Session should be suspended (not deleted), channel binding preserved
+    const afterStatuses = manager.getSessionStatuses();
+    expect(afterStatuses[sessionId]?.status).toBe("suspended");
+    expect(manager.hasSessionForChannel("ch-stale-defer")).toBe(true);
+    expect(manager.hasActiveSessionForChannel("ch-stale-defer")).toBe(false);
 
     // Must have notified the channel of the timeout
     const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
@@ -405,14 +457,9 @@ describe("AgentSessionManager — stale deferred resume", () => {
     const body = JSON.parse(notifyCalls[0]![1].body as string) as { sender: string; message: string };
     expect(body.sender).toBe("agent");
     expect(body.message).toContain("timed out");
-
-    // Only one session should exist (the original stale one, teardown is async)
-    // Crucially, no second session was created for the channel
-    const sessionCountAfter = Object.keys(manager.getSessionStatuses()).length;
-    expect(sessionCountAfter).toBeLessThanOrEqual(1);
   });
 
-  it("does not save copilotSessionId when oldestInputId is undefined (nothing pending - stale check)", async () => {
+  it("does not suspend session when oldestInputId is undefined (nothing pending - stale check)", async () => {
     installClientMock(vi.fn().mockImplementation(async () => makeStuckSession("sdk-noop-id")));
 
     const fetchSpy = vi.fn().mockResolvedValue({
@@ -438,7 +485,8 @@ describe("AgentSessionManager — stale deferred resume", () => {
     // oldestInputId is undefined — agent may be legitimately finishing
     const result = await manager.checkStaleAndHandle(sessionId, undefined);
     expect(result).toBe("ok");
-    expect(manager.hasSavedSession("ch-nopending")).toBe(false);
+    // Session should NOT be suspended
+    expect(manager.hasActiveSessionForChannel("ch-nopending")).toBe(true);
   });
 });
 

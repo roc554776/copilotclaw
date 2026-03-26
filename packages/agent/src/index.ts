@@ -94,16 +94,11 @@ async function main(): Promise<void> {
       const pending = await fetchPendingCounts(GATEWAY_URL);
 
       for (const [channelId, count] of Object.entries(pending)) {
-        if (count > 0 && !sessionManager.hasSessionForChannel(channelId)) {
-          // Check for saved session to resume (deferred resume from max-age or stale timeout)
-          const savedCopilotSessionId = sessionManager.consumeSavedSession(channelId);
-          if (savedCopilotSessionId !== undefined) {
-            log(`resuming saved session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
-            sessionManager.startSession({ boundChannelId: channelId, copilotSessionId: savedCopilotSessionId });
-          } else {
-            log(`starting new session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
-            sessionManager.startSession({ boundChannelId: channelId });
-          }
+        if (count > 0 && !sessionManager.hasActiveSessionForChannel(channelId)) {
+          // startSession will revive a suspended session (with its saved copilotSessionId)
+          // or create a new one if no abstract session exists for this channel.
+          log(`starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
+          sessionManager.startSession({ boundChannelId: channelId });
         }
       }
 

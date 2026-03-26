@@ -71,7 +71,7 @@ const SYSTEM_REMINDER =
   `NEVER stop or idle without copilotclaw_receive_input.\n` +
   `</system>`;
 
-export type AgentSessionStatus = "starting" | "waiting" | "processing" | "stopped";
+export type AgentSessionStatus = "starting" | "waiting" | "processing" | "suspended" | "stopped";
 
 export interface PhysicalSessionSummary {
   sessionId: string;
@@ -96,16 +96,16 @@ export interface SubagentInfo {
 export interface AgentSessionInfo {
   status: AgentSessionStatus;
   startedAt: string;
-  processingStartedAt?: string;
-  boundChannelId?: string;
-  physicalSession?: PhysicalSessionSummary;
-  subagentSessions?: SubagentInfo[];
+  processingStartedAt?: string | undefined;
+  boundChannelId?: string | undefined;
+  physicalSession?: PhysicalSessionSummary | undefined;
+  subagentSessions?: SubagentInfo[] | undefined;
 }
 
 interface AgentSessionEntry {
   sessionId: string;
-  copilotSessionId?: string; // SDK session ID for resumeSession
-  copilotSession?: CopilotSession; // Live SDK session for getMessages()
+  copilotSessionId?: string | undefined; // SDK session ID for resumeSession
+  copilotSession?: CopilotSession | undefined; // Live SDK session for getMessages()
   info: AgentSessionInfo;
   client: CopilotClient;
   abortController: AbortController;
@@ -222,12 +222,27 @@ export class AgentSessionManager {
     return this.channelBindings.has(channelId);
   }
 
+  /** Check if a channel has an active (non-suspended) session. */
+  hasActiveSessionForChannel(channelId: string): boolean {
+    const sessionId = this.channelBindings.get(channelId);
+    if (sessionId === undefined) return false;
+    const entry = this.sessions.get(sessionId);
+    return entry !== undefined && entry.info.status !== "suspended";
+  }
+
   startSession(options?: StartSessionOptions): string {
     const boundChannelId = options?.boundChannelId;
 
-    // Prevent duplicate session for same channel
+    // If channel already has a suspended session, revive it with a new physical session
     if (boundChannelId !== undefined && this.channelBindings.has(boundChannelId)) {
-      return this.channelBindings.get(boundChannelId)!;
+      const existingId = this.channelBindings.get(boundChannelId)!;
+      const existing = this.sessions.get(existingId);
+      if (existing !== undefined && existing.info.status === "suspended") {
+        this.reviveSession(existing, options?.copilotSessionId);
+        return existingId;
+      }
+      // Already active — return existing
+      return existingId;
     }
 
     const sessionId = randomUUID();
@@ -257,30 +272,19 @@ export class AgentSessionManager {
     }
 
     const promise = this.runSession(entry).then(() => {
-      // Session ended normally (idle) — this is unexpected, mark as stopped
+      // Physical session ended normally (idle) — unexpected, suspend the abstract session
       if (!entry.abortController.signal.aborted) {
-        entry.info.status = "stopped";
+        this.suspendSession(entry);
         this.notifyChannelSessionStopped(boundChannelId);
       }
     }).catch((err: unknown) => {
       console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
       if (!entry.abortController.signal.aborted) {
-        entry.info.status = "stopped";
+        this.suspendSession(entry);
         this.notifyChannelSessionStopped(boundChannelId);
       }
     }).finally(() => {
-      // Only delete if this is still the current generation
-      const current = this.sessions.get(sessionId);
-      if (current !== undefined && current.generation === generation) {
-        this.sessions.delete(sessionId);
-        if (boundChannelId !== undefined) {
-          // Only unbind if still bound to this session
-          if (this.channelBindings.get(boundChannelId) === sessionId) {
-            this.channelBindings.delete(boundChannelId);
-            this.restartCounts.delete(boundChannelId);
-          }
-        }
-      }
+      // Clean up the CopilotClient — the abstract session survives in suspended state
       client.stop().catch(() => {});
     });
 
@@ -606,10 +610,61 @@ export class AgentSessionManager {
     }
   }
 
+  /** Transition an abstract session to suspended state, preserving channel binding.
+   *  The physical session is gone but the abstract session survives for later revival. */
+  private suspendSession(entry: AgentSessionEntry): void {
+    entry.info.status = "suspended";
+    entry.copilotSession = undefined;
+    entry.info.physicalSession = undefined;
+    entry.info.subagentSessions = undefined;
+    // copilotSessionId is preserved for resumeSession on revival
+  }
+
+  /** Revive a suspended abstract session by launching a new physical session. */
+  private reviveSession(entry: AgentSessionEntry, copilotSessionId?: string): void {
+    // Use provided copilotSessionId or fall back to the one saved during suspension
+    if (copilotSessionId !== undefined) {
+      entry.copilotSessionId = copilotSessionId;
+    }
+    // Else: keep existing entry.copilotSessionId from the suspended session
+
+    entry.info.status = "starting";
+    entry.abortController = new AbortController();
+    entry.client = new CopilotClient();
+    entry.generation = ++this.generationCounter;
+
+    const boundChannelId = entry.info.boundChannelId;
+    const sessionId = entry.sessionId;
+
+    const promise = this.runSession(entry).then(() => {
+      if (!entry.abortController.signal.aborted) {
+        this.suspendSession(entry);
+        this.notifyChannelSessionStopped(boundChannelId);
+      }
+    }).catch((err: unknown) => {
+      console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
+      if (!entry.abortController.signal.aborted) {
+        this.suspendSession(entry);
+        this.notifyChannelSessionStopped(boundChannelId);
+      }
+    }).finally(() => {
+      entry.client.stop().catch(() => {});
+    });
+
+    entry.sessionPromise = promise;
+  }
+
+  /** Explicitly stop a session — fully removes the abstract session and channel binding. */
   stopSession(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return;
     entry.abortController.abort();
+    // Fully remove on explicit stop (not suspend)
+    const boundChannelId = entry.info.boundChannelId;
+    if (boundChannelId !== undefined && this.channelBindings.get(boundChannelId) === sessionId) {
+      this.channelBindings.delete(boundChannelId);
+    }
+    this.sessions.delete(sessionId);
   }
 
   stopSessionForChannel(channelId: string): void {
@@ -621,9 +676,15 @@ export class AgentSessionManager {
 
   async stopAll(): Promise<void> {
     const promises: Promise<void>[] = [];
-    for (const [, entry] of this.sessions) {
+    for (const [sessionId, entry] of this.sessions) {
       entry.abortController.abort();
       promises.push(entry.sessionPromise);
+      // Fully remove all sessions on explicit stop
+      const boundChannelId = entry.info.boundChannelId;
+      if (boundChannelId !== undefined) {
+        this.channelBindings.delete(boundChannelId);
+      }
+      this.sessions.delete(sessionId);
     }
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((r) => { timeoutHandle = setTimeout(r, 5000); });
@@ -650,16 +711,12 @@ export class AgentSessionManager {
     const boundChannelId = entry.info.boundChannelId;
     const countKey = boundChannelId ?? sessionId;
 
-    // Stale session — save state for deferred resume, stop, notify, flush stale inputs
-    console.error(`[agent] session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), saving state and stopping (deferred resume)`);
+    // Stale session — suspend (abstract session survives), notify, flush stale inputs
+    console.error(`[agent] session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), suspending (deferred resume)`);
 
-    // Save copilotSessionId for deferred resume on next genuinely new pending message
-    if (entry.copilotSessionId !== undefined && boundChannelId !== undefined) {
-      this.savedCopilotSessionIds.set(boundChannelId, entry.copilotSessionId);
-    }
-
+    this.suspendSession(entry);
     this.notifyChannelSessionTimedOut(boundChannelId);
-    this.stopSession(sessionId);
+    entry.abortController.abort();
     this.restartCounts.delete(countKey);
     // Return "flushed" so the caller flushes stale inputs; the deferred resume will only
     // fire when a genuinely new user message arrives after the flush.
@@ -700,17 +757,11 @@ export class AgentSessionManager {
     const age = Date.now() - new Date(entry.info.startedAt).getTime();
     if (age < this.maxSessionAgeMs) return false;
 
-    const boundChannelId = entry.info.boundChannelId;
+    console.error(`[agent] session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), suspending (deferred resume)`);
 
-    console.error(`[agent] session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), saving state and stopping (deferred resume)`);
-
-    // Save copilotSessionId for deferred resume
-    if (entry.copilotSessionId !== undefined) {
-      this.savedCopilotSessionIds.set(boundChannelId, entry.copilotSessionId);
-    }
-
-    // Stop session — no immediate restart (deferred resume on next pending)
-    this.stopSession(sessionId);
+    // Suspend — copilotSessionId is preserved on the entry for resume
+    this.suspendSession(entry);
+    entry.abortController.abort();
 
     return true;
   }
