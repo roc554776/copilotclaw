@@ -100,7 +100,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
 </head>
 <body>
   <div id="status-bar">
-    <button id="logs-btn" onclick="toggleLogs()">Logs</button>
+    <button id="logs-btn" onclick="event.stopPropagation(); toggleLogs()">Logs</button>
     <span class="ws-indicator ws-disconnected" id="ws-dot"></span>
     <span id="status-text">gateway: running | agent: v${agentVersion}${compatLabel} | session: ${sessionState}</span>
   </div>

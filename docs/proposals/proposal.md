@@ -547,7 +547,7 @@ gateway と agent のバージョン管理ルールを定める。
 | ツール | 用途 |
 | :--- | :--- |
 | Vitest | テストランナー（unit / integration / E2E API） |
-| Playwright | フロントエンド E2E | <!-- TODO: 未実装 -->
+| Playwright | フロントエンド E2E |
 
 ### テストカバレッジのギャップ
 
