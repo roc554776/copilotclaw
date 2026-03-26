@@ -35,11 +35,12 @@ Environment:
 `;
 
 async function run() {
+  // Resolve gateway and agent dist directories from installed packages
+  const { createRequire } = await import("node:module");
   const { dirname, join } = await import("node:path");
-  const { fileURLToPath } = await import("node:url");
-  const thisDir = dirname(fileURLToPath(import.meta.url));
-  const gatewayDist = join(thisDir, "..", "packages", "gateway", "dist");
-  const agentDist = join(thisDir, "..", "packages", "agent", "dist");
+  const require = createRequire(import.meta.url);
+  const gatewayDist = dirname(require.resolve("@copilotclaw/gateway/package.json")) + "/dist";
+  const agentDist = dirname(require.resolve("@copilotclaw/agent/package.json")) + "/dist";
 
   switch (command) {
     case "setup":

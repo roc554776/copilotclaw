@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type AgentStatusResponse, getAgentModels, getAgentQuota, getAgentSessionMessages, getAgentStatus, stopAgent } from "./ipc-client.js";
@@ -30,8 +31,16 @@ export class AgentManager {
 
   constructor(options: AgentManagerOptions) {
     this.gatewayPort = options.gatewayPort;
-    const thisDir = dirname(fileURLToPath(import.meta.url));
-    this.agentScript = options.agentScript ?? join(thisDir, "..", "..", "agent", "dist", "index.js");
+    const require = createRequire(import.meta.url);
+    let defaultAgentScript: string;
+    try {
+      defaultAgentScript = join(dirname(require.resolve("@copilotclaw/agent/package.json")), "dist", "index.js");
+    } catch {
+      // Fallback for monorepo dev (workspace symlinks)
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      defaultAgentScript = join(thisDir, "..", "..", "agent", "dist", "index.js");
+    }
+    this.agentScript = options.agentScript ?? defaultAgentScript;
   }
 
   /** Ensure agent process is running and compatible.

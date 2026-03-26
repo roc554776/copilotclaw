@@ -15,7 +15,7 @@ cd copilotclaw
 mise install
 pnpm install
 pnpm run build
-npm install -g .
+cd packages/cli && npm pack && npm install -g copilotclaw-*.tgz && rm copilotclaw-*.tgz && cd ../..
 ```
 
 After installation, the `copilotclaw` command is available globally.

@@ -84,14 +84,15 @@ async function main(): Promise<void> {
   log("building...");
   run(["pnpm", "run", "build"], updateDir);
 
-  // Pack and reinstall
+  // Pack CLI package and reinstall
+  const cliDir = join(updateDir, "packages", "cli");
   log("packing...");
-  const packOutput = run(["npm", "pack"], updateDir);
+  const packOutput = run(["npm", "pack"], cliDir);
   const tgzFile = parseTgzFilename(packOutput);
   if (tgzFile === undefined) {
     throw new Error("npm pack produced no .tgz file");
   }
-  const tgzPath = join(updateDir, tgzFile);
+  const tgzPath = join(cliDir, tgzFile);
 
   log("installing...");
   try {

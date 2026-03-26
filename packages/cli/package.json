@@ -1,0 +1,19 @@
+{
+  "name": "copilotclaw",
+  "version": "0.13.0",
+  "description": "CLI agent powered by GitHub Copilot SDK",
+  "type": "module",
+  "bin": {
+    "copilotclaw": "bin/copilotclaw.mjs"
+  },
+  "files": [
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@copilotclaw/gateway": "workspace:*",
+    "@copilotclaw/agent": "workspace:*"
+  }
+}

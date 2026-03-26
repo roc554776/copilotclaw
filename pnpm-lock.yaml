@@ -24,6 +24,15 @@ importers:
         specifier: ^4.1.1
         version: 4.1.1(@types/node@22.19.15)(vite@8.0.2(@types/node@22.19.15))
 
+  packages/cli:
+    dependencies:
+      '@copilotclaw/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@copilotclaw/gateway':
+        specifier: workspace:*
+        version: link:../gateway
+
   packages/gateway:
     devDependencies:
       '@playwright/test':

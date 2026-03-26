@@ -7,6 +7,20 @@
 - GitHub リポジトリからの取得が基本
 - ローカルに clone したものをソースとして npm グローバルインストールする方式は可
 
+<!-- 2026-03-26 -->
+## パッケージ構成の修正
+
+- root パッケージは `private: true` にして公開しない。root パッケージを `npm install -g` するのは間違い
+- CLI エントリポイント用のサブパッケージを作る（例: `packages/cli/`）
+  - `bin` フィールド、`files` フィールドはこのサブパッケージに持たせる
+  - このサブパッケージが `npm pack` / `npm install -g` の対象になる
+- サブパッケージ同士の依存関係は `dependencies` に `workspace:*` で宣言する
+  - 例: `packages/cli/` が `packages/gateway/` と `packages/agent/` に依存する場合、`"@copilotclaw/gateway": "workspace:*"` 等
+- 現状の問題:
+  - root パッケージを `npm install -g` しているため、monorepo の子パッケージの依存（`@github/copilot-sdk` 等）が解決されない
+  - `npm pack` した tgz に `node_modules/` が含まれず、インストール先で依存が見つからない
+  - agent が起動時に `ERR_MODULE_NOT_FOUND: Cannot find package '@github/copilot-sdk'` でクラッシュする
+
 ## Workspace 機能
 
 - copilotclaw の作業ディレクトリ兼設定ストレージとしての workspace がほしい
