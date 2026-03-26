@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { DEFAULT_PORT } from "./server.js";
+import { resolvePort } from "./config.js";
 
 const HEALTH_RETRY_COUNT = 5;
 const HEALTH_RETRY_INTERVAL_MS = 1000;
@@ -10,14 +10,16 @@ function log(message: string): void {
   console.error(`[gateway] ${message}`);
 }
 
-async function checkHealth(): Promise<"healthy" | "unhealthy" | "port-free"> {
-  try {
-    const res = await fetch(`http://localhost:${DEFAULT_PORT}/healthz`);
-    if (res.ok) return "healthy";
-    return "unhealthy";
-  } catch {
-    return "port-free";
-  }
+function checkHealth(port: number): Promise<"healthy" | "unhealthy" | "port-free"> {
+  return (async () => {
+    try {
+      const res = await fetch(`http://localhost:${port}/healthz`);
+      if (res.ok) return "healthy" as const;
+      return "unhealthy" as const;
+    } catch {
+      return "port-free" as const;
+    }
+  })();
 }
 
 function sleep(ms: number): Promise<void> {
@@ -41,21 +43,21 @@ function spawnDaemon(options?: { forceAgentRestart?: boolean }): void {
   child.unref();
 }
 
-async function waitForHealthy(): Promise<boolean> {
+async function waitForHealthy(port: number): Promise<boolean> {
   for (let i = 0; i < HEALTH_RETRY_COUNT; i++) {
     await sleep(HEALTH_RETRY_INTERVAL_MS);
-    const status = await checkHealth();
+    const status = await checkHealth(port);
     if (status === "healthy") return true;
   }
   return false;
 }
 
-async function checkAgentCompatibility(waitForAgent = false): Promise<void> {
+async function checkAgentCompatibility(port: number, waitForAgent = false): Promise<void> {
   const maxAttempts = waitForAgent ? 30 : 1; // 30 * 500ms = 15s
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (attempt > 0) await sleep(500);
     try {
-      const statusRes = await fetch(`http://localhost:${DEFAULT_PORT}/api/status`);
+      const statusRes = await fetch(`http://localhost:${port}/api/status`);
       if (!statusRes.ok) continue;
       const status = await statusRes.json() as { agentCompatibility?: string; agent?: { version?: string } | null };
       const compat = status.agentCompatibility ?? "unavailable";
@@ -81,60 +83,61 @@ async function checkAgentCompatibility(waitForAgent = false): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const port = resolvePort();
   const forceAgentRestart = process.argv.includes("--force-agent-restart") || process.env["COPILOTCLAW_FORCE_AGENT_RESTART_FLAG"] === "1";
 
   if (forceAgentRestart) {
     log("--force-agent-restart: will stop outdated agent on startup");
   }
 
-  const initialStatus = await checkHealth();
+  const initialStatus = await checkHealth(port);
 
   if (initialStatus === "healthy") {
-    log(`already running on port ${DEFAULT_PORT}`);
-    await checkAgentCompatibility(forceAgentRestart);
-    log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+    log(`already running on port ${port}`);
+    await checkAgentCompatibility(port, forceAgentRestart);
+    log(`open http://localhost:${port} in your browser to chat with the agent`);
     log(`run 'copilotclaw stop' to shut down`);
     return;
   }
 
   if (initialStatus === "unhealthy") {
-    log(`port ${DEFAULT_PORT} is occupied but unhealthy, retrying...`);
+    log(`port ${port} is occupied but unhealthy, retrying...`);
     for (let i = 0; i < HEALTH_RETRY_COUNT; i++) {
       await sleep(HEALTH_RETRY_INTERVAL_MS);
-      const status = await checkHealth();
+      const status = await checkHealth(port);
       if (status === "healthy") {
         log("became healthy");
-        await checkAgentCompatibility(forceAgentRestart);
-        log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+        await checkAgentCompatibility(port, forceAgentRestart);
+        log(`open http://localhost:${port} in your browser to chat with the agent`);
         log(`run 'copilotclaw stop' to shut down`);
         return;
       }
       if (status === "port-free") {
         log("port freed, starting daemon...");
         spawnDaemon({ forceAgentRestart });
-        if (await waitForHealthy()) {
-          log(`running on http://localhost:${DEFAULT_PORT}`);
-          await checkAgentCompatibility(forceAgentRestart);
-          log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+        if (await waitForHealthy(port)) {
+          log(`running on http://localhost:${port}`);
+          await checkAgentCompatibility(port, forceAgentRestart);
+          log(`open http://localhost:${port} in your browser to chat with the agent`);
           log(`run 'copilotclaw stop' to shut down`);
           return;
         }
         throw new Error("daemon failed to start");
       }
     }
-    throw new Error(`port ${DEFAULT_PORT} is occupied but not healthy after ${HEALTH_RETRY_COUNT} retries`);
+    throw new Error(`port ${port} is occupied but not healthy after ${HEALTH_RETRY_COUNT} retries`);
   }
 
   log("starting gateway daemon...");
   spawnDaemon({ forceAgentRestart });
 
-  if (!(await waitForHealthy())) {
+  if (!(await waitForHealthy(port))) {
     throw new Error("daemon failed to start");
   }
 
-  log(`running on http://localhost:${DEFAULT_PORT}`);
-  await checkAgentCompatibility(forceAgentRestart);
-  log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+  log(`running on http://localhost:${port}`);
+  await checkAgentCompatibility(port, forceAgentRestart);
+  log(`open http://localhost:${port} in your browser to chat with the agent`);
   log(`run 'copilotclaw stop' to shut down`);
 }
 

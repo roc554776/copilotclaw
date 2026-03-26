@@ -31,8 +31,35 @@
 
 ## Profile 機能
 
-- 将来的にほしい（現時点では優先度低）
+<!-- 2026-03-26 -->
+- profile を複数持てるようにしたい
+  - profile は openclaw の profile と同様の概念
+  - profile ごとに workspace が分離される
+- profile ごとに gateway のインスタンスは分ける
+  - 理由: profile 同士の衝突を避け、設計をシンプルにするため
+- profile ごとに agent process のインスタンスは分ける
+  - 理由: 設計をシンプルにするため
 - 参考: openclaw は `OPENCLAW_PROFILE` 環境変数で workspace を分離する方式
+
+## 設定ファイル機能
+
+<!-- 2026-03-26 -->
+- 設定ファイルを持てるようにしたい
+  - profile ごとに設定ファイルは異なる
+  - openclaw の設定ファイルと類似の概念
+- いま環境変数で与えている `COPILOTCLAW_UPSTREAM` は、設定ファイルで与えられるようにしたい
+  - オプショナルな設定項目
+  - 環境変数で与える方法も残す。その場合、環境変数の値が優先される
+  - 設定全般に原則的にこのルール（環境変数 > 設定ファイル）を適用する
+  - 特別な理由があれば、例外を設けることも検討できる
+- gateway の HTTP サーバーの port 番号を設定ファイルで指定可能にしたい
+  - オプショナルな設定項目
+- setup で、デフォルトの port が使われていたら、空いているポートを探して、それを設定ファイルに書き込むようにしたい
+  - 候補の port の list のうち、空いている port を探すロジックを実装する
+  - port 選択ロジックは `.claude/skills/select-development-port/SKILL.md` を参考にする
+- 仕様検討の参考に openclaw の codebase を参照すべき
+  - openclaw はあくまで参考であって、完全に同じにする必要はない
+  - openclaw のよい点を取り入れる
 
 ## Channel アーキテクチャの再設計
 

@@ -26,7 +26,9 @@ Start options:
   --force-agent-restart  Stop outdated agent before starting
 
 Environment:
+  COPILOTCLAW_PROFILE    Profile name (separates workspace, config, gateway, agent)
   COPILOTCLAW_UPSTREAM   Git remote URL for update (e.g. file:///path/to/repo)
+  COPILOTCLAW_PORT       Override gateway HTTP port
 `;
 
 async function run() {

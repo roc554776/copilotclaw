@@ -1,4 +1,4 @@
-import { DEFAULT_PORT } from "./server.js";
+import { resolvePort } from "./config.js";
 
 function log(message: string): void {
   console.error(`[gateway] ${message}`);
@@ -8,20 +8,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-async function stopGateway(): Promise<boolean> {
+async function stopGateway(port: number): Promise<boolean> {
   try {
-    const res = await fetch(`http://localhost:${DEFAULT_PORT}/api/stop`, { method: "POST" });
+    const res = await fetch(`http://localhost:${port}/api/stop`, { method: "POST" });
     return res.ok;
   } catch {
     return false;
   }
 }
 
-async function waitForShutdown(): Promise<boolean> {
+async function waitForShutdown(port: number): Promise<boolean> {
   for (let i = 0; i < 10; i++) {
     await sleep(500);
     try {
-      await fetch(`http://localhost:${DEFAULT_PORT}/healthz`);
+      await fetch(`http://localhost:${port}/healthz`);
     } catch {
       return true; // Port is free — shutdown complete
     }
@@ -30,11 +30,13 @@ async function waitForShutdown(): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
+  const port = resolvePort();
+
   // Stop existing gateway
   log("stopping gateway...");
-  const stopped = await stopGateway();
+  const stopped = await stopGateway(port);
   if (stopped) {
-    const shutdownComplete = await waitForShutdown();
+    const shutdownComplete = await waitForShutdown(port);
     if (!shutdownComplete) {
       console.error("[gateway] shutdown timed out");
       process.exit(1);

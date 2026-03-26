@@ -1,7 +1,8 @@
-import { DEFAULT_PORT } from "./server.js";
+import { resolvePort } from "./config.js";
 
 async function main(): Promise<void> {
-  const url = `http://localhost:${DEFAULT_PORT}/api/stop`;
+  const port = resolvePort();
+  const url = `http://localhost:${port}/api/stop`;
   try {
     const res = await fetch(url, { method: "POST" });
     if (res.ok) {

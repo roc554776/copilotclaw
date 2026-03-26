@@ -2,20 +2,28 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const WORKSPACE_ROOT = join(homedir(), ".copilotclaw");
+const BASE_DIR = join(homedir(), ".copilotclaw");
 
-export function getWorkspaceRoot(): string {
-  return WORKSPACE_ROOT;
+function getProfileName(): string | undefined {
+  return process.env["COPILOTCLAW_PROFILE"] || undefined;
 }
 
-export function getDataDir(): string {
-  return join(WORKSPACE_ROOT, "data");
+export function getWorkspaceRoot(profile?: string): string {
+  const p = profile ?? getProfileName();
+  if (p !== undefined) {
+    return join(BASE_DIR, `workspace-${p}`);
+  }
+  return BASE_DIR;
 }
 
-export function getStoreFilePath(): string {
-  return join(getDataDir(), "store.json");
+export function getDataDir(profile?: string): string {
+  return join(getWorkspaceRoot(profile), "data");
 }
 
-export function ensureWorkspace(): void {
-  mkdirSync(getDataDir(), { recursive: true });
+export function getStoreFilePath(profile?: string): string {
+  return join(getDataDir(profile), "store.json");
+}
+
+export function ensureWorkspace(profile?: string): void {
+  mkdirSync(getDataDir(profile), { recursive: true });
 }
