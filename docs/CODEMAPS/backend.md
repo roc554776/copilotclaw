@@ -27,7 +27,7 @@ GET  /                                     → 200 HTML dashboard (status bar + 
 ```
 src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents
 src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + LogBuffer creation + console intercept + startServer + periodic agent monitor every 30s, max 3 retries)
-src/index.ts               — CLI entry point (health check → detached spawn → exit); after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible
+src/index.ts               — CLI entry point (health check → detached spawn → exit); after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible; checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart)
 src/log-buffer.ts          — LogBuffer class (ring buffer for recent log lines), interceptConsole() to capture stdout/stderr
 src/stop.ts                — POST /api/stop CLI
 src/restart.ts             — `copilotclaw restart` CLI: stop gateway → wait for shutdown → start
@@ -39,8 +39,8 @@ src/channel-provider.ts    — ChannelProvider interface (plugin contract for ch
 src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, WS broadcast); passes compatibility info to dashboard
 src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening)
 src/ws.ts                  — WsBroadcaster: SSE event broadcasting to connected clients
-src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); checkCompatibility() and getMinAgentVersion() methods
-src/ipc-client.ts          — IPC client (status/stop to agent process)
+src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods
+src/ipc-client.ts          — IPC client (status/stop to agent process); AgentStatusResponse includes bootId field
 src/ipc-paths.ts           — socket path: ${tmpdir}/copilotclaw-agent.sock
 ```
 
@@ -58,7 +58,7 @@ src/ipc-paths.ts           — socket path: ${tmpdir}/copilotclaw-agent.sock
 
 ```
 → {"method":"status"}
-← {"version":"0.1.0","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"..."}}}
+← {"version":"0.1.0","bootId":"uuid","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"..."}}}
 
 → {"method":"session_status","params":{"sessionId":"sess-id"}}
 ← {"status":"processing","startedAt":"...","processingStartedAt":"...","boundChannelId":"ch-id"}

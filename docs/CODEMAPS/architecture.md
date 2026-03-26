@@ -39,8 +39,9 @@ copilotclaw agent stop           → stop agent process only
 
 - Gateway: CLI spawns daemon (detached), CLI checks /api/status agentCompatibility after healthy, exits 1 on incompatible
 - Agent: single process, singleton via Unix domain socket (`copilotclaw-agent.sock`)
-- Gateway start → agent process ensure: IPC status + version check, spawn if absent
+- Gateway start → agent process ensure: IPC status + version check, spawn if absent; agent status response includes bootId (UUID, unique per process start)
 - Gateway daemon → periodic agent monitor (30s interval): re-runs ensureAgent, logs failures, recovers automatically; max 3 consecutive failures before error-level logging
+- Force-restart flow: ensureAgent returns old bootId on force-restart → daemon calls waitForNewAgent to poll until different bootId appears before proceeding
 - Gateway stop → gateway only (agent process NOT stopped)
 - Gateway restart → POST /api/stop, wait for port free, then start (restart.ts)
 - Agent → Gateway: HTTP API poll (pending counts, drain pending, post messages, peek/flush)
@@ -69,7 +70,7 @@ copilotclaw agent stop           → stop agent process only
 - Startup direction: always gateway → agent (agent never starts gateway)
 - Agent process ensure: gateway start time only (NOT on user message POST)
 - Agent session ensure: agent process responsibility (polls gateway for pending)
-- Agent version check: gateway enforces minimum agent version at start; force-restart on mismatch; checkCompatibility()/getMinAgentVersion() expose compatibility status
+- Agent version check: gateway enforces minimum agent version at start; force-restart on mismatch; checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
