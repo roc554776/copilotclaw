@@ -758,9 +758,9 @@ export class AgentSessionManager {
 
     console.error(`[agent] session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), suspending (deferred resume)`);
 
-    // Suspend — copilotSessionId is preserved on the entry for resume
-    this.suspendSession(entry);
+    // Abort first to prevent the promise handler from double-suspending
     entry.abortController.abort();
+    this.suspendSession(entry);
 
     return true;
   }
