@@ -664,7 +664,7 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     await wait(30);
   });
 
-  it("does not fire reminder for built-in tool names (subagent safety)", async () => {
+  it("does not fire for built-in tool names but fires for copilotclaw tools (subagent safety)", async () => {
     const { mockSession, createSessionSpy } = await setupWithHookCapture();
 
     const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
@@ -673,9 +673,9 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     // Trigger reminder need
     mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
 
-    // Built-in tool → skip reminder (could be subagent)
+    // Built-in tool → early return (could be subagent)
     const result = await hook({ toolName: "Read" });
-    expect(result?.additionalContext ?? "").not.toContain("<system>");
+    expect(result).toBeUndefined();
 
     // copilotclaw tool → get the reminder
     const result2 = await hook({ toolName: "copilotclaw_receive_input" });
@@ -712,6 +712,40 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
 
     const result = await hook({ toolName: "copilotclaw_send_message" });
     expect(result?.additionalContext ?? "").not.toContain("<system>");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("does not fire reminder or notification for debug mock tool names (subagent safety)", async () => {
+    const { mockSession, createSessionSpy } = await setupWithHookCapture();
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    // Trigger reminder need
+    mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
+
+    // Debug mock tools are NOT in PARENT_AGENT_TOOL_NAMES — hook should return early
+    const result = await hook({ toolName: "copilotclaw_debug_mock_read_file" });
+    expect(result).toBeUndefined();
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("returns undefined for built-in tool calls (no notification, no reminder)", async () => {
+    const { mockSession, createSessionSpy } = await setupWithHookCapture();
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    // Trigger reminder need
+    mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
+
+    // Built-in tool → early return, no additionalContext at all
+    const result = await hook({ toolName: "Bash" });
+    expect(result).toBeUndefined();
 
     mockSession.emit("session.idle");
     await wait(30);

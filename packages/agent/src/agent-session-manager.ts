@@ -4,6 +4,25 @@ import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
 import { createChannelTools } from "./tools/channel.js";
 
+// Tools that only the channel-operator (parent agent) calls. Subagents never have
+// copilotclaw_receive_input and have no reason to call the other two channel tools.
+// Used to gate onPostToolUse reminder injection — subagents must NOT receive reminders.
+const PARENT_AGENT_TOOL_NAMES = new Set([
+  "copilotclaw_send_message",
+  "copilotclaw_receive_input",
+  "copilotclaw_list_messages",
+]);
+
+const SYSTEM_REMINDER =
+  `<system>\n` +
+  `CRITICAL REMINDER: You MUST call copilotclaw_receive_input to wait for user input. ` +
+  `Stopping without calling copilotclaw_receive_input causes an irrecoverable deadlock — ` +
+  `the session becomes permanently unresponsive and cannot be recovered. ` +
+  `After processing a task, always call copilotclaw_send_message to send your response, ` +
+  `then call copilotclaw_receive_input to wait for the next input. ` +
+  `NEVER stop or idle without copilotclaw_receive_input.\n` +
+  `</system>`;
+
 export type AgentSessionStatus = "starting" | "waiting" | "processing" | "stopped";
 
 export interface PhysicalSessionSummary {
@@ -249,25 +268,6 @@ export class AgentSessionManager {
       currentUsagePercent: 0,
     };
 
-    const COPILOTCLAW_TOOL_NAMES = new Set([
-      "copilotclaw_send_message",
-      "copilotclaw_receive_input",
-      "copilotclaw_list_messages",
-      "copilotclaw_debug_mock_read_file",
-      "copilotclaw_debug_mock_write_file",
-      "copilotclaw_debug_mock_shell_exec",
-    ]);
-
-    const SYSTEM_REMINDER =
-      `<system>\n` +
-      `CRITICAL REMINDER: You MUST call copilotclaw_receive_input to wait for user input. ` +
-      `Stopping without calling copilotclaw_receive_input causes an irrecoverable deadlock — ` +
-      `the session becomes permanently unresponsive and cannot be recovered. ` +
-      `After processing a task, always call copilotclaw_send_message to send your response, ` +
-      `then call copilotclaw_receive_input to wait for the next input. ` +
-      `NEVER stop or idle without copilotclaw_receive_input.\n` +
-      `</system>`;
-
     const sessionConfig = {
       onPermissionRequest: approveAll,
       tools: [sendMessage, receiveInput, listMessages],
@@ -276,13 +276,22 @@ export class AgentSessionManager {
           try {
             if (signal.aborted) return;
 
-            // Only fire reminder for parent agent (channel-operator) tool calls.
-            // If toolName is a copilotclaw_* tool, it's definitely the parent agent.
-            // For built-in tools, we cannot distinguish parent vs subagent, so skip
-            // the reminder (safe side: subagent must NOT receive this reminder).
-            const isParentAgentTool = COPILOTCLAW_TOOL_NAMES.has(input.toolName);
+            // Only fire for parent agent (channel-operator) tool calls.
+            // PARENT_AGENT_TOOL_NAMES contains only the three channel-operation tools
+            // that subagents never receive. For built-in tools we cannot distinguish
+            // parent vs subagent, so skip entirely (safe side).
+            const isParentAgentTool = PARENT_AGENT_TOOL_NAMES.has(input.toolName);
+            if (!isParentAgentTool) return;
 
             const parts: string[] = [];
+
+            // Consume needsReminder synchronously before any await to prevent
+            // concurrent hook calls from sending duplicate reminders (TOCTOU).
+            const shouldRemind = reminderState.needsReminder;
+            if (shouldRemind) {
+              reminderState.needsReminder = false;
+              reminderState.lastReminderPercent = reminderState.currentUsagePercent;
+            }
 
             // Check for pending user messages
             const fetchOpts: RequestInit = { signal };
@@ -291,11 +300,8 @@ export class AgentSessionManager {
               parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_receive_input immediately to read it.`);
             }
 
-            // Append system prompt reminder if needed (parent agent only)
-            if (isParentAgentTool && reminderState.needsReminder) {
+            if (shouldRemind) {
               parts.push(SYSTEM_REMINDER);
-              reminderState.needsReminder = false;
-              reminderState.lastReminderPercent = reminderState.currentUsagePercent;
             }
 
             if (parts.length > 0) {
