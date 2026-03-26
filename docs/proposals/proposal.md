@@ -486,9 +486,8 @@ PhysicalSessionSummary:
 | `model` | `string` | 使用中のモデル |
 | `startedAt` | `string` | 開始時刻 |
 | `currentState` | `string` | 現在の状態（idle, tool 呼び出し中, etc.） |
-| `contextTokens` | `number?` | 現在のコンテキストトークン数（compaction イベントから取得、未発生時は null） <!-- TODO: 未実装 — SDK に常時取得 API がないため、compaction イベント時のキャッシュで代替する設計が必要 --> |
-| `maxContextTokens` | `number?` | 最大コンテキストウィンドウサイズ <!-- TODO: 未実装 — 同上 --> |
-| `totalTokensConsumed` | `number?` | これまでの累計消費トークン数 <!-- TODO: 未実装 — SDK に常時取得 API がないため --> |
+| `currentTokens` | `number?` | 現在のコンテキストトークン数（`session.usage_info` イベントから取得） |
+| `tokenLimit` | `number?` | 最大コンテキストウィンドウサイズ（`session.usage_info` イベントから取得） |
 
 #### サマリー表示（ダッシュボードモーダル）
 

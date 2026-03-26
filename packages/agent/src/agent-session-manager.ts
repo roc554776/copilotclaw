@@ -11,6 +11,8 @@ export interface PhysicalSessionSummary {
   model: string;
   startedAt: string;
   currentState: string;
+  currentTokens?: number;
+  tokenLimit?: number;
 }
 
 export interface SubagentInfo {
@@ -340,6 +342,12 @@ export class AgentSessionManager {
     session.on("session.model_change", (event) => {
       if (entry.info.physicalSession !== undefined) {
         entry.info.physicalSession.model = event.data.newModel;
+      }
+    });
+    session.on("session.usage_info", (event) => {
+      if (entry.info.physicalSession !== undefined) {
+        entry.info.physicalSession.currentTokens = event.data.currentTokens;
+        entry.info.physicalSession.tokenLimit = event.data.tokenLimit;
       }
     });
 

@@ -250,6 +250,10 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
                 html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(ps.sessionId.slice(0,12)) + '</span></div>';
                 html += '<div class="row"><span class="label">Model</span><span class="value">' + escHtml(ps.model) + '</span></div>';
                 html += '<div class="row"><span class="label">State</span><span class="value">' + escHtml(ps.currentState) + '</span></div>';
+                if (ps.currentTokens != null && ps.tokenLimit != null) {
+                  const pct = Math.round(ps.currentTokens / ps.tokenLimit * 100);
+                  html += '<div class="row"><span class="label">Context</span><span class="value">' + escHtml(String(ps.currentTokens)) + ' / ' + escHtml(String(ps.tokenLimit)) + ' (' + pct + '%)</span></div>';
+                }
                 html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + ' (' + elapsed(ps.startedAt) + ')</span></div>';
                 html += '<div style="margin-top:0.3rem"><a href="#" style="color:#58a6ff;text-decoration:none" onclick="showSessionDetail(\'' + psId + '\');return false;">Show context detail</a></div>';
                 html += '</div>';

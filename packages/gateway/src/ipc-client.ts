@@ -5,6 +5,8 @@ export interface PhysicalSessionSummary {
   model: string;
   startedAt: string;
   currentState: string;
+  currentTokens?: number;
+  tokenLimit?: number;
 }
 
 export interface SubagentInfo {

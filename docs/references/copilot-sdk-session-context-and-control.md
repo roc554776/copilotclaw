@@ -598,3 +598,5 @@ Key event types from the session event union:
 - `subagent.started`, `subagent.completed`, `subagent.failed`, `subagent.selected`, `subagent.deselected`
 - `hook.start`, `hook.complete`
 - `model.switched`
+- `session.usage_info` (ephemeral) — コンテキストウィンドウ使用状況: `tokenLimit`, `currentTokens`, `messagesLength`, `systemTokens?`, `conversationTokens?`, `toolDefinitionsTokens?`, `isInitial?`
+- `session.shutdown` — 最終トークンスナップショット: `currentTokens?`, `systemTokens?`, `conversationTokens?`, `toolDefinitionsTokens?`
