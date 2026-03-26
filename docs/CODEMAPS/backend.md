@@ -37,7 +37,7 @@ src/log-buffer.ts          — LogBuffer class (ring buffer for recent log lines
 src/stop.ts                — POST /api/stop CLI (uses resolvePort())
 src/restart.ts             — `copilotclaw restart` CLI: stop gateway → wait for shutdown → start (uses resolvePort())
 src/setup.ts               — `copilotclaw setup` CLI: create workspace directories + auto-port selection (isPortAvailable, findAvailablePort from candidate list; saves port to config if default busy)
-src/update.ts              — `copilotclaw update` CLI: git pull + pnpm build self-update (upstream from config file, COPILOTCLAW_UPSTREAM env var takes precedence)
+src/update.ts              — `copilotclaw update` CLI: git pull + pnpm build + npm install -g . self-update (upstream from config file, COPILOTCLAW_UPSTREAM env var takes precedence); file:// upstream skips SHA comparison and always rebuilds
 src/workspace.ts           — workspace paths: profile-aware (~/.copilotclaw/ or ~/.copilotclaw/workspace-{{profile}}/), data/, store.json; ensureWorkspace(); profile via COPILOTCLAW_PROFILE env var
 src/store.ts               — persistent store (Channel, Message, per-channel pending queue); JSON file via atomic rename
 src/channel-provider.ts    — ChannelProvider interface (plugin contract for chat mediums)
@@ -69,7 +69,7 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 
 ```
 → {"method":"status"}
-← {"version":"0.10.0","bootId":"uuid","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"...","physicalSession":{"sessionId":"...","model":"...","startedAt":"...","totalInputTokens":123,"totalOutputTokens":456,"latestQuotaSnapshots":{...}},"subagentSessions":[{"sessionId":"...","model":"...","status":"...","startedAt":"..."}]}}}
+← {"version":"0.11.0","bootId":"uuid","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"...","physicalSession":{"sessionId":"...","model":"...","startedAt":"...","totalInputTokens":123,"totalOutputTokens":456,"latestQuotaSnapshots":{...}},"subagentSessions":[{"sessionId":"...","model":"...","status":"...","startedAt":"..."}]}}}
 
 → {"method":"session_status","params":{"sessionId":"sess-id"}}
 ← {"status":"processing","startedAt":"...","processingStartedAt":"...","boundChannelId":"ch-id"}
