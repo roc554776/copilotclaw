@@ -56,6 +56,14 @@ export function saveConfig(config: CopilotclawConfig, profile?: string): void {
   writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
+/** Ensure config file exists. Creates an empty config if missing. */
+export function ensureConfigFile(profile?: string): void {
+  const filePath = getConfigFilePath(profile);
+  if (!existsSync(filePath)) {
+    writeFileSync(filePath, "{}\n", "utf-8");
+  }
+}
+
 /** Resolve gateway port: env var > config file > default (19741). */
 export function resolvePort(profile?: string): number {
   const config = loadConfig(profile);

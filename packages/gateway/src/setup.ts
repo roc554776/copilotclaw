@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
-import { DEFAULT_PORT, loadConfig, saveConfig } from "./config.js";
+import { DEFAULT_PORT, ensureConfigFile, getConfigFilePath, loadConfig, saveConfig } from "./config.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
 
 function log(message: string): void {
@@ -44,12 +44,15 @@ async function main(): Promise<void> {
   const alreadyExists = existsSync(getDataDir());
 
   ensureWorkspace();
+  ensureConfigFile();
 
   if (alreadyExists) {
     log(`workspace already exists at ${root}`);
   } else {
     log(`workspace created at ${root}`);
   }
+
+  log(`config: ${getConfigFilePath()}`);
 
   // Port selection: if config already has a port, skip. Otherwise check default.
   const existingConfig = loadConfig();
