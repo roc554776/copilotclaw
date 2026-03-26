@@ -37,7 +37,7 @@ src/log-buffer.ts          — LogBuffer class (ring buffer for recent log lines
 src/stop.ts                — POST /api/stop CLI (uses resolvePort())
 src/restart.ts             — `copilotclaw restart` CLI: stop gateway → wait for shutdown → start (uses resolvePort())
 src/setup.ts               — `copilotclaw setup` CLI: create workspace directories + auto-port selection (isPortAvailable, findAvailablePort from candidate list; saves port to config if default busy)
-src/update.ts              — `copilotclaw update` CLI: fetches upstream to ~/.copilotclaw/source/ via getUpdateDir (git init + fetch --depth 1 + checkout FETCH_HEAD), pnpm install + build, npm pack packages/cli/ + npm install -g tgz; upstream from config file (COPILOTCLAW_UPSTREAM env var takes precedence); skips build if SHA unchanged
+src/update.ts              — `copilotclaw update` CLI: fetches upstream to ~/.copilotclaw/source/ via getUpdateDir (git init + fetch --depth 1 + checkout FETCH_HEAD), pnpm (via npx -y pnpm@PNPM_VERSION, no global pnpm required) install + build, rewriteWorkspaceDeps converts workspace:* to file: paths in CLI package.json, npm install -g from packages/cli/; upstream from config file (COPILOTCLAW_UPSTREAM env var takes precedence); skips build if SHA unchanged
 src/workspace.ts           — workspace paths: profile-aware (~/.copilotclaw/ or ~/.copilotclaw/workspace-{{profile}}/), data/, store.json; ensureWorkspace(); getUpdateDir() returns profile-independent source dir (~/.copilotclaw/source/); profile via COPILOTCLAW_PROFILE env var
 src/store.ts               — persistent store (Channel, Message, per-channel pending queue); JSON file via atomic rename
 src/channel-provider.ts    — ChannelProvider interface (plugin contract for chat mediums)
