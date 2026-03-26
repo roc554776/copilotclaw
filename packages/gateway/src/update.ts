@@ -22,7 +22,7 @@ function run(args: string[], cwd: string): string {
 }
 
 async function main(): Promise<void> {
-  // Determine upstream: env var > config file > default git remote
+  // Determine upstream: env var > config file > default git remote (origin)
   const config = loadConfig();
   const upstream = config.upstream;
 
@@ -37,21 +37,16 @@ async function main(): Promise<void> {
   const beforeSha = run(["git", "rev-parse", "HEAD"], repoRoot);
   log(`current: ${beforeSha.slice(0, 8)}`);
 
-  // If custom upstream is set (e.g. file:///path/to/repo), configure it
+  // Determine fetch source: custom upstream or default origin
+  const fetchSource = upstream ?? "origin";
   if (upstream !== undefined) {
     log(`upstream: ${upstream}`);
-    try {
-      run(["git", "remote", "set-url", "origin", upstream], repoRoot);
-    } catch {
-      log("failed to set upstream URL");
-      process.exit(1);
-    }
   }
 
-  // Fetch and pull
+  // Fetch from upstream (without modifying origin remote)
   log("fetching...");
   try {
-    run(["git", "fetch", "origin"], repoRoot);
+    run(["git", "fetch", fetchSource], repoRoot);
   } catch (err: unknown) {
     console.error("[update] fetch failed:", err);
     process.exit(1);
@@ -61,7 +56,7 @@ async function main(): Promise<void> {
   log(`branch: ${branch}`);
 
   try {
-    run(["git", "pull", "origin", branch, "--ff-only"], repoRoot);
+    run(["git", "pull", fetchSource, branch, "--ff-only"], repoRoot);
   } catch (err: unknown) {
     console.error("[update] pull failed (non-fast-forward?):", err);
     process.exit(1);
