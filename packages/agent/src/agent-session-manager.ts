@@ -21,7 +21,6 @@ interface AgentSessionEntry {
   abortController: AbortController;
   sessionPromise: Promise<void>;
   generation: number;
-  restarting: boolean;
 }
 
 export interface AgentSessionManagerOptions {
@@ -33,7 +32,7 @@ export interface AgentSessionManagerOptions {
 
 export interface StartSessionOptions {
   boundChannelId?: string;
-  /** SDK session ID to resume instead of creating a new one. Used by session replace. */
+  /** SDK session ID to resume instead of creating a new one. Used by deferred resume. */
   copilotSessionId?: string;
 }
 
@@ -98,7 +97,6 @@ export class AgentSessionManager {
       abortController,
       sessionPromise: Promise.resolve(),
       generation,
-      restarting: false,
     };
 
     if (boundChannelId !== undefined) {
@@ -132,12 +130,7 @@ export class AgentSessionManager {
           // Only unbind if still bound to this session
           if (this.channelBindings.get(boundChannelId) === sessionId) {
             this.channelBindings.delete(boundChannelId);
-            // Only reset the restart count when the session ended normally (not during a
-            // controlled restart). The restarting flag is set before stopSession() is called
-            // so the finally block can distinguish the two cases.
-            if (!current.restarting) {
-              this.restartCounts.delete(boundChannelId);
-            }
+            this.restartCounts.delete(boundChannelId);
           }
         }
       }
@@ -246,7 +239,6 @@ export class AgentSessionManager {
   async checkStaleAndHandle(sessionId: string, oldestInputId: string | undefined): Promise<"ok" | "flushed"> {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return "ok";
-    if (entry.restarting) return "ok";
     if (entry.info.status !== "processing") return "ok";
 
     const processingStartedAt = entry.info.processingStartedAt;
@@ -255,16 +247,16 @@ export class AgentSessionManager {
     const elapsed = Date.now() - new Date(processingStartedAt).getTime();
     if (elapsed < this.staleTimeoutMs) return "ok";
 
-    // Don't restart if there are no pending inputs (agent may be legitimately finishing)
+    // Don't act if there are no pending inputs (agent may be legitimately finishing)
     if (oldestInputId === undefined) return "ok";
 
     const boundChannelId = entry.info.boundChannelId;
     const countKey = boundChannelId ?? sessionId;
 
-    // Stale session — save state for deferred resume, stop, notify
+    // Stale session — save state for deferred resume, stop, notify, flush stale inputs
     console.error(`[agent] session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), saving state and stopping (deferred resume)`);
 
-    // Save copilotSessionId for deferred resume on next pending
+    // Save copilotSessionId for deferred resume on next genuinely new pending message
     if (entry.copilotSessionId !== undefined && boundChannelId !== undefined) {
       this.savedCopilotSessionIds.set(boundChannelId, entry.copilotSessionId);
     }
@@ -272,7 +264,9 @@ export class AgentSessionManager {
     this.notifyChannelSessionTimedOut(boundChannelId);
     this.stopSession(sessionId);
     this.restartCounts.delete(countKey);
-    return "ok";
+    // Return "flushed" so the caller flushes stale inputs; the deferred resume will only
+    // fire when a genuinely new user message arrives after the flush.
+    return "flushed";
   }
 
   private notifyChannelSessionStopped(channelId: string | undefined): void {
