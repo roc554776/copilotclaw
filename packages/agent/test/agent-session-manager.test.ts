@@ -608,3 +608,124 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     await wait(30);
   });
 });
+
+describe("AgentSessionManager — system prompt reinforcement via onPostToolUse", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Helper: create a session, wait for physical session, and return the mock + createSession spy. */
+  async function setupWithHookCapture(): Promise<{
+    mockSession: ReturnType<typeof makeMockCopilotSession>;
+    createSessionSpy: ReturnType<typeof vi.fn>;
+    fetchSpy: ReturnType<typeof vi.fn>;
+    manager: AgentSessionManager;
+  }> {
+    const mockSession = makeMockCopilotSession("idle");
+    // Suppress automatic idle emit so we can control events manually.
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
+    installClientMock(createSessionSpy);
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-reminder" });
+    await waitForPhysicalSession(manager);
+
+    return { mockSession, createSessionSpy, fetchSpy, manager };
+  }
+
+  it("sets needsReminder when context usage crosses 10% threshold", async () => {
+    const { mockSession, createSessionSpy } = await setupWithHookCapture();
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    // 30% usage (≥ lastReminderPercent 0% + 10% threshold)
+    mockSession.emit("session.usage_info", { data: { currentTokens: 30000, tokenLimit: 100000 } });
+
+    const result = await hook({ toolName: "copilotclaw_send_message" });
+    expect(result?.additionalContext).toContain("<system>");
+    expect(result?.additionalContext).toContain("copilotclaw_receive_input");
+
+    // Second call at same usage should NOT contain reminder (already fired)
+    const result2 = await hook({ toolName: "copilotclaw_send_message" });
+    expect(result2?.additionalContext ?? "").not.toContain("<system>");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("does not fire reminder for built-in tool names (subagent safety)", async () => {
+    const { mockSession, createSessionSpy } = await setupWithHookCapture();
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    // Trigger reminder need
+    mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
+
+    // Built-in tool → skip reminder (could be subagent)
+    const result = await hook({ toolName: "Read" });
+    expect(result?.additionalContext ?? "").not.toContain("<system>");
+
+    // copilotclaw tool → get the reminder
+    const result2 = await hook({ toolName: "copilotclaw_receive_input" });
+    expect(result2?.additionalContext).toContain("<system>");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("fires reminder immediately after compaction_complete", async () => {
+    const { mockSession, createSessionSpy } = await setupWithHookCapture();
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    mockSession.emit("session.compaction_complete", { data: { success: true } });
+
+    const result = await hook({ toolName: "copilotclaw_list_messages" });
+    expect(result?.additionalContext).toContain("<system>");
+    expect(result?.additionalContext).toContain("CRITICAL REMINDER");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("does not fire reminder when usage has not crossed threshold", async () => {
+    const { mockSession, createSessionSpy } = await setupWithHookCapture();
+
+    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
+    const hook = config.hooks.onPostToolUse;
+
+    // 5% usage — below the 10% threshold
+    mockSession.emit("session.usage_info", { data: { currentTokens: 5000, tokenLimit: 100000 } });
+
+    const result = await hook({ toolName: "copilotclaw_send_message" });
+    expect(result?.additionalContext ?? "").not.toContain("<system>");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("initial prompt mentions <system> tags in additionalContext", async () => {
+    const { mockSession } = await setupWithHookCapture();
+
+    expect(mockSession.send).toHaveBeenCalled();
+    const sendArg = mockSession.send.mock.calls[0]?.[0] as { prompt?: string } | undefined;
+    expect(sendArg?.prompt).toContain("<system>");
+    expect(sendArg?.prompt).toContain("additionalContext");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+});

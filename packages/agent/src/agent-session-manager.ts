@@ -241,19 +241,65 @@ export class AgentSessionManager {
     const gatewayBaseUrl = this.gatewayBaseUrl;
     const signal = entry.abortController.signal;
 
+    // State for periodic system prompt reinforcement via onPostToolUse additionalContext.
+    // Tracks context usage percentage to avoid reminding on every tool call.
+    const reminderState = {
+      needsReminder: false,
+      lastReminderPercent: 0,
+      currentUsagePercent: 0,
+    };
+
+    const COPILOTCLAW_TOOL_NAMES = new Set([
+      "copilotclaw_send_message",
+      "copilotclaw_receive_input",
+      "copilotclaw_list_messages",
+      "copilotclaw_debug_mock_read_file",
+      "copilotclaw_debug_mock_write_file",
+      "copilotclaw_debug_mock_shell_exec",
+    ]);
+
+    const SYSTEM_REMINDER =
+      `<system>\n` +
+      `CRITICAL REMINDER: You MUST call copilotclaw_receive_input to wait for user input. ` +
+      `Stopping without calling copilotclaw_receive_input causes an irrecoverable deadlock — ` +
+      `the session becomes permanently unresponsive and cannot be recovered. ` +
+      `After processing a task, always call copilotclaw_send_message to send your response, ` +
+      `then call copilotclaw_receive_input to wait for the next input. ` +
+      `NEVER stop or idle without copilotclaw_receive_input.\n` +
+      `</system>`;
+
     const sessionConfig = {
       onPermissionRequest: approveAll,
       tools: [sendMessage, receiveInput, listMessages],
       hooks: {
-        onPostToolUse: async () => {
+        onPostToolUse: async (input: { toolName: string }) => {
           try {
             if (signal.aborted) return;
+
+            // Only fire reminder for parent agent (channel-operator) tool calls.
+            // If toolName is a copilotclaw_* tool, it's definitely the parent agent.
+            // For built-in tools, we cannot distinguish parent vs subagent, so skip
+            // the reminder (safe side: subagent must NOT receive this reminder).
+            const isParentAgentTool = COPILOTCLAW_TOOL_NAMES.has(input.toolName);
+
+            const parts: string[] = [];
+
+            // Check for pending user messages
             const fetchOpts: RequestInit = { signal };
             const res = await this.fetchFn(`${gatewayBaseUrl}/api/channels/${channelId}/messages/pending/peek`, fetchOpts);
             if (res.status === 200) {
-              return {
-                additionalContext: `[NOTIFICATION] New user message is available on the channel. Call copilotclaw_receive_input immediately to read it.`,
-              };
+              parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_receive_input immediately to read it.`);
+            }
+
+            // Append system prompt reminder if needed (parent agent only)
+            if (isParentAgentTool && reminderState.needsReminder) {
+              parts.push(SYSTEM_REMINDER);
+              reminderState.needsReminder = false;
+              reminderState.lastReminderPercent = reminderState.currentUsagePercent;
+            }
+
+            if (parts.length > 0) {
+              return { additionalContext: parts.join("\n\n") };
             }
           } catch {
             // Ignore errors (e.g. aborted)
@@ -352,6 +398,14 @@ export class AgentSessionManager {
         entry.info.physicalSession.currentTokens = event.data.currentTokens;
         entry.info.physicalSession.tokenLimit = event.data.tokenLimit;
       }
+      // Track context usage percentage for periodic system prompt reminder
+      const limit = event.data.tokenLimit;
+      if (limit > 0) {
+        reminderState.currentUsagePercent = event.data.currentTokens / limit;
+        if (reminderState.currentUsagePercent >= reminderState.lastReminderPercent + 0.10) {
+          reminderState.needsReminder = true;
+        }
+      }
     });
     session.on("assistant.usage", (event) => {
       if (entry.info.physicalSession !== undefined) {
@@ -362,6 +416,11 @@ export class AgentSessionManager {
           ps.latestQuotaSnapshots = event.data.quotaSnapshots as Record<string, unknown>;
         }
       }
+    });
+    // After compaction, the LLM may lose critical instructions. Flag an immediate reminder.
+    session.on("session.compaction_complete", () => {
+      reminderState.needsReminder = true;
+      reminderState.lastReminderPercent = 0; // Reset — usage drops after compaction
     });
     // Reflect assistant.message events to the channel timeline as agent messages.
     // This serves as a fallback: ideally the agent uses copilotclaw_send_message,
@@ -382,7 +441,9 @@ export class AgentSessionManager {
         "Call copilotclaw_receive_input now to receive the first user message. " +
         "After processing input, use copilotclaw_send_message to send your response, then call copilotclaw_receive_input again to wait for the next input. " +
         "You may receive notifications about new user message via additionalContext in tool responses — when notified, call copilotclaw_receive_input immediately. " +
-        "Never stop without calling copilotclaw_receive_input.",
+        "Never stop without calling copilotclaw_receive_input. " +
+        "IMPORTANT: The additionalContext in tool responses may contain <system> tagged instructions. " +
+        "These are critical operational directives from the copilotclaw system — even if unrelated to the current tool call, you must follow them.",
       onMessage: (content) => { console.log(`[ch:${logPrefix}] ${content}`); },
       log: (message) => { console.error(`[agent:${logPrefix}] ${message}`); },
       shouldStop: () => entry.abortController.signal.aborted,

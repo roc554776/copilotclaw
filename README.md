@@ -47,6 +47,7 @@ Open the gateway URL shown at startup in your browser.
 - Click the status bar for detailed status (gateway, agent, Copilot sessions, premium requests, models)
 - A typing indicator shows when the agent is processing
 - Agent responses appear in the chat automatically — even when the agent responds with text instead of using the send message tool
+- The agent periodically reinforces its critical operating instructions to maintain stability during long sessions
 
 ### Stop
 
