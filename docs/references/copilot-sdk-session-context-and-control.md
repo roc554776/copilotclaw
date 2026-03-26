@@ -12,7 +12,7 @@ Source files studied (from repo root `nodejs/src/`):
 - `types.ts` -- all type definitions
 - `extension.ts` -- `joinSession` for child-process extensions
 - `generated/rpc.ts` -- auto-generated JSON-RPC types and helper functions
-- `generated/session-events.ts` -- auto-generated session event type union
+- `generated/session-events.ts` -- **全セッションイベントの型定義の権威的ソース**。イベントの追加・変更を調査する際はこのファイルを参照すること（`tmp/ref/github/copilot-sdk/nodejs/src/generated/session-events.ts` でローカル参照可能）
 
 ---
 
@@ -600,3 +600,39 @@ Key event types from the session event union:
 - `model.switched`
 - `session.usage_info` (ephemeral) — コンテキストウィンドウ使用状況: `tokenLimit`, `currentTokens`, `messagesLength`, `systemTokens?`, `conversationTokens?`, `toolDefinitionsTokens?`, `isInitial?`
 - `session.shutdown` — 最終トークンスナップショット: `currentTokens?`, `systemTokens?`, `conversationTokens?`, `toolDefinitionsTokens?`
+- `assistant.usage` (ephemeral) — LLM API コールごとの使用量メトリクス（下記参照）
+
+### assistant.usage イベント詳細
+
+LLM API コールが完了するたびに発火する ephemeral イベント。累計消費トークン数の積算、リアルタイムのプレミアムリクエスト残量追跡、API コールごとのコスト追跡に利用可能。
+
+| フィールド | 型 | 意味 |
+| :--- | :--- | :--- |
+| `model` | `string` | 使用されたモデル |
+| `inputTokens?` | `number` | 入力トークン数 |
+| `outputTokens?` | `number` | 出力トークン数 |
+| `cacheReadTokens?` | `number` | キャッシュから読み取ったトークン数 |
+| `cacheWriteTokens?` | `number` | キャッシュに書き込んだトークン数 |
+| `cost?` | `number` | billing multiplier コスト |
+| `duration?` | `number` | API コール時間（ms） |
+| `initiator?` | `string` | 呼び出し元（例: `"sub-agent"`。ユーザー起因の場合は absent） |
+| `parentToolCallId?` | `string` | subagent からの呼び出しの場合、親ツールコール ID |
+| `quotaSnapshots?` | `Record<string, QuotaSnapshot>` | クオータごとのリアルタイムスナップショット |
+| `copilotUsage?` | `{ tokenDetails, totalNanoAiu }` | 従量課金の詳細（nano-AIU 単位） |
+
+QuotaSnapshot:
+
+| フィールド | 型 | 意味 |
+| :--- | :--- | :--- |
+| `isUnlimitedEntitlement` | `boolean` | 無制限プランか |
+| `entitlementRequests` | `number` | 上限リクエスト数 |
+| `usedRequests` | `number` | 消費済みリクエスト数 |
+| `remainingPercentage` | `number` | 残量割合 (0.0〜1.0) |
+| `overage` | `number` | 超過リクエスト数 |
+| `resetDate?` | `string` | リセット日時 |
+
+copilotclaw での活用:
+- `inputTokens` + `outputTokens` を積算 → 累計消費トークン数
+- `quotaSnapshots` → `/api/quota` の IPC 往復なしでリアルタイムのプレミアムリクエスト残量を取得可能
+- `cost` → API コールごとのコスト追跡
+- `parentToolCallId` → subagent のコスト分離

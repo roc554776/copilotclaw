@@ -7,6 +7,9 @@ export interface PhysicalSessionSummary {
   currentState: string;
   currentTokens?: number;
   tokenLimit?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  latestQuotaSnapshots?: Record<string, unknown>;
 }
 
 export interface SubagentInfo {

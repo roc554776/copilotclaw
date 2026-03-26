@@ -488,13 +488,24 @@ PhysicalSessionSummary:
 | `currentState` | `string` | 現在の状態（idle, tool 呼び出し中, etc.） |
 | `currentTokens` | `number?` | 現在のコンテキストトークン数（`session.usage_info` イベントから取得） |
 | `tokenLimit` | `number?` | 最大コンテキストウィンドウサイズ（`session.usage_info` イベントから取得） |
+| `totalInputTokens` | `number?` | 累計入力トークン数（`assistant.usage` イベントから積算） |
+| `totalOutputTokens` | `number?` | 累計出力トークン数（`assistant.usage` イベントから積算） |
+
+#### assistant.usage イベントの活用
+
+`assistant.usage` イベント（ephemeral）は LLM API コールごとに発火し、以下の情報をリアルタイムで提供する:
+
+- `inputTokens` / `outputTokens` を積算 → 物理セッションの累計消費トークン数
+- `quotaSnapshots` → プレミアムリクエスト残量のリアルタイム更新（`/api/quota` の IPC 往復を省略可能）
+- `cost` → API コールごとのコスト追跡
+- `parentToolCallId` → subagent のコストを分離して追跡可能
 
 #### サマリー表示（ダッシュボードモーダル）
 
 ステータス詳細モーダルに以下を追加:
-- プレミアムリクエスト残量/上限（`client.rpc.account.getQuota()` から取得）
+- プレミアムリクエスト残量/上限（`assistant.usage` イベントの `quotaSnapshots` からリアルタイム取得、または `client.rpc.account.getQuota()` からフォールバック取得）
 - 利用可能なモデルとプレミアムリクエスト乗数（`client.rpc.models.list()` から取得）
-- 各物理セッションのサマリー（session ID, model, 経過時間, 状態）
+- 各物理セッションのサマリー（session ID, model, コンテキスト使用率, 累計トークン消費, 経過時間, 状態）
 - 経過時間はクライアントサイドで `startedAt` から動的計算して表示
 
 #### 詳細表示（個別セッション選択時）

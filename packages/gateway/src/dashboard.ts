@@ -254,6 +254,11 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
                   const pct = Math.round(ps.currentTokens / ps.tokenLimit * 100);
                   html += '<div class="row"><span class="label">Context</span><span class="value">' + escHtml(String(ps.currentTokens)) + ' / ' + escHtml(String(ps.tokenLimit)) + ' (' + pct + '%)</span></div>';
                 }
+                if (ps.totalInputTokens != null || ps.totalOutputTokens != null) {
+                  const inp = ps.totalInputTokens ?? 0;
+                  const out = ps.totalOutputTokens ?? 0;
+                  html += '<div class="row"><span class="label">Tokens used</span><span class="value">in:' + escHtml(String(inp)) + ' out:' + escHtml(String(out)) + ' total:' + escHtml(String(inp + out)) + '</span></div>';
+                }
                 html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + ' (' + elapsed(ps.startedAt) + ')</span></div>';
                 html += '<div style="margin-top:0.3rem"><a href="#" style="color:#58a6ff;text-decoration:none" onclick="showSessionDetail(\'' + psId + '\');return false;">Show context detail</a></div>';
                 html += '</div>';
@@ -277,29 +282,42 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         } else {
           html += '<div class="section"><div class="section-title">Agent</div><div class="row"><span class="label">Not running</span></div></div>';
         }
-        // Quota
+        // Quota — try /api/quota first, fall back to latestQuotaSnapshots from session data
+        let quotaSnapshots = null;
         try {
           const quotaRes = await fetch("/api/quota");
           if (quotaRes.ok) {
             const quotaData = await quotaRes.json();
-            const snapshots = quotaData.quotaSnapshots || {};
-            const keys = Object.keys(snapshots);
-            if (keys.length > 0) {
-              html += '<div class="section"><div class="section-title">Premium Requests</div>';
-              for (const key of keys) {
-                const q = snapshots[key];
-                const used = q.usedRequests ?? 0;
-                const total = q.entitlementRequests ?? 0;
-                const remaining = total - used;
-                html += '<div class="row"><span class="label">' + escHtml(key) + '</span><span class="value">' + escHtml(String(remaining)) + ' / ' + escHtml(String(total)) + '</span></div>';
-                if (q.overage > 0) {
-                  html += '<div class="row"><span class="label">Overage</span><span class="value">' + escHtml(String(q.overage)) + '</span></div>';
-                }
-              }
-              html += '</div>';
+            quotaSnapshots = quotaData.quotaSnapshots || null;
+          }
+        } catch { /* quota API not available */ }
+        // Fallback: use latestQuotaSnapshots from any active physical session
+        if (quotaSnapshots === null && body.agent?.sessions) {
+          for (const sess of Object.values(body.agent.sessions)) {
+            if (sess.physicalSession?.latestQuotaSnapshots) {
+              quotaSnapshots = sess.physicalSession.latestQuotaSnapshots;
+              break;
             }
           }
-        } catch { /* quota not available */ }
+        }
+        {
+          const snapshots = quotaSnapshots || {};
+          const keys = Object.keys(snapshots);
+          if (keys.length > 0) {
+            html += '<div class="section"><div class="section-title">Premium Requests</div>';
+            for (const key of keys) {
+              const q = snapshots[key];
+              const used = q.usedRequests ?? 0;
+              const total = q.entitlementRequests ?? 0;
+              const remaining = total - used;
+              html += '<div class="row"><span class="label">' + escHtml(key) + '</span><span class="value">' + escHtml(String(remaining)) + ' / ' + escHtml(String(total)) + '</span></div>';
+              if (q.overage > 0) {
+                html += '<div class="row"><span class="label">Overage</span><span class="value">' + escHtml(String(q.overage)) + '</span></div>';
+              }
+            }
+            html += '</div>';
+          }
+        }
 
         // Models
         try {

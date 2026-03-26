@@ -13,6 +13,9 @@ export interface PhysicalSessionSummary {
   currentState: string;
   currentTokens?: number;
   tokenLimit?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  latestQuotaSnapshots?: Record<string, unknown>;
 }
 
 export interface SubagentInfo {
@@ -348,6 +351,16 @@ export class AgentSessionManager {
       if (entry.info.physicalSession !== undefined) {
         entry.info.physicalSession.currentTokens = event.data.currentTokens;
         entry.info.physicalSession.tokenLimit = event.data.tokenLimit;
+      }
+    });
+    session.on("assistant.usage", (event) => {
+      if (entry.info.physicalSession !== undefined) {
+        const ps = entry.info.physicalSession;
+        ps.totalInputTokens = (ps.totalInputTokens ?? 0) + (event.data.inputTokens ?? 0);
+        ps.totalOutputTokens = (ps.totalOutputTokens ?? 0) + (event.data.outputTokens ?? 0);
+        if (event.data.quotaSnapshots !== undefined) {
+          ps.latestQuotaSnapshots = event.data.quotaSnapshots as Record<string, unknown>;
+        }
       }
     });
 
