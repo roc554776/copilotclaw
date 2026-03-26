@@ -64,9 +64,11 @@ async function run() {
       await import(join(gatewayDist, "restart.js"));
       break;
 
-    case "update":
-      await import(join(gatewayDist, "update.js"));
+    case "update": {
+      const { runUpdate } = await import(join(gatewayDist, "update.js"));
+      await runUpdate();
       break;
+    }
 
     case "config":
       await import(join(gatewayDist, "config-cli.js"));
