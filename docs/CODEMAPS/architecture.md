@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-26 | Packages: 2 | Token estimate: ~1300 -->
+<!-- Generated: 2026-03-26 | Packages: 2 | Token estimate: ~1350 -->
 
 # Architecture
 
@@ -85,5 +85,5 @@ Environment variables:
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (173 tests: 32 agent + 141 gateway), Playwright for browser E2E (8 tests); vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (178 tests: 36 agent + 142 gateway), Playwright for browser E2E (8 tests); vitest excludes test/browser/ directory
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
