@@ -10,6 +10,15 @@ function log(message: string): void {
   console.error(`[update] ${message}`);
 }
 
+/** Determine if a rebuild is needed based on SHA comparison and upstream type. */
+export function shouldRebuild(beforeSha: string, afterSha: string, upstream: string | undefined): "up-to-date" | "sha-changed" | "file-upstream-rebuild" {
+  const isFileUpstream = upstream !== undefined && upstream.startsWith("file://");
+  const shaChanged = beforeSha !== afterSha;
+  if (shaChanged) return "sha-changed";
+  if (isFileUpstream) return "file-upstream-rebuild";
+  return "up-to-date";
+}
+
 function run(args: string[], cwd: string): string {
   const [cmd, ...rest] = args;
   if (cmd === undefined) throw new Error("run: empty command");
@@ -25,7 +34,6 @@ async function main(): Promise<void> {
   // Determine upstream: env var > config file > default git remote (origin)
   const config = loadConfig();
   const upstream = config.upstream;
-  const isFileUpstream = upstream !== undefined && upstream.startsWith("file://");
 
   try {
     // Check if we're in a git repo
@@ -65,14 +73,13 @@ async function main(): Promise<void> {
 
   const afterSha = run(["git", "rev-parse", "HEAD"], repoRoot);
 
-  // file:// upstream: always rebuild (npm install -g copies the repo, so SHA matches even when source changed)
-  const shaChanged = beforeSha !== afterSha;
-  if (!shaChanged && !isFileUpstream) {
+  const rebuildDecision = shouldRebuild(beforeSha, afterSha, upstream);
+  if (rebuildDecision === "up-to-date") {
     log("already up to date");
     return;
   }
 
-  if (shaChanged) {
+  if (rebuildDecision === "sha-changed") {
     log(`updated: ${beforeSha.slice(0, 8)} → ${afterSha.slice(0, 8)}`);
   } else {
     log("file:// upstream — rebuilding");
