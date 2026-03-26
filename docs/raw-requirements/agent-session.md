@@ -12,3 +12,11 @@
   - `copilotclaw_*` tool で input を待たせておく
   - タイムアウトしそうになったら、一旦 input なしで返し、即時 `copilotclaw_*` tool を実行するように強く指示する
   - これを繰り返すことで、セッションを生かし続ける
+
+<!-- 2026-03-26 -->
+## Agent Session の作業ディレクトリ
+
+- agent session を起動するときの cwd（workingDirectory）は、当該 profile の workspace ディレクトリにすべき
+  - SDK の `SessionConfig.workingDirectory` で指定できる
+  - 現状は未指定で、agent process の cwd がそのまま使われている（意図しない動作）
+  - profile ごとに workspace が分離される設計に合わせて、session の作業ディレクトリも profile workspace に揃える

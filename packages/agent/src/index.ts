@@ -9,6 +9,7 @@ interface GatewayConfig {
   model: string | null;
   zeroPremium: boolean;
   debugMockCopilotUnsafeTools: boolean;
+  workspaceRoot: string | null;
 }
 
 function log(message: string): void {
@@ -23,7 +24,7 @@ async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
       if (data.config !== undefined) return data.config;
     }
   } catch {}
-  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false };
+  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, workspaceRoot: null };
 }
 
 async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, number>> {
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
     debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
   };
   if (config.model !== null) managerOpts.model = config.model;
+  if (config.workspaceRoot !== null) managerOpts.workingDirectory = config.workspaceRoot;
   const sessionManager = new AgentSessionManager(managerOpts);
 
   const result = await listenIpc(

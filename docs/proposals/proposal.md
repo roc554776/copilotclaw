@@ -246,6 +246,13 @@ Agent session はコストが高い（プレミアムリクエスト消費）。
   - stale session タイムアウト（processing 状態が 10 分超過）
   - 明示的な停止要求（`copilotclaw agent stop` 等）
 
+### Agent Session の作業ディレクトリ
+
+agent session を起動する際、SDK の `SessionConfig.workingDirectory` に当該 profile の workspace ディレクトリを指定する。これにより、Copilot のビルトインツール（bash, view, grep, glob 等）が操作するファイルシステムのルートが profile workspace に固定される。
+
+- agent が gateway から受け取る workspace パスを `workingDirectory` に設定する
+- profile ごとに workspace が分離される設計と一致する
+
 ### Session Keepalive 方針
 
 `client.send()` は session の開始時以外には使わない（コスト最小化の原則）。CLI の 30 分 idle timeout を回避するため、`copilotclaw_receive_input` tool の内部で input をポーリングしながら待機する。tool が実行中の間はセッションは active 扱いとなり timeout しない。

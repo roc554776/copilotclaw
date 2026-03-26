@@ -6,6 +6,7 @@ import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
 import type { ChannelProvider } from "./channel-provider.js";
 import { DEFAULT_PORT, getProfileName, loadConfig } from "./config.js";
+import { getWorkspaceRoot } from "./workspace.js";
 import { LogBuffer } from "./log-buffer.js";
 import { Store } from "./store.js";
 import { WsBroadcaster } from "./ws.js";
@@ -122,6 +123,7 @@ function createRequestHandler(
           model: config.model ?? null,
           zeroPremium: config.zeroPremium ?? false,
           debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
+          workspaceRoot: getWorkspaceRoot(),
         },
       });
       return;

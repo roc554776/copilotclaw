@@ -31,6 +31,7 @@ export interface AgentSessionManagerOptions {
   model?: string;
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
+  workingDirectory?: string;
 }
 
 export interface StartSessionOptions {
@@ -54,6 +55,7 @@ export class AgentSessionManager {
   private readonly model: string | undefined;
   private readonly zeroPremium: boolean;
   private readonly debugMockCopilotUnsafeTools: boolean;
+  private readonly workingDirectory: string | undefined;
   private generationCounter = 0;
 
   constructor(options: AgentSessionManagerOptions) {
@@ -64,6 +66,7 @@ export class AgentSessionManager {
     this.model = options.model;
     this.zeroPremium = options.zeroPremium ?? false;
     this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
+    this.workingDirectory = options.workingDirectory;
   }
 
   getSessionStatuses(): Record<string, AgentSessionInfo> {
@@ -212,9 +215,14 @@ export class AgentSessionManager {
     const resolvedModel = await this.resolveModel(entry.client);
 
     // Resume existing SDK session or create new one
+    const baseConfig = {
+      model: resolvedModel,
+      ...(this.workingDirectory !== undefined ? { workingDirectory: this.workingDirectory } : {}),
+      ...sessionConfig,
+    };
     const session = entry.copilotSessionId !== undefined
-      ? await entry.client.resumeSession(entry.copilotSessionId, { model: resolvedModel, ...sessionConfig })
-      : await entry.client.createSession({ model: resolvedModel, ...sessionConfig });
+      ? await entry.client.resumeSession(entry.copilotSessionId, baseConfig)
+      : await entry.client.createSession(baseConfig);
 
     entry.copilotSessionId = session.sessionId;
     entry.info.status = "waiting";
