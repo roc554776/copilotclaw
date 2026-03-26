@@ -31,5 +31,6 @@ agent が学んだことや覚えておくべき情報を、session をまたい
 agent の workspace での作業内容を Git で追跡できるようにする。
 
 - workspace ディレクトリを Git リポジトリとして初期化する（setup 時）
-- 自動コミットは行わない（OpenClaw と同様、明示的なコマンドまたは agent の判断で操作する）
+- copilotclaw のコード側で自動コミットは行わない
+- AGENTS.md テンプレートで agent の自主的なコミットを誘導する（OpenClaw の delegation パターン: AGENTS.md が "Commit and push your own changes" を proactive work として記載）
 - agent はビルトインツール（shell 実行）で Git 操作が可能

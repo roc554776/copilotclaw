@@ -58,8 +58,8 @@ workspace ディレクトリを Git リポジトリとして管理する。
 **初期化:** `copilotclaw setup` 時に `git init` を実行（git がなければスキップ）
 
 **操作方針:**
-- 自動コミットは行わない（OpenClaw と同様）
-- agent はビルトインツール（shell 実行）で git 操作が可能
-- AGENTS.md に Git の使い方を記載し、agent が自発的に管理するよう導く
-- OpenClaw の AGENTS.md には「Proactive work: Commit and push your own changes」とあり、agent の自主的なコミットは許容される
+- copilotclaw のコード側で自動コミットは行わない
+- agent が自主的にコミットすることは、AGENTS.md テンプレートで明示的に誘導する（OpenClaw の delegation パターンに倣う）
+- AGENTS.md テンプレートの proactive work セクションに「Commit and push your own changes」を記載し、agent が許可なしに git add / commit / push を行えることを示す
+- agent はビルトインツール（shell 実行）で git 操作を行う
 
