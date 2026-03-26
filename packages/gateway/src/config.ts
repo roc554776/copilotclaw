@@ -51,6 +51,23 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   return result;
 }
 
+/** Load config from file only (no env var override). */
+export function loadFileConfig(profile?: string): CopilotclawConfig {
+  const filePath = getConfigFilePath(profile);
+  if (!existsSync(filePath)) return {};
+  try {
+    return JSON.parse(readFileSync(filePath, "utf-8")) as CopilotclawConfig;
+  } catch {
+    return {};
+  }
+}
+
+/** Map of config keys to their corresponding environment variable names. */
+export const CONFIG_ENV_VARS: Record<string, string> = {
+  upstream: "COPILOTCLAW_UPSTREAM",
+  port: "COPILOTCLAW_PORT",
+};
+
 export function saveConfig(config: CopilotclawConfig, profile?: string): void {
   const filePath = getConfigFilePath(profile);
   writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8");

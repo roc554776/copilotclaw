@@ -20,6 +20,8 @@ Commands:
   stop                 Stop the gateway (agent keeps running)
   restart              Restart the gateway (stop + start)
   update               Update copilotclaw (git pull + build)
+  config get <key>     Show config value
+  config set <key> <v> Set config value
   agent stop           Stop the agent process only
 
 Start options:
@@ -62,6 +64,10 @@ async function run() {
 
     case "update":
       await import(join(gatewayDist, "update.js"));
+      break;
+
+    case "config":
+      await import(join(gatewayDist, "config-cli.js"));
       break;
 
     case "agent":

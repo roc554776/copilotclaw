@@ -57,6 +57,10 @@
 - setup で、デフォルトの port が使われていたら、空いているポートを探して、それを設定ファイルに書き込むようにしたい
   - 候補の port の list のうち、空いている port を探すロジックを実装する
   - port 選択ロジックは `.claude/skills/select-development-port/SKILL.md` を参考にする
+<!-- 2026-03-26 -->
+- openclaw のような config set / get コマンドがほしい
+  - CLI から設定ファイルを直接編集せずに設定値を変更・確認できるようにしたい
+  - 参考: openclaw は `openclaw config set <key> <value>` / `openclaw config get <key>` を提供している
 - 仕様検討の参考に openclaw の codebase を参照すべき
   - openclaw はあくまで参考であって、完全に同じにする必要はない
   - openclaw のよい点を取り入れる
