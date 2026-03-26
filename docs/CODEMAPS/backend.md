@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-26 | Files scanned: 31 | Token estimate: ~1650 -->
+<!-- Generated: 2026-03-26 | Files scanned: 31 | Token estimate: ~1800 -->
 
 # Backend
 
@@ -9,7 +9,9 @@
 ```
 GET  /healthz                              → 200 { status: "ok" }
 POST /api/stop                             → 200 { status: "stopping" } → gateway exit only (localhost only, agent NOT stopped)
-GET  /api/status                           → 200 { gateway: {status, version, profile}, agent: AgentStatusResponse|null, agentCompatibility: …|null, config: {model, zeroPremium, debugMockCopilotUnsafeTools} }
+GET  /api/status                           → 200 { gateway: {status, version, profile}, agent: AgentStatusResponse|null, agentCompatibility: …|null, config: {model, zeroPremium, debugMockCopilotUnsafeTools, workspaceRoot} }
+GET  /api/quota                            → 200 quota object | 503 (no active agent session); proxied from agent via IPC
+GET  /api/models                           → 200 models object | 503 (no active agent session); proxied from agent via IPC
 GET  /api/logs                             → 200 { logs: string[] } (recent log lines from ring buffer)
 GET  /api/channels                         → 200 Channel[]
 POST /api/channels                         → 201 Channel
@@ -25,7 +27,7 @@ GET  /                                     → 200 HTML dashboard (status bar + 
 ### Key Files
 
 ```
-src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents
+src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents; /api/quota and /api/models proxy to agent via agentManager
 src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, CONFIG_ENV_VARS, parseBool helper; profile-aware (~/.copilotclaw/config.json or config-{{profile}}.json); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS) take precedence over file values; CopilotclawConfig includes model, zeroPremium, debugMockCopilotUnsafeTools fields
 src/config-cli.ts          — `copilotclaw config` CLI: configGet (resolve + display, notes env var override), configSet (validate + save, warns if env var shadows); valid keys: upstream, port, model, zeroPremium, debugMockCopilotUnsafeTools; BOOLEAN_KEYS handling for zeroPremium/debugMockCopilotUnsafeTools
 src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + LogBuffer creation + console intercept + startServer on resolvePort() + periodic agent monitor every 30s, max 3 retries)
@@ -39,11 +41,11 @@ src/workspace.ts           — workspace paths: profile-aware (~/.copilotclaw/ o
 src/store.ts               — persistent store (Channel, Message, per-channel pending queue); JSON file via atomic rename
 src/channel-provider.ts    — ChannelProvider interface (plugin contract for chat mediums)
 src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, WS broadcast); passes compatibility info to dashboard
-src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening)
+src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening); status modal shows physical session details, subagent sessions, premium requests, available models
 src/ws.ts                  — WsBroadcaster: SSE event broadcasting to connected clients
 src/doctor.ts              — `copilotclaw doctor` CLI: checkWorkspace, checkConfig, checkGateway, checkAgent, checkZeroPremium diagnostics; runDoctor orchestrates checks and optional --fix (fixWorkspace, fixConfig, fixStaleSocket); exits 1 on failures
-src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods; MIN_AGENT_VERSION exported; semverSatisfies exported (used by doctor)
-src/ipc-client.ts          — IPC client (status/stop to agent process); AgentStatusResponse includes bootId field
+src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods; getQuota() and getModels() proxy to agent IPC; MIN_AGENT_VERSION exported; semverSatisfies exported (used by doctor)
+src/ipc-client.ts          — IPC client (status/stop/quota/models to agent process); AgentStatusResponse includes bootId field; PhysicalSessionSummary and SubagentInfo types; getAgentQuota() and getAgentModels() functions
 src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.sock or copilotclaw-agent-{{profile}}.sock in tmpdir)
 ```
 
@@ -66,7 +68,7 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 
 ```
 → {"method":"status"}
-← {"version":"0.1.0","bootId":"uuid","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"..."}}}
+← {"version":"0.1.0","bootId":"uuid","startedAt":"...","sessions":{"sess-id":{"status":"waiting","startedAt":"...","boundChannelId":"ch-id","copilotSessionId":"...","physicalSession":{"sessionId":"...","model":"...","startedAt":"..."},"subagentSessions":[{"sessionId":"...","model":"...","status":"...","startedAt":"..."}]}}}
 
 → {"method":"session_status","params":{"sessionId":"sess-id"}}
 ← {"status":"processing","startedAt":"...","processingStartedAt":"...","boundChannelId":"ch-id"}
@@ -74,6 +76,12 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 
 → {"method":"stop"}
 ← {"ok":true}  → graceful shutdown of all sessions
+
+→ {"method":"quota"}
+← { ...quota object } | {"error":"no active session"}
+
+→ {"method":"models"}
+← { ...models object } | {"error":"no active session"}
 ```
 
 ### Copilot SDK Tools (tools/channel.ts)
@@ -92,8 +100,8 @@ copilotclaw_list_messages(limit?)   — list recent channel messages (reverse-ch
 
 ```
 src/index.ts                    — singleton entry, fetches config (model/zeroPremium/debugMockCopilotUnsafeTools) from gateway /api/status at startup, passes to AgentSessionManager; gateway polling loop, max-age check then stale detection per cycle; checks for saved sessions (hasSavedSession) when pending messages found, consumes saved copilotSessionId for deferred resume via startSession
-src/agent-session-manager.ts    — per-session lifecycle, channel binding, model/zeroPremium/debugMockCopilotUnsafeTools fields; resolveModel() method (zeroPremium overrides premium models to non-premium); debugMockCopilotUnsafeTools mode restricts availableTools to copilotclaw_* + debug debug mock copilot unsafe tools + WebFetch/WebSearch; deferred resume pattern: checkSessionMaxAge and checkStaleAndHandle save copilotSessionId to savedCopilotSessionIds map and stop session (no immediate restart/retry); hasSavedSession/consumeSavedSession for retrieval; max-age 2-day default; channel notifications (stopped/timed-out via postChannelMessage)
-src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop), version reporting
+src/agent-session-manager.ts    — per-session lifecycle, channel binding, model/zeroPremium/debugMockCopilotUnsafeTools fields; PhysicalSessionSummary and SubagentInfo types exported; SDK event tracking (tool.execution_start/complete, session.idle, subagent.started/completed/failed, session.model_change); getQuota() and getModels() methods (proxy Copilot SDK account API); resolveModel() method (zeroPremium overrides premium models to non-premium); debugMockCopilotUnsafeTools mode restricts availableTools to copilotclaw_* + debug debug mock copilot unsafe tools + WebFetch/WebSearch; deferred resume pattern: checkSessionMaxAge and checkStaleAndHandle save copilotSessionId to savedCopilotSessionIds map and stop session (no immediate restart/retry); hasSavedSession/consumeSavedSession for retrieval; max-age 2-day default; channel notifications (stopped/timed-out via postChannelMessage)
+src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop/quota/models), version reporting
 src/ipc-paths.ts                — socket path generation (profile-aware, same logic as gateway)
 src/session-loop.ts             — session idle loop (subscribe/send/disconnect, no continuePrompt); runSession supports both createSession and resumeSession
 src/copilot-session-adapter.ts  — CopilotSession → SessionLike adapter
@@ -110,10 +118,10 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (193 total: 185 vitest + 8 Playwright)
+### Test Suites (181 total: 173 vitest + 8 Playwright)
 
 ```
-Gateway vitest (139 tests) — unit + E2E tests with mock agent (includes config, config-cli, doctor, ipc-paths, setup, workspace tests)
-Agent vitest (46 tests)    — unit tests with mock Copilot SDK session
+Gateway vitest (141 tests) — unit + E2E tests with mock agent (includes config, config-cli, doctor, ipc-paths, setup, workspace tests)
+Agent vitest (32 tests)    — unit tests with mock Copilot SDK session
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```
