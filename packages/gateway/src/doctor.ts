@@ -93,20 +93,6 @@ export async function checkAgent(): Promise<DiagnosticResult> {
   return { name: "agent", result: "pass", message: `v${status.version} (boot: ${status.bootId ?? "?"})` };
 }
 
-export async function checkIpcSocket(): Promise<DiagnosticResult> {
-  const socketPath = getAgentSocketPath();
-  if (!existsSync(socketPath)) {
-    return { name: "ipc-socket", result: "pass", message: "no socket file" };
-  }
-
-  // Probe liveness by attempting to get agent status
-  const status = await getAgentStatus(socketPath);
-  if (status !== null) {
-    return { name: "ipc-socket", result: "pass", message: socketPath };
-  }
-  return { name: "ipc-socket", result: "warn", message: `stale socket detected: ${socketPath}`, fixable: true };
-}
-
 export function fixWorkspace(): boolean {
   try {
     ensureWorkspace();
@@ -146,7 +132,6 @@ export async function runDoctor(fix: boolean): Promise<boolean> {
   // Async checks
   results.push(await checkGateway());
   results.push(await checkAgent());
-  results.push(await checkIpcSocket());
 
   // Log all results
   for (const r of results) {
@@ -161,7 +146,7 @@ export async function runDoctor(fix: boolean): Promise<boolean> {
         let ok = false;
         if (r.name === "workspace") ok = fixWorkspace();
         else if (r.name === "config") ok = fixConfig();
-        else if (r.name === "agent" || r.name === "ipc-socket") ok = fixStaleSocket();
+        else if (r.name === "agent") ok = fixStaleSocket();
 
         if (ok) {
           console.error(`[doctor] fixed: ${r.name}`);
