@@ -18,7 +18,17 @@ async function main(): Promise<void> {
 
   // Always ensure agent process on gateway start (version check + spawn if absent)
   try {
-    await agentManager.ensureAgent({ forceRestart: forceAgentRestart });
+    const oldBootId = await agentManager.ensureAgent({ forceRestart: forceAgentRestart });
+    // If force-restart was performed, wait for the new agent to come up
+    if (oldBootId !== undefined) {
+      console.error("[gateway] waiting for new agent to start...");
+      const ok = await agentManager.waitForNewAgent(oldBootId);
+      if (ok) {
+        console.error("[gateway] new agent started successfully");
+      } else {
+        console.error("[gateway] WARNING: new agent did not start within timeout");
+      }
+    }
   } catch (err: unknown) {
     console.error("[gateway] agent ensure failed:", err);
   }

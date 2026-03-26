@@ -50,24 +50,34 @@ async function waitForHealthy(): Promise<boolean> {
   return false;
 }
 
-async function checkAgentCompatibility(): Promise<void> {
-  try {
-    const statusRes = await fetch(`http://localhost:${DEFAULT_PORT}/api/status`);
-    if (statusRes.ok) {
+async function checkAgentCompatibility(waitForAgent = false): Promise<void> {
+  const maxAttempts = waitForAgent ? 30 : 1; // 30 * 500ms = 15s
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await sleep(500);
+    try {
+      const statusRes = await fetch(`http://localhost:${DEFAULT_PORT}/api/status`);
+      if (!statusRes.ok) continue;
       const status = await statusRes.json() as { agentCompatibility?: string; agent?: { version?: string } | null };
       const compat = status.agentCompatibility ?? "unavailable";
       if (compat === "compatible") {
         log(`agent: compatible (v${status.agent?.version ?? "?"})`);
+        return;
       } else if (compat === "incompatible") {
         log(`ERROR: agent is incompatible (v${status.agent?.version ?? "?"}). Use --force-agent-restart to upgrade.`);
         process.exit(1);
-      } else {
+      } else if (!waitForAgent) {
         log(`WARNING: agent is not running`);
+        return;
+      }
+      // If waitForAgent, keep trying until agent appears
+    } catch {
+      if (!waitForAgent) {
+        log("WARNING: could not verify agent status");
+        return;
       }
     }
-  } catch {
-    log("WARNING: could not verify agent status");
   }
+  log("WARNING: agent did not start within timeout");
 }
 
 async function main(): Promise<void> {
@@ -81,7 +91,7 @@ async function main(): Promise<void> {
 
   if (initialStatus === "healthy") {
     log(`already running on port ${DEFAULT_PORT}`);
-    await checkAgentCompatibility();
+    await checkAgentCompatibility(forceAgentRestart);
     log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
     log(`run 'copilotclaw stop' to shut down`);
     return;
@@ -94,7 +104,7 @@ async function main(): Promise<void> {
       const status = await checkHealth();
       if (status === "healthy") {
         log("became healthy");
-        await checkAgentCompatibility();
+        await checkAgentCompatibility(forceAgentRestart);
         log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
         log(`run 'copilotclaw stop' to shut down`);
         return;
@@ -104,7 +114,7 @@ async function main(): Promise<void> {
         spawnDaemon({ forceAgentRestart });
         if (await waitForHealthy()) {
           log(`running on http://localhost:${DEFAULT_PORT}`);
-          await checkAgentCompatibility();
+          await checkAgentCompatibility(forceAgentRestart);
           log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
           log(`run 'copilotclaw stop' to shut down`);
           return;
@@ -123,7 +133,7 @@ async function main(): Promise<void> {
   }
 
   log(`running on http://localhost:${DEFAULT_PORT}`);
-  await checkAgentCompatibility();
+  await checkAgentCompatibility(forceAgentRestart);
   log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
   log(`run 'copilotclaw stop' to shut down`);
 }

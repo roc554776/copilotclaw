@@ -34,8 +34,10 @@ export class AgentManager {
     this.agentScript = options.agentScript ?? join(thisDir, "..", "..", "agent", "dist", "index.js");
   }
 
-  async ensureAgent(options?: { forceRestart?: boolean }): Promise<void> {
-    if (this.spawning) return;
+  /** Ensure agent process is running and compatible.
+   * Returns the old bootId if force-restart was performed (for waitForNewAgent). */
+  async ensureAgent(options?: { forceRestart?: boolean }): Promise<string | undefined> {
+    if (this.spawning) return undefined;
     this.spawning = true;
     try {
       const socketPath = getAgentSocketPath();
@@ -44,10 +46,11 @@ export class AgentManager {
         const versionTooOld = status.version === undefined || !semverSatisfies(status.version, MIN_AGENT_VERSION);
         if (versionTooOld) {
           if (options?.forceRestart) {
+            const oldBootId = status.bootId;
             console.error(`[gateway] agent version ${status.version ?? "unknown"} is below minimum ${MIN_AGENT_VERSION}, force-restarting`);
             await stopAgent(socketPath);
             this.spawnAgent();
-            return;
+            return oldBootId;
           }
           throw new Error(
             status.version === undefined
@@ -55,14 +58,35 @@ export class AgentManager {
               : `agent version ${status.version} is below minimum ${MIN_AGENT_VERSION}`,
           );
         }
-        return;
+        return undefined;
       }
       this.spawnAgent();
+      return undefined;
     } finally {
       if (this.spawningTimer !== undefined) clearTimeout(this.spawningTimer);
       this.spawningTimer = setTimeout(() => { this.spawning = false; }, 3000);
       this.spawningTimer.unref();
     }
+  }
+
+  /** Wait for agent to come up with a different bootId than the one provided.
+   * Used after force-restart to confirm the new agent has started. */
+  async waitForNewAgent(oldBootId: string | undefined, timeoutMs = 15000): Promise<boolean> {
+    const socketPath = getAgentSocketPath();
+    const start = Date.now();
+    const interval = 500;
+    while (Date.now() - start < timeoutMs) {
+      await new Promise((r) => { setTimeout(r, interval); });
+      try {
+        const status = await getAgentStatus(socketPath);
+        if (status !== null && status.bootId !== oldBootId) {
+          return true;
+        }
+      } catch {
+        // Agent not yet reachable
+      }
+    }
+    return false;
   }
 
   private spawnAgent(): void {

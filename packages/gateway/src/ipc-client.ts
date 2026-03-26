@@ -9,6 +9,7 @@ export interface AgentSessionStatusResponse {
 
 export interface AgentStatusResponse {
   version?: string;
+  bootId?: string;
   startedAt: string;
   sessions: Record<string, AgentSessionStatusResponse>;
 }
