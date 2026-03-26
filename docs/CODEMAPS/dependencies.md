@@ -1,6 +1,15 @@
-<!-- Generated: 2026-03-26 | Token estimate: ~220 -->
+<!-- Generated: 2026-03-26 | Token estimate: ~280 -->
 
 # Dependencies
+
+## Monorepo Packages
+
+| Package | Path | Purpose |
+|---------|------|---------|
+| `copilotclaw-monorepo` | `/` (root) | Monorepo root (private, no bin/files) |
+| `copilotclaw` | `packages/cli` | CLI wrapper — depends on `@copilotclaw/gateway` and `@copilotclaw/agent` via `workspace:*`; contains only `bin/copilotclaw.mjs` |
+| `@copilotclaw/gateway` | `packages/gateway` | Gateway daemon |
+| `@copilotclaw/agent` | `packages/agent` | Agent process |
 
 ## Runtime
 
@@ -10,6 +19,7 @@
 | `node:http` | gateway | HTTP server (no framework) |
 | `node:net` | agent, gateway | IPC via Unix domain socket |
 | `node:crypto` | agent, gateway | randomUUID for session/message IDs |
+| `node:module` | gateway (agent-manager) | createRequire to resolve @copilotclaw/agent package path |
 
 ## Dev
 

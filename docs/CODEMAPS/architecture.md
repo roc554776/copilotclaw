@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-26 | Packages: 2 | Token estimate: ~1350 -->
+<!-- Generated: 2026-03-26 | Packages: 3 (cli, gateway, agent) | Token estimate: ~1400 -->
 
 # Architecture
 
@@ -24,14 +24,18 @@
 - **ChannelProvider**: plugin interface for chat mediums (built-in chat, Discord, Telegram, etc.); providers handle medium-specific routes and receive message notifications
 - **BuiltinChatChannel**: default ChannelProvider — serves dashboard UI at "/", SSE at "/api/events", broadcasts via SseBroadcaster
 
-## CLI Entrypoint (bin/copilotclaw.mjs)
+## CLI Package (packages/cli)
+
+Thin wrapper package (`copilotclaw`) that depends on `@copilotclaw/gateway` and `@copilotclaw/agent` via `workspace:*`. Published as the global CLI; contains only `bin/copilotclaw.mjs`.
+
+### CLI Entrypoint (packages/cli/bin/copilotclaw.mjs)
 
 ```
 copilotclaw setup                → workspace init + auto-port selection if default busy
 copilotclaw start [--force-agent-restart]  → spawn gateway daemon
 copilotclaw stop                 → stop gateway (agent keeps running)
 copilotclaw restart              → stop + start gateway
-copilotclaw update               → fetch upstream to ~/.copilotclaw/source/, pnpm build, npm pack + install -g tgz
+copilotclaw update               → fetch upstream to ~/.copilotclaw/source/, pnpm build, npm pack packages/cli/ + install -g tgz
 copilotclaw config get <key>     → show resolved config value (env var override noted)
 copilotclaw config set <key> <v> → set config value in file (env var precedence warning)
 copilotclaw doctor [--fix]       → diagnose environment (workspace, config, gateway, agent); --fix auto-repairs fixable issues
