@@ -369,7 +369,7 @@ export class AgentSessionManager {
     // the response still reaches the user.
     session.on("assistant.message", (event) => {
       const content = event.data.content;
-      if (channelId !== undefined && content.length > 0) {
+      if (content.length > 0) {
         this.postChannelMessage(channelId, content);
       }
     });
