@@ -266,6 +266,30 @@ describe("GET / (dashboard status bar)", () => {
   });
 });
 
+describe("GET /api/quota", () => {
+  it("returns 503 when no agent manager", async () => {
+    const res = await fetch(`${baseUrl}/api/quota`);
+    expect(res.status).toBe(503);
+  });
+});
+
+describe("GET /api/models", () => {
+  it("returns 503 when no agent manager", async () => {
+    const res = await fetch(`${baseUrl}/api/models`);
+    expect(res.status).toBe(503);
+  });
+});
+
+describe("GET /api/status (config section)", () => {
+  it("includes config in status response", async () => {
+    const res = await fetch(`${baseUrl}/api/status`);
+    const body = await res.json() as { config?: { model: unknown; zeroPremium: unknown; debugMockCopilotUnsafeTools: unknown } };
+    expect(body.config).toBeDefined();
+    expect(body.config!.zeroPremium).toBe(false);
+    expect(body.config!.debugMockCopilotUnsafeTools).toBe(false);
+  });
+});
+
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);

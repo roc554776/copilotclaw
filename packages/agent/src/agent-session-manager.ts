@@ -6,11 +6,29 @@ import { createChannelTools } from "./tools/channel.js";
 
 export type AgentSessionStatus = "starting" | "waiting" | "processing" | "stopped";
 
+export interface PhysicalSessionSummary {
+  sessionId: string;
+  model: string;
+  startedAt: string;
+  currentState: string;
+  totalTokensConsumed?: number;
+}
+
+export interface SubagentInfo {
+  toolCallId: string;
+  agentName: string;
+  agentDisplayName: string;
+  status: "running" | "completed" | "failed";
+  startedAt: string;
+}
+
 export interface AgentSessionInfo {
   status: AgentSessionStatus;
   startedAt: string;
   processingStartedAt?: string;
   boundChannelId?: string;
+  physicalSession?: PhysicalSessionSummary;
+  subagentSessions?: SubagentInfo[];
 }
 
 interface AgentSessionEntry {
@@ -67,6 +85,34 @@ export class AgentSessionManager {
     this.zeroPremium = options.zeroPremium ?? false;
     this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
     this.workingDirectory = options.workingDirectory;
+  }
+
+  /** Get the first active CopilotClient (for server-level RPCs like quota/models). */
+  private getActiveClient(): CopilotClient | undefined {
+    for (const [, entry] of this.sessions) {
+      return entry.client;
+    }
+    return undefined;
+  }
+
+  async getQuota(): Promise<Record<string, unknown> | null> {
+    const client = this.getActiveClient();
+    if (client === undefined) return null;
+    try {
+      return await client.rpc.account.getQuota() as unknown as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+
+  async getModels(): Promise<Record<string, unknown> | null> {
+    const client = this.getActiveClient();
+    if (client === undefined) return null;
+    try {
+      return await client.rpc.models.list() as unknown as Record<string, unknown>;
+    } catch {
+      return null;
+    }
   }
 
   getSessionStatuses(): Record<string, AgentSessionInfo> {
@@ -226,6 +272,54 @@ export class AgentSessionManager {
 
     entry.copilotSessionId = session.sessionId;
     entry.info.status = "waiting";
+
+    // Track physical session state
+    entry.info.physicalSession = {
+      sessionId: session.sessionId,
+      model: resolvedModel,
+      startedAt: new Date().toISOString(),
+      currentState: "idle",
+    };
+    entry.info.subagentSessions = [];
+
+    // Subscribe to SDK events for state tracking
+    session.on("tool.execution_start", (event) => {
+      if (entry.info.physicalSession !== undefined) {
+        entry.info.physicalSession.currentState = `tool:${event.data.toolName}`;
+      }
+    });
+    session.on("tool.execution_complete", () => {
+      if (entry.info.physicalSession !== undefined) {
+        entry.info.physicalSession.currentState = "idle";
+      }
+    });
+    session.on("session.idle", () => {
+      if (entry.info.physicalSession !== undefined) {
+        entry.info.physicalSession.currentState = "idle";
+      }
+    });
+    session.on("subagent.started", (event) => {
+      entry.info.subagentSessions?.push({
+        toolCallId: event.data.toolCallId,
+        agentName: event.data.agentName,
+        agentDisplayName: event.data.agentDisplayName,
+        status: "running",
+        startedAt: event.timestamp,
+      });
+    });
+    session.on("subagent.completed", (event) => {
+      const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
+      if (sub !== undefined) sub.status = "completed";
+    });
+    session.on("subagent.failed", (event) => {
+      const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
+      if (sub !== undefined) sub.status = "failed";
+    });
+    session.on("session.model_change", (event) => {
+      if (entry.info.physicalSession !== undefined) {
+        entry.info.physicalSession.model = event.data.newModel;
+      }
+    });
 
     const logPrefix = channelId.slice(0, 8);
     await runSessionLoop({

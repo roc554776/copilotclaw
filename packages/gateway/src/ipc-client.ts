@@ -1,10 +1,28 @@
 import { createConnection } from "node:net";
 
+export interface PhysicalSessionSummary {
+  sessionId: string;
+  model: string;
+  startedAt: string;
+  currentState: string;
+  totalTokensConsumed?: number;
+}
+
+export interface SubagentInfo {
+  toolCallId: string;
+  agentName: string;
+  agentDisplayName: string;
+  status: "running" | "completed" | "failed";
+  startedAt: string;
+}
+
 export interface AgentSessionStatusResponse {
   status: "starting" | "waiting" | "processing" | "stopped" | "not_running";
   startedAt?: string;
   processingStartedAt?: string;
   boundChannelId?: string;
+  physicalSession?: PhysicalSessionSummary;
+  subagentSessions?: SubagentInfo[];
 }
 
 export interface AgentStatusResponse {
@@ -51,6 +69,26 @@ export async function getAgentStatus(socketPath: string): Promise<AgentStatusRes
   try {
     const res = await sendIpcRequest(socketPath, "status");
     return res as unknown as AgentStatusResponse;
+  } catch {
+    return null;
+  }
+}
+
+export async function getAgentQuota(socketPath: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await sendIpcRequest(socketPath, "quota");
+    if ("error" in res) return null;
+    return res;
+  } catch {
+    return null;
+  }
+}
+
+export async function getAgentModels(socketPath: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await sendIpcRequest(socketPath, "models");
+    if ("error" in res) return null;
+    return res;
   } catch {
     return null;
   }

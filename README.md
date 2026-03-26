@@ -44,7 +44,7 @@ Open the gateway URL shown at startup in your browser.
 
 - Type a message and press Send (or Enter)
 - Use the "+" button to create additional channels for parallel conversations
-- Click the status bar for detailed gateway/agent status
+- Click the status bar for detailed status (gateway, agent, Copilot sessions, premium requests, models)
 - A typing indicator shows when the agent is processing
 
 ### Stop

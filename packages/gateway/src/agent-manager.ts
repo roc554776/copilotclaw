@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type AgentStatusResponse, getAgentStatus, stopAgent } from "./ipc-client.js";
+import { type AgentStatusResponse, getAgentModels, getAgentQuota, getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 
 export const MIN_AGENT_VERSION = "0.3.0";
@@ -121,6 +121,16 @@ export class AgentManager {
 
   getMinAgentVersion(): string {
     return MIN_AGENT_VERSION;
+  }
+
+  async getQuota(): Promise<Record<string, unknown> | null> {
+    const socketPath = getAgentSocketPath();
+    return getAgentQuota(socketPath);
+  }
+
+  async getModels(): Promise<Record<string, unknown> | null> {
+    const socketPath = getAgentSocketPath();
+    return getAgentModels(socketPath);
   }
 
   async stopAgent(): Promise<void> {

@@ -129,6 +129,26 @@ function createRequestHandler(
       return;
     }
 
+    if (fullPathname === "/api/quota" && method === "GET") {
+      const quota = agentManager !== null ? await agentManager.getQuota() : null;
+      if (quota !== null) {
+        json(res, 200, quota);
+      } else {
+        json(res, 503, { error: "quota not available (no active agent session)" });
+      }
+      return;
+    }
+
+    if (fullPathname === "/api/models" && method === "GET") {
+      const models = agentManager !== null ? await agentManager.getModels() : null;
+      if (models !== null) {
+        json(res, 200, models);
+      } else {
+        json(res, 503, { error: "models not available (no active agent session)" });
+      }
+      return;
+    }
+
     // Channel management (core — provider-agnostic)
     if (fullPathname === "/api/channels" && method === "GET") {
       json(res, 200, store.listChannels());

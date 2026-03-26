@@ -231,6 +231,26 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
             for (const [id, sess] of entries) {
               const chLabel = sess.boundChannelId ? ' → ch:' + escHtml(sess.boundChannelId.slice(0,8)) : '';
               html += '<div class="row"><span class="label">' + escHtml(id.slice(0,8)) + chLabel + '</span><span class="value">' + escHtml(sess.status) + '</span></div>';
+              // Physical session details
+              if (sess.physicalSession) {
+                const ps = sess.physicalSession;
+                html += '<div style="margin-left:1rem;font-size:0.8rem;color:#8b949e">';
+                html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(ps.sessionId.slice(0,12)) + '</span></div>';
+                html += '<div class="row"><span class="label">Model</span><span class="value">' + escHtml(ps.model) + '</span></div>';
+                html += '<div class="row"><span class="label">State</span><span class="value">' + escHtml(ps.currentState) + '</span></div>';
+                html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + '</span></div>';
+                html += '</div>';
+              }
+              // Subagent sessions
+              const subs = sess.subagentSessions || [];
+              if (subs.length > 0) {
+                html += '<div style="margin-left:1rem;font-size:0.8rem">';
+                html += '<div class="section-title">Subagents (' + escHtml(String(subs.length)) + ')</div>';
+                for (const sub of subs) {
+                  html += '<div class="row"><span class="label">' + escHtml(sub.agentDisplayName || sub.agentName) + '</span><span class="value">' + escHtml(sub.status) + '</span></div>';
+                }
+                html += '</div>';
+              }
             }
             html += '</div>';
           } else {
@@ -239,6 +259,47 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         } else {
           html += '<div class="section"><div class="section-title">Agent</div><div class="row"><span class="label">Not running</span></div></div>';
         }
+        // Quota
+        try {
+          const quotaRes = await fetch("/api/quota");
+          if (quotaRes.ok) {
+            const quotaData = await quotaRes.json();
+            const snapshots = quotaData.quotaSnapshots || {};
+            const keys = Object.keys(snapshots);
+            if (keys.length > 0) {
+              html += '<div class="section"><div class="section-title">Premium Requests</div>';
+              for (const key of keys) {
+                const q = snapshots[key];
+                const used = q.usedRequests ?? 0;
+                const total = q.entitlementRequests ?? 0;
+                const remaining = total - used;
+                html += '<div class="row"><span class="label">' + escHtml(key) + '</span><span class="value">' + escHtml(String(remaining)) + ' / ' + escHtml(String(total)) + '</span></div>';
+                if (q.overage > 0) {
+                  html += '<div class="row"><span class="label">Overage</span><span class="value">' + escHtml(String(q.overage)) + '</span></div>';
+                }
+              }
+              html += '</div>';
+            }
+          }
+        } catch { /* quota not available */ }
+
+        // Models
+        try {
+          const modelsRes = await fetch("/api/models");
+          if (modelsRes.ok) {
+            const modelsData = await modelsRes.json();
+            const models = modelsData.models || [];
+            if (models.length > 0) {
+              html += '<div class="section"><div class="section-title">Available Models</div>';
+              for (const m of models) {
+                const multiplier = m.billing?.multiplier ?? "?";
+                html += '<div class="row"><span class="label">' + escHtml(m.id) + '</span><span class="value">x' + escHtml(String(multiplier)) + '</span></div>';
+              }
+              html += '</div>';
+            }
+          }
+        } catch { /* models not available */ }
+
         statusModalContent.innerHTML = html;
       } catch {
         statusModalContent.textContent = "Failed to load status";

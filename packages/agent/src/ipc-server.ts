@@ -77,6 +77,28 @@ function handleConnection(
               onStop();
             });
             break;
+          case "quota":
+            if (sessionManager !== null) {
+              sessionManager.getQuota().then((quota) => {
+                socket.write(JSON.stringify(quota ?? { error: "no active session" }) + "\n");
+              }).catch(() => {
+                socket.write(JSON.stringify({ error: "quota fetch failed" }) + "\n");
+              });
+            } else {
+              socket.write(JSON.stringify({ error: "no session manager" }) + "\n");
+            }
+            break;
+          case "models":
+            if (sessionManager !== null) {
+              sessionManager.getModels().then((models) => {
+                socket.write(JSON.stringify(models ?? { error: "no active session" }) + "\n");
+              }).catch(() => {
+                socket.write(JSON.stringify({ error: "models fetch failed" }) + "\n");
+              });
+            } else {
+              socket.write(JSON.stringify({ error: "no session manager" }) + "\n");
+            }
+            break;
           default:
             socket.write(JSON.stringify({ error: "unknown method" }) + "\n");
         }
