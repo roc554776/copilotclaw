@@ -40,6 +40,7 @@ copilotclaw agent stop           → stop agent process only
 - Gateway: CLI spawns daemon (detached), CLI exits immediately
 - Agent: single process, singleton via Unix domain socket (`copilotclaw-agent.sock`)
 - Gateway start → agent process ensure: IPC status + version check, spawn if absent
+- Gateway daemon → periodic agent monitor (30s interval): re-runs ensureAgent, logs failures, recovers automatically; max 3 consecutive failures before error-level logging
 - Gateway stop → gateway only (agent process NOT stopped)
 - Gateway restart → POST /api/stop, wait for port free, then start (restart.ts)
 - Agent → Gateway: HTTP API poll (pending counts, drain pending, post messages, peek/flush)
@@ -57,7 +58,9 @@ copilotclaw agent stop           → stop agent process only
 
 - Session ends normally (idle) → status set to "stopped" → gateway notified via POST messages
 - Session error → status "stopped" → gateway notified
-- Stale detection: if processing >10 min with pending inputs, restart once; if stuck again, flush inputs
+- Max age enforcement: sessions exceeding 2 days (default, configurable via maxSessionAgeMs) are stopped when in "waiting" status; checked each poll cycle before stale detection
+- Stale detection: if processing >10 min with pending inputs, restart once; if stuck again, notify channel with timeout message, flush inputs
+- Channel notifications: session stopped and session timed out events post system messages to the bound channel via postChannelMessage helper
 
 ## Key Constraints
 

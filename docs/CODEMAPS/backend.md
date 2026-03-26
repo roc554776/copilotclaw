@@ -25,7 +25,7 @@ GET  /                                     → 200 HTML dashboard (status bar + 
 
 ```
 src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json
-src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + startServer)
+src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + startServer + periodic agent monitor every 30s, max 3 retries)
 src/index.ts               — CLI entry point (health check → detached spawn → exit)
 src/stop.ts                — POST /api/stop CLI
 src/restart.ts             — `copilotclaw restart` CLI: stop gateway → wait for shutdown → start
@@ -81,8 +81,8 @@ copilotclaw_list_messages(limit?)   — list recent channel messages (reverse-ch
 ### Key Files
 
 ```
-src/index.ts                    — singleton entry, gateway polling loop, stale detection
-src/agent-session-manager.ts    — per-session lifecycle, channel binding, stale restart, stopped notification
+src/index.ts                    — singleton entry, gateway polling loop, max-age check then stale detection per cycle
+src/agent-session-manager.ts    — per-session lifecycle, channel binding, stale restart, max-age enforcement (2-day default), channel notifications (stopped/timed-out via postChannelMessage)
 src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop), version reporting
 src/ipc-paths.ts                — socket path generation
 src/session-loop.ts             — session idle loop (subscribe/send/disconnect, no continuePrompt)
