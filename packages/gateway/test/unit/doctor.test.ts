@@ -52,6 +52,21 @@ describe("doctor", () => {
       const result = checkConfig();
       expect(result.result).toBe("warn");
     });
+
+    it("returns warn for malformed JSON config", () => {
+      saveConfig({});
+      writeFileSync(getConfigFilePath(), "not valid json{{{", "utf-8");
+      const result = checkConfig();
+      expect(result.result).toBe("warn");
+      expect(result.message).toContain("malformed");
+    });
+
+    it("returns warn for port above 65535", () => {
+      saveConfig({});
+      writeFileSync(getConfigFilePath(), JSON.stringify({ port: 99999 }), "utf-8");
+      const result = checkConfig();
+      expect(result.result).toBe("warn");
+    });
   });
 
   describe("runDoctor", () => {

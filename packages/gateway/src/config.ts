@@ -47,7 +47,7 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   const upstream = (envUpstream !== undefined && envUpstream !== "") ? envUpstream : fileConfig.upstream;
   if (upstream !== undefined) result.upstream = upstream;
   const port = (envPort !== undefined && envPort !== "") ? parsePort(envPort) : fileConfig.port;
-  if (port !== undefined && Number.isFinite(port) && port > 0) result.port = port;
+  if (port !== undefined && Number.isFinite(port) && port > 0 && port <= 65535) result.port = port;
   return result;
 }
 

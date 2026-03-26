@@ -1,11 +1,9 @@
-import { existsSync, unlinkSync } from "node:fs";
-import { ensureConfigFile, getConfigFilePath, loadFileConfig, resolvePort } from "./config.js";
-import { getAgentSocketPath } from "./ipc-paths.js";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { MIN_AGENT_VERSION, semverSatisfies } from "./agent-manager.js";
+import { ensureConfigFile, getConfigFilePath, resolvePort } from "./config.js";
 import { getAgentStatus } from "./ipc-client.js";
-import { semverSatisfies } from "./agent-manager.js";
+import { getAgentSocketPath } from "./ipc-paths.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
-
-const MIN_AGENT_VERSION = "0.3.0";
 
 type CheckResult = "pass" | "warn" | "fail";
 
@@ -39,24 +37,31 @@ export function checkConfig(): DiagnosticResult {
   if (!existsSync(configPath)) {
     return { name: "config", result: "warn", message: `config file missing: ${configPath}`, fixable: true };
   }
+
+  // Parse raw file to detect malformed JSON (loadFileConfig silently swallows errors)
+  let config: Record<string, unknown>;
   try {
-    const config = loadFileConfig();
-    // Validate port if set
-    if (config.port !== undefined) {
-      if (typeof config.port !== "number" || !Number.isFinite(config.port) || config.port <= 0 || config.port > 65535) {
-        return { name: "config", result: "warn", message: `invalid port value in config: ${String(config.port)}` };
-      }
-    }
-    return { name: "config", result: "pass", message: configPath };
+    config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
   } catch {
     return { name: "config", result: "warn", message: `config file is malformed: ${configPath}` };
   }
+
+  // Validate port if set
+  const port = config["port"];
+  if (port !== undefined) {
+    if (typeof port !== "number" || !Number.isFinite(port) || port <= 0 || port > 65535) {
+      return { name: "config", result: "warn", message: `invalid port value in config: ${String(port)}` };
+    }
+  }
+  return { name: "config", result: "pass", message: configPath };
 }
 
 export async function checkGateway(): Promise<DiagnosticResult> {
   const port = resolvePort();
   try {
-    const res = await fetch(`http://localhost:${port}/healthz`);
+    const res = await fetch(`http://localhost:${port}/healthz`, {
+      signal: AbortSignal.timeout(3000),
+    });
     if (res.ok) {
       return { name: "gateway", result: "pass", message: `running on port ${port}` };
     }
@@ -88,14 +93,18 @@ export async function checkAgent(): Promise<DiagnosticResult> {
   return { name: "agent", result: "pass", message: `v${status.version} (boot: ${status.bootId ?? "?"})` };
 }
 
-export function checkStaleSocket(): DiagnosticResult {
+export async function checkIpcSocket(): Promise<DiagnosticResult> {
   const socketPath = getAgentSocketPath();
   if (!existsSync(socketPath)) {
     return { name: "ipc-socket", result: "pass", message: "no socket file" };
   }
 
-  // Try to connect to verify it's alive
-  return { name: "ipc-socket", result: "pass", message: socketPath };
+  // Probe liveness by attempting to get agent status
+  const status = await getAgentStatus(socketPath);
+  if (status !== null) {
+    return { name: "ipc-socket", result: "pass", message: socketPath };
+  }
+  return { name: "ipc-socket", result: "warn", message: `stale socket detected: ${socketPath}`, fixable: true };
 }
 
 export function fixWorkspace(): boolean {
@@ -137,6 +146,7 @@ export async function runDoctor(fix: boolean): Promise<boolean> {
   // Async checks
   results.push(await checkGateway());
   results.push(await checkAgent());
+  results.push(await checkIpcSocket());
 
   // Log all results
   for (const r of results) {
@@ -151,7 +161,7 @@ export async function runDoctor(fix: boolean): Promise<boolean> {
         let ok = false;
         if (r.name === "workspace") ok = fixWorkspace();
         else if (r.name === "config") ok = fixConfig();
-        else if (r.name === "agent") ok = fixStaleSocket();
+        else if (r.name === "agent" || r.name === "ipc-socket") ok = fixStaleSocket();
 
         if (ok) {
           console.error(`[doctor] fixed: ${r.name}`);
