@@ -124,7 +124,8 @@ export class AgentSessionManager {
     if (client === undefined) return null;
     try {
       return await client.rpc.account.getQuota() as unknown as Record<string, unknown>;
-    } catch {
+    } catch (err: unknown) {
+      console.error("[agent] getQuota error:", err);
       return null;
     }
   }
@@ -134,7 +135,8 @@ export class AgentSessionManager {
     if (client === undefined) return null;
     try {
       return await client.rpc.models.list() as unknown as Record<string, unknown>;
-    } catch {
+    } catch (err: unknown) {
+      console.error("[agent] getModels error:", err);
       return null;
     }
   }
@@ -145,7 +147,8 @@ export class AgentSessionManager {
       if (entry.copilotSessionId === copilotSessionId && entry.copilotSession !== undefined) {
         try {
           return await entry.copilotSession.getMessages();
-        } catch {
+        } catch (err: unknown) {
+          console.error("[agent] getSessionMessages error:", err);
           return null;
         }
       }

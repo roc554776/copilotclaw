@@ -23,7 +23,9 @@ async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
       const data = await res.json() as { config?: GatewayConfig };
       if (data.config !== undefined) return data.config;
     }
-  } catch {}
+  } catch (err: unknown) {
+    log(`failed to fetch gateway config: ${String(err)}`);
+  }
   return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, workspaceRoot: null };
 }
 
