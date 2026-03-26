@@ -136,8 +136,6 @@ const DEFAULT_MAX_SESSION_AGE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 export class AgentSessionManager {
   private readonly sessions = new Map<string, AgentSessionEntry>();
   private readonly channelBindings = new Map<string, string>(); // channelId → sessionId
-  private readonly restartCounts = new Map<string, number>(); // channelId → count (persists across session restarts)
-  private readonly savedCopilotSessionIds = new Map<string, string>(); // channelId → SDK session ID (for deferred resume)
   private readonly gatewayBaseUrl: string;
   private readonly staleTimeoutMs: number;
   private readonly maxSessionAgeMs: number;
@@ -162,7 +160,7 @@ export class AgentSessionManager {
   /** Get the first active CopilotClient (for server-level RPCs like quota/models). */
   private getActiveClient(): CopilotClient | undefined {
     for (const [, entry] of this.sessions) {
-      return entry.client;
+      if (entry.info.status !== "suspended") return entry.client;
     }
     return undefined;
   }
@@ -635,6 +633,7 @@ export class AgentSessionManager {
 
     const boundChannelId = entry.info.boundChannelId;
     const sessionId = entry.sessionId;
+    const clientToStop = entry.client; // Capture for the finally closure
 
     const promise = this.runSession(entry).then(() => {
       if (!entry.abortController.signal.aborted) {
@@ -648,7 +647,7 @@ export class AgentSessionManager {
         this.notifyChannelSessionStopped(boundChannelId);
       }
     }).finally(() => {
-      entry.client.stop().catch(() => {});
+      clientToStop.stop().catch(() => {});
     });
 
     entry.sessionPromise = promise;
@@ -676,7 +675,8 @@ export class AgentSessionManager {
 
   async stopAll(): Promise<void> {
     const promises: Promise<void>[] = [];
-    for (const [sessionId, entry] of this.sessions) {
+    const entries = [...this.sessions.entries()];
+    for (const [sessionId, entry] of entries) {
       entry.abortController.abort();
       promises.push(entry.sessionPromise);
       // Fully remove all sessions on explicit stop
@@ -709,15 +709,14 @@ export class AgentSessionManager {
     if (oldestInputId === undefined) return "ok";
 
     const boundChannelId = entry.info.boundChannelId;
-    const countKey = boundChannelId ?? sessionId;
 
     // Stale session — suspend (abstract session survives), notify, flush stale inputs
     console.error(`[agent] session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), suspending (deferred resume)`);
 
+    // Abort first to prevent the promise handler from double-suspending
+    entry.abortController.abort();
     this.suspendSession(entry);
     this.notifyChannelSessionTimedOut(boundChannelId);
-    entry.abortController.abort();
-    this.restartCounts.delete(countKey);
     // Return "flushed" so the caller flushes stale inputs; the deferred resume will only
     // fire when a genuinely new user message arrives after the flush.
     return "flushed";
@@ -776,17 +775,4 @@ export class AgentSessionManager {
     return this.sessions.get(sessionId)?.info.boundChannelId;
   }
 
-  /** Check if a channel has a saved copilotSessionId for deferred resume */
-  hasSavedSession(channelId: string): boolean {
-    return this.savedCopilotSessionIds.has(channelId);
-  }
-
-  /** Consume the saved copilotSessionId for a channel (returns and removes it) */
-  consumeSavedSession(channelId: string): string | undefined {
-    const id = this.savedCopilotSessionIds.get(channelId);
-    if (id !== undefined) {
-      this.savedCopilotSessionIds.delete(channelId);
-    }
-    return id;
-  }
 }
