@@ -307,11 +307,26 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     // --- Logs Panel ---
     const logsPanel = document.getElementById("logs-panel");
     let logsVisible = false;
+    let logsInterval = null;
 
     function toggleLogs(forceClose) {
-      if (forceClose === true) { logsPanel.classList.remove("visible"); logsVisible = false; return; }
+      if (forceClose === true) {
+        logsPanel.classList.remove("visible");
+        logsVisible = false;
+        clearInterval(logsInterval);
+        logsInterval = null;
+        return;
+      }
       logsVisible = !logsVisible;
-      if (logsVisible) { logsPanel.classList.add("visible"); refreshLogs(); } else { logsPanel.classList.remove("visible"); }
+      if (logsVisible) {
+        logsPanel.classList.add("visible");
+        refreshLogs();
+        logsInterval = setInterval(refreshLogs, 3000);
+      } else {
+        logsPanel.classList.remove("visible");
+        clearInterval(logsInterval);
+        logsInterval = null;
+      }
     }
 
     async function refreshLogs() {
@@ -327,8 +342,6 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         logsPanel.scrollTop = 0;
       } catch {}
     }
-
-    if (logsVisible) setInterval(refreshLogs, 3000);
 
     chat.scrollTop = chat.scrollHeight;
   </script>

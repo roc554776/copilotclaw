@@ -50,52 +50,7 @@ async function waitForHealthy(): Promise<boolean> {
   return false;
 }
 
-async function main(): Promise<void> {
-  const forceAgentRestart = process.argv.includes("--force-agent-restart") || process.env["COPILOTCLAW_FORCE_AGENT_RESTART_FLAG"] === "1";
-
-  if (forceAgentRestart) {
-    log("--force-agent-restart: will stop outdated agent on startup");
-  }
-
-  const initialStatus = await checkHealth();
-
-  if (initialStatus === "healthy") {
-    log(`already running on port ${DEFAULT_PORT}`);
-    return;
-  }
-
-  if (initialStatus === "unhealthy") {
-    log(`port ${DEFAULT_PORT} is occupied but unhealthy, retrying...`);
-    for (let i = 0; i < HEALTH_RETRY_COUNT; i++) {
-      await sleep(HEALTH_RETRY_INTERVAL_MS);
-      const status = await checkHealth();
-      if (status === "healthy") {
-        log("became healthy");
-        return;
-      }
-      if (status === "port-free") {
-        log("port freed, starting daemon...");
-        spawnDaemon({ forceAgentRestart });
-        if (await waitForHealthy()) {
-          log(`running on http://localhost:${DEFAULT_PORT}`);
-          return;
-        }
-        throw new Error("daemon failed to start");
-      }
-    }
-    throw new Error(`port ${DEFAULT_PORT} is occupied but not healthy after ${HEALTH_RETRY_COUNT} retries`);
-  }
-
-  log("starting gateway daemon...");
-  spawnDaemon({ forceAgentRestart });
-
-  if (!(await waitForHealthy())) {
-    throw new Error("daemon failed to start");
-  }
-
-  log(`running on http://localhost:${DEFAULT_PORT}`);
-
-  // Verify agent compatibility after gateway is up
+async function checkAgentCompatibility(): Promise<void> {
   try {
     const statusRes = await fetch(`http://localhost:${DEFAULT_PORT}/api/status`);
     if (statusRes.ok) {
@@ -113,7 +68,62 @@ async function main(): Promise<void> {
   } catch {
     log("WARNING: could not verify agent status");
   }
+}
 
+async function main(): Promise<void> {
+  const forceAgentRestart = process.argv.includes("--force-agent-restart") || process.env["COPILOTCLAW_FORCE_AGENT_RESTART_FLAG"] === "1";
+
+  if (forceAgentRestart) {
+    log("--force-agent-restart: will stop outdated agent on startup");
+  }
+
+  const initialStatus = await checkHealth();
+
+  if (initialStatus === "healthy") {
+    log(`already running on port ${DEFAULT_PORT}`);
+    await checkAgentCompatibility();
+    log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+    log(`run 'copilotclaw stop' to shut down`);
+    return;
+  }
+
+  if (initialStatus === "unhealthy") {
+    log(`port ${DEFAULT_PORT} is occupied but unhealthy, retrying...`);
+    for (let i = 0; i < HEALTH_RETRY_COUNT; i++) {
+      await sleep(HEALTH_RETRY_INTERVAL_MS);
+      const status = await checkHealth();
+      if (status === "healthy") {
+        log("became healthy");
+        await checkAgentCompatibility();
+        log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+        log(`run 'copilotclaw stop' to shut down`);
+        return;
+      }
+      if (status === "port-free") {
+        log("port freed, starting daemon...");
+        spawnDaemon({ forceAgentRestart });
+        if (await waitForHealthy()) {
+          log(`running on http://localhost:${DEFAULT_PORT}`);
+          await checkAgentCompatibility();
+          log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
+          log(`run 'copilotclaw stop' to shut down`);
+          return;
+        }
+        throw new Error("daemon failed to start");
+      }
+    }
+    throw new Error(`port ${DEFAULT_PORT} is occupied but not healthy after ${HEALTH_RETRY_COUNT} retries`);
+  }
+
+  log("starting gateway daemon...");
+  spawnDaemon({ forceAgentRestart });
+
+  if (!(await waitForHealthy())) {
+    throw new Error("daemon failed to start");
+  }
+
+  log(`running on http://localhost:${DEFAULT_PORT}`);
+  await checkAgentCompatibility();
   log(`open http://localhost:${DEFAULT_PORT} in your browser to chat with the agent`);
   log(`run 'copilotclaw stop' to shut down`);
 }
