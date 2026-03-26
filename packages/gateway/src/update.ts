@@ -105,7 +105,10 @@ async function main(): Promise<void> {
   log("update complete — restart gateway to apply");
 }
 
-main().catch((err: unknown) => {
-  console.error("Error:", err);
-  process.exit(1);
-});
+const isDirectExecution = process.argv[1]?.endsWith("update.js") === true;
+if (isDirectExecution) {
+  main().catch((err: unknown) => {
+    console.error("Error:", err);
+    process.exit(1);
+  });
+}

@@ -37,6 +37,7 @@ export class AgentManager {
       defaultAgentScript = join(dirname(require.resolve("@copilotclaw/agent/package.json")), "dist", "index.js");
     } catch {
       // Fallback for monorepo dev (workspace symlinks)
+      console.error("[gateway] @copilotclaw/agent not found via package resolution, using relative path fallback");
       const thisDir = dirname(fileURLToPath(import.meta.url));
       defaultAgentScript = join(thisDir, "..", "..", "agent", "dist", "index.js");
     }
