@@ -363,6 +363,16 @@ export class AgentSessionManager {
         }
       }
     });
+    // Reflect assistant.message events to the channel timeline as agent messages.
+    // This serves as a fallback: ideally the agent uses copilotclaw_send_message,
+    // but when the LLM responds with text instead of calling a tool, this ensures
+    // the response still reaches the user.
+    session.on("assistant.message", (event) => {
+      const content = event.data.content;
+      if (channelId !== undefined && typeof content === "string" && content.length > 0) {
+        this.postChannelMessage(channelId, content);
+      }
+    });
 
     const logPrefix = channelId.slice(0, 8);
     await runSessionLoop({

@@ -47,6 +47,13 @@
 - agent session には最大 1 つの channel が紐づく
 - channel に紐づかない agent session も存在しうる（まだ実装はないが）
 
+## assistant.message のタイムライン反映
+
+<!-- 2026-03-26 -->
+- channel に紐づいている agent session の `assistant.message` イベントで送られたメッセージを、channel のタイムラインに sender が agent のメッセージとして表示させる
+- 理由: `assistant.message` で送出されるメッセージは、本来は agent が channel に送出したいメッセージであるはずだから
+  - 本来は `copilotclaw_*` tool で送ってほしいんだけど、上手くいかないこともあるので
+
 ## post tool use hook による新着通知
 
 - channel に紐づく agent session では、任意の tool を呼び出した後に SDK の `onPostToolUse` hook を発火させる

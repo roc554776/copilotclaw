@@ -442,6 +442,77 @@ describe("AgentSessionManager — stale deferred resume", () => {
   });
 });
 
+describe("AgentSessionManager — assistant.message to channel timeline", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("posts assistant.message content to the channel timeline", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-assistant-msg" });
+    await waitForPhysicalSession(manager);
+
+    mockSession.emit("assistant.message", { data: { content: "Hello from assistant" } });
+    await wait(10);
+
+    const messageCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
+      ([url, opts]) => (url as string).includes("/messages") && !(url as string).includes("pending") && opts.method === "POST",
+    );
+    expect(messageCalls.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(messageCalls[0]![1].body as string) as { sender: string; message: string };
+    expect(body.sender).toBe("agent");
+    expect(body.message).toBe("Hello from assistant");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("does not post empty assistant.message content", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-empty-msg" });
+    await waitForPhysicalSession(manager);
+
+    mockSession.emit("assistant.message", { data: { content: "" } });
+    mockSession.emit("assistant.message", { data: { content: undefined } });
+    mockSession.emit("assistant.message", { data: {} });
+    await wait(10);
+
+    const messageCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
+      ([url, opts]) => (url as string).includes("/messages") && !(url as string).includes("pending") && opts.method === "POST",
+    );
+    expect(messageCalls).toHaveLength(0);
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+});
+
 describe("AgentSessionManager — assistant.usage token accumulation", () => {
   afterEach(() => {
     vi.clearAllMocks();

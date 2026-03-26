@@ -46,6 +46,7 @@ Open the gateway URL shown at startup in your browser.
 - Use the "+" button to create additional channels for parallel conversations
 - Click the status bar for detailed status (gateway, agent, Copilot sessions, premium requests, models)
 - A typing indicator shows when the agent is processing
+- Agent responses appear in the chat automatically — even when the agent responds with text instead of using the send message tool
 
 ### Stop
 
