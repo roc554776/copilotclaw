@@ -213,9 +213,14 @@ describe("AgentSessionManager — session max age", () => {
   });
 
   it("replaces session that exceeds max age when in waiting state", async () => {
-    installClientMock(vi.fn().mockImplementation(async () => {
+    // Track calls to createSession and resumeSession with stable session IDs
+    let callCount = 0;
+    const resumeSessionSpy = vi.fn();
+
+    const makeSession = (id: string) => {
       const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
       return {
+        sessionId: id,
         on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
           const list = listeners.get(event) ?? [];
           list.push(cb);
@@ -224,7 +229,20 @@ describe("AgentSessionManager — session max age", () => {
         send: vi.fn().mockResolvedValue("msg-id"),
         disconnect: vi.fn().mockResolvedValue(undefined),
       };
-    }));
+    };
+
+    const createSessionMock = vi.fn().mockImplementation(async () => {
+      callCount++;
+      return makeSession(`sdk-session-${callCount}`);
+    });
+
+    (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
+      (this as Record<string, unknown>)["createSession"] = createSessionMock;
+      (this as Record<string, unknown>)["resumeSession"] = resumeSessionSpy.mockImplementation(
+        async (sid: string) => makeSession(sid),
+      );
+      (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+    });
 
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true, status: 204, json: async () => null, text: async () => "null",
@@ -239,9 +257,22 @@ describe("AgentSessionManager — session max age", () => {
     const sessionId = manager.startSession({ boundChannelId: "ch-age" });
     await wait(20);
 
+    // Capture the copilotSessionId that was assigned to the original session
+    const originalEntry = manager.getSessionStatus(sessionId);
+    expect(originalEntry).toBeDefined();
+
     const stopped = await manager.checkSessionMaxAge(sessionId);
     expect(stopped).toBe(true);
-    // stopSession was called — session teardown is async (depends on session loop exiting)
+
+    // A new session should have been started for the same channel
+    await wait(20);
+    const newSessionId = manager.getSessionIdForChannel("ch-age");
+    expect(newSessionId).toBeDefined();
+    expect(newSessionId).not.toBe(sessionId);
+
+    // resumeSession should have been called with the SDK session ID from the original session
+    expect(resumeSessionSpy).toHaveBeenCalledOnce();
+    expect(resumeSessionSpy.mock.calls[0]![0]).toBe("sdk-session-1");
   });
 
   it("does not replace session that is within max age", async () => {

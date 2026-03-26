@@ -33,6 +33,8 @@ export interface AgentSessionManagerOptions {
 
 export interface StartSessionOptions {
   boundChannelId?: string;
+  /** SDK session ID to resume instead of creating a new one. Used by session replace. */
+  copilotSessionId?: string;
 }
 
 const DEFAULT_STALE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -101,6 +103,11 @@ export class AgentSessionManager {
     if (boundChannelId !== undefined) {
       entry.info.boundChannelId = boundChannelId;
       this.channelBindings.set(boundChannelId, sessionId);
+    }
+
+    // Propagate SDK session ID for resume before runSession reads it
+    if (options?.copilotSessionId !== undefined) {
+      entry.copilotSessionId = options.copilotSessionId;
     }
 
     const promise = this.runSession(entry).then(() => {
@@ -321,13 +328,20 @@ export class AgentSessionManager {
     entry.restarting = true;
     this.stopSession(sessionId);
 
+    // Pre-remove the channel binding so startSession's duplicate guard does not
+    // return the (aborting) old session ID. The .finally() block on the old
+    // sessionPromise would normally do this, but it runs asynchronously — if
+    // startSession is called before that microtask fires the guard fires first
+    // and the new session is never created.
+    this.channelBindings.delete(boundChannelId);
+
     // Don't await sessionPromise — old session cleans up asynchronously.
-    // Start replacement with the same SDK session ID for resume.
-    const newSessionId = this.startSession({ boundChannelId });
-    const newEntry = this.sessions.get(newSessionId);
-    if (newEntry !== undefined && copilotSessionId !== undefined) {
-      newEntry.copilotSessionId = copilotSessionId;
-    }
+    // Pass copilotSessionId to startSession so runSession uses resumeSession.
+    this.startSession(
+      copilotSessionId !== undefined
+        ? { boundChannelId, copilotSessionId }
+        : { boundChannelId },
+    );
 
     return true;
   }
