@@ -35,7 +35,9 @@ export class AgentManager {
   }
 
   /** Ensure agent process is running and compatible.
-   * Returns the old bootId if force-restart was performed (for waitForNewAgent). */
+   * When forceRestart is true and the agent version is outdated, stops the old agent and spawns a new one.
+   * Returns the old bootId if a force-restart was performed (pass to waitForNewAgent).
+   * If the agent is already at a compatible version, forceRestart has no effect. */
   async ensureAgent(options?: { forceRestart?: boolean }): Promise<string | undefined> {
     if (this.spawning) return undefined;
     this.spawning = true;
@@ -70,8 +72,9 @@ export class AgentManager {
   }
 
   /** Wait for agent to come up with a different bootId than the one provided.
-   * Used after force-restart to confirm the new agent has started. */
-  async waitForNewAgent(oldBootId: string | undefined, timeoutMs = 15000): Promise<boolean> {
+   * Used after force-restart to confirm the new agent has started.
+   * oldBootId must be a non-undefined string — comparing against undefined is meaningless. */
+  async waitForNewAgent(oldBootId: string, timeoutMs = 15000): Promise<boolean> {
     const socketPath = getAgentSocketPath();
     const start = Date.now();
     const interval = 500;
