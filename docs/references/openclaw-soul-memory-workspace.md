@@ -90,6 +90,8 @@ Source: `src/agents/workspace.ts` lines 25-31, `docs/reference/templates/`
 
 **SOUL.md はシステムプロンプトではない。** ユーザーが agent の人格やトーンを定義するファイルである。agent はこれを読み取り、「体現」する。
 
+**SOUL.md は AGENTS.md より優先される。** システムプロンプトでは SOUL.md の存在を検出し、`"embody its persona and tone"` という特別な指示を追加する（AGENTS.md にはこのような特別扱いはない）。AGENTS.md テンプレートの Session Startup でも、読み取り順序は SOUL.md が最初（「this is who you are」）。
+
 デフォルトテンプレートの構造:
 - **Core Truths** — 行動原則（genuinely helpful, have opinions, be resourceful, earn trust, remember you're a guest）
 - **Boundaries** — 安全ルール（private things stay private, ask before acting externally）

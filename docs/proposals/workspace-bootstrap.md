@@ -45,11 +45,21 @@ SOUL.md 等の workspace ファイルを agent が読み込むと大量のコン
 | `USER.md` | ユーザー情報 | USER.md |
 | `TOOLS.md` | ローカルツールのメモ | TOOLS.md |
 
-agent はセッション開始時にこれらを自発的に読む。system prompt（`CHANNEL_OPERATOR_PROMPT`）に「AGENTS.md を最初に読め」という指示を含める。
+agent はセッション開始時にこれらを自発的に読む。system prompt（`CHANNEL_OPERATOR_PROMPT`）に読み取り順序を指示する。
+
+**読み取り順序（OpenClaw 準拠）:**
+- SOUL.md → USER.md → memory（今日+昨日の日次ログ）→ MEMORY.md
+
+OpenClaw では AGENTS.md テンプレートの Session Startup セクションでこの順序を定義している。SOUL.md が最優先（「this is who you are」）。OpenClaw のシステムプロンプトでは SOUL.md の存在を検出し、「embody its persona and tone, unless higher-priority instructions override it」という特別な指示を追加する。AGENTS.md にはこのような特別扱いはない。
+
+CopilotClaw でも SOUL.md を最優先とし、system prompt に以下を含める:
+- 「セッション開始時にまず SOUL.md を読み、その人格を体現せよ」
+- 「次に AGENTS.md を読み、workspace の操作手順に従え」
+- SOUL.md の指示は AGENTS.md より優先されるが、copilotclaw のシステムプロンプト（`copilotclaw_receive_input` 義務等）が最優先
 
 **ロードの仕組み:**
-- OpenClaw は CLI 内部でファイルをロードする → CopilotClaw では agent が session 開始後にビルトインツール（ファイル読み取り）で自発的に読む
-- system prompt に「セッション開始時にまず AGENTS.md を読め」と記載するだけで実現可能
+- OpenClaw は CLI 内部でファイルを読みシステムプロンプトに直接埋め込む → CopilotClaw では agent が session 開始後にビルトインツール（ファイル読み取り）で自発的に読む
+- system prompt に読み取り順序を記載するだけで実現可能
 
 ### Memory（永続記憶）
 

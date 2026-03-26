@@ -12,7 +12,8 @@ OpenClaw の workspace bootstrap files に相当するファイルを workspace 
   - **システムプロンプト**（custom agent の prompt フィールド）に冒頭と末尾で記載（最も信頼性が高い層、ユーザーが変更不可）
   - **workspace ファイル読み込み後のリマインド** — onPostToolUse hook 等でシステム的に `copilotclaw_receive_input` の義務をリマインドする（既に実装済み: `<system>` タグ方式）
 - agent はビルトインツール（ファイル読み書き）でこれらを読み書きする
-- system prompt に「AGENTS.md を最初に読め」という指示を含める
+- 読み取り順序: SOUL.md（人格、最優先）→ USER.md → memory → MEMORY.md。OpenClaw と同様に SOUL.md を AGENTS.md より優先する
+- system prompt に読み取り順序と「SOUL.md の人格を体現せよ」という指示を含める
 
 ### Req: Memory（永続記憶）
 
