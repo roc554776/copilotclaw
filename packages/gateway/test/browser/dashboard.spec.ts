@@ -32,9 +32,13 @@ test("processing indicator is hidden by default", async ({ page }) => {
 });
 
 test("processing indicator hides when agent message arrives via SSE", async ({ page }) => {
-  await page.goto(`${baseUrl}/?channel=${channelId}`);
+  // Fresh server for isolation
+  const freshStore = new Store();
+  const freshHandle = await startServer({ port: 0, store: freshStore, agentManager: null });
+  const freshUrl = `http://localhost:${freshHandle.port}`;
+  const freshChannelId = freshStore.listChannels()[0]!.id;
 
-  // Wait for SSE connection (green dot)
+  await page.goto(`${freshUrl}/?channel=${freshChannelId}`);
   await page.waitForSelector(".ws-connected", { timeout: 3000 });
 
   // Force show the processing indicator via JS
@@ -45,7 +49,7 @@ test("processing indicator hides when agent message arrives via SSE", async ({ p
   await expect(page.locator("#processing-indicator")).toBeVisible();
 
   // Post an agent message — SSE should trigger hiding
-  await fetch(`${baseUrl}/api/channels/${channelId}/messages`, {
+  await fetch(`${freshUrl}/api/channels/${freshChannelId}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sender: "agent", message: "done processing" }),
@@ -53,6 +57,8 @@ test("processing indicator hides when agent message arrives via SSE", async ({ p
 
   // Indicator should become hidden
   await expect(page.locator("#processing-indicator")).not.toBeVisible({ timeout: 3000 });
+
+  await freshHandle.close();
 });
 
 test("new message appears in chat via SSE without manual refresh", async ({ page }) => {
@@ -78,29 +84,27 @@ test("new message appears in chat via SSE without manual refresh", async ({ page
   await freshHandle.close();
 });
 
-test("status bar shows incompatible label when agent is incompatible", async ({ page }) => {
+test("status bar updates with agent info after status poll", async ({ page }) => {
   await page.goto(baseUrl);
 
-  // Wait for status to load — agent is null (no agent manager), so should show unavailable or —
-  await page.waitForTimeout(1000);
-
-  // Check that status bar contains agent info
-  const statusText = await page.locator("#status-text").textContent();
-  expect(statusText).toContain("gateway: running");
+  // Wait for refreshStatus to complete — status text should contain agent version or unavailable indicator
+  await expect(page.locator("#status-text")).toContainText("gateway: running", { timeout: 3000 });
 });
 
-test("logs panel toggles on button click", async ({ page }) => {
+test("logs panel toggles on button click without opening status modal", async ({ page }) => {
   await page.goto(baseUrl);
 
   const logsPanel = page.locator("#logs-panel");
   const logsBtn = page.locator("#logs-btn");
+  const modal = page.locator("#status-modal");
 
   // Initially hidden
   await expect(logsPanel).not.toBeVisible();
 
-  // Click to open
+  // Click to open — status modal must NOT open (stopPropagation)
   await logsBtn.click();
   await expect(logsPanel).toBeVisible();
+  await expect(modal).not.toBeVisible();
 
   // Click again to close
   await logsBtn.click();
