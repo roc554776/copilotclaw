@@ -135,7 +135,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
     const statusModalOverlay = document.getElementById("status-modal-overlay");
     const statusModalContent = document.getElementById("status-modal-content");
     const wsDot = document.getElementById("ws-dot");
-    const processingIndicator = document.getElementById("processing-indicator");
+    let processingIndicator = document.getElementById("processing-indicator");
 
     function escHtml(s) {
       return String(s)
@@ -156,11 +156,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
         try {
           const event = JSON.parse(e.data);
           if (event.type === "new_message") {
-            refreshChat();
-            // Agent sent a message — hide processing indicator and refresh status
-            if (event.data && event.data.sender === "agent") {
-              processingIndicator.classList.remove("visible");
-            }
+            const isAgentMessage = event.data && event.data.sender === "agent";
+            refreshChat(isAgentMessage);
             refreshStatus();
           } else if (event.type === "status_update") {
             updateStatusBar(event.data);
@@ -178,6 +175,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       const compat = data.compatibility || "";
       const compatLabel = compat && compat !== "compatible" ? " [" + compat + "]" : "";
       statusText.textContent = "gateway: running | agent: v" + agentVer + compatLabel + " | session: " + sessStatus;
+      // Re-query in case innerHTML replacement created a new node
+      processingIndicator = document.getElementById("processing-indicator") || processingIndicator;
       if (sessStatus === "processing") {
         processingIndicator.classList.add("visible");
         chat.scrollTop = chat.scrollHeight;
@@ -271,7 +270,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       }
     }
 
-    async function refreshChat() {
+    async function refreshChat(hideIndicator) {
       const res = await fetch("/?channel=" + CHANNEL_ID);
       if (!res.ok) return;
       const html = await res.text();
@@ -279,11 +278,12 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
       const doc = parser.parseFromString(html, "text/html");
       const newChat = doc.getElementById("chat");
       if (newChat) {
-        const wasProcessing = processingIndicator.classList.contains("visible");
+        const wasProcessing = !hideIndicator && processingIndicator.classList.contains("visible");
         chat.innerHTML = newChat.innerHTML;
-        const newIndicator = document.getElementById("processing-indicator");
-        if (wasProcessing && newIndicator) {
-          newIndicator.classList.add("visible");
+        // Update the processingIndicator reference to the new DOM node
+        processingIndicator = document.getElementById("processing-indicator");
+        if (wasProcessing && processingIndicator) {
+          processingIndicator.classList.add("visible");
         }
         chat.scrollTop = chat.scrollHeight;
       }

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { type AgentStatusResponse, getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 
-const MIN_AGENT_VERSION = "0.2.0";
+const MIN_AGENT_VERSION = "0.3.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
