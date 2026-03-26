@@ -12,7 +12,7 @@ Source files studied (from repo root `nodejs/src/`):
 - `types.ts` -- all type definitions
 - `extension.ts` -- `joinSession` for child-process extensions
 - `generated/rpc.ts` -- auto-generated JSON-RPC types and helper functions
-- `generated/session-events.ts` -- **全セッションイベントの型定義の権威的ソース**。イベントの追加・変更を調査する際はこのファイルを参照すること（`tmp/ref/github/copilot-sdk/nodejs/src/generated/session-events.ts` でローカル参照可能）
+- `generated/session-events.ts` -- **全セッションイベントの型定義の権威的ソース**。イベントの追加・変更を調査する際はこのファイルを参照すること（`{{copilot-sdk-repo}}/github/copilot-sdk/nodejs/src/generated/session-events.ts` でローカル参照可能）
 
 ---
 

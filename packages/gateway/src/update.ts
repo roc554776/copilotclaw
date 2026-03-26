@@ -1,10 +1,16 @@
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadConfig } from "./config.js";
 import { getUpdateDir } from "./workspace.js";
 
 const DEFAULT_UPSTREAM = "https://github.com/roc554776/copilotclaw.git";
+const PNPM_VERSION = "10.26.2";
+
+/** Run pnpm via npx so the user doesn't need pnpm globally installed. */
+function pnpm(args: string[], cwd: string): string {
+  return run(["npx", "-y", `pnpm@${PNPM_VERSION}`, ...args], cwd);
+}
 
 function log(message: string): void {
   console.error(`[update] ${message}`);
@@ -24,6 +30,26 @@ function run(args: string[], cwd: string): string {
     throw new Error(`command failed (exit ${result.status ?? "null"}): ${result.stderr?.trim() ?? ""}`);
   }
   return (result.stdout ?? "").trim();
+}
+
+/**
+ * Rewrite workspace:* dependencies to file: paths in the CLI package.json
+ * so that `npm install -g` can resolve them locally.
+ */
+function rewriteWorkspaceDeps(cliDir: string, sourceRoot: string): void {
+  const pkgPath = join(cliDir, "package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as Record<string, unknown>;
+  const deps = pkg["dependencies"] as Record<string, string> | undefined;
+  if (deps === undefined) return;
+
+  for (const [name, version] of Object.entries(deps)) {
+    if (version.startsWith("workspace:")) {
+      // @copilotclaw/gateway → packages/gateway, @copilotclaw/agent → packages/agent
+      const shortName = name.replace("@copilotclaw/", "");
+      deps[name] = `file:${join(sourceRoot, "packages", shortName)}`;
+    }
+  }
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
 }
 
 async function main(): Promise<void> {
@@ -79,28 +105,16 @@ async function main(): Promise<void> {
 
   // Build
   log("installing dependencies...");
-  run(["pnpm", "install", "--frozen-lockfile"], updateDir);
+  pnpm(["install", "--frozen-lockfile"], updateDir);
 
   log("building...");
-  run(["pnpm", "run", "build"], updateDir);
+  pnpm(["run", "build"], updateDir);
 
-  // Pack CLI package and reinstall
+  // Rewrite workspace:* to file: paths for npm compatibility, then install globally
   const cliDir = join(updateDir, "packages", "cli");
-  log("packing...");
-  const packOutput = run(["npm", "pack"], cliDir);
-  const tgzFile = parseTgzFilename(packOutput);
-  if (tgzFile === undefined) {
-    throw new Error("npm pack produced no .tgz file");
-  }
-  const tgzPath = join(cliDir, tgzFile);
-
   log("installing...");
-  try {
-    run(["npm", "install", "-g", tgzPath], updateDir);
-  } finally {
-    // Clean up tgz
-    try { unlinkSync(tgzPath); } catch { /* ignore */ }
-  }
+  rewriteWorkspaceDeps(cliDir, updateDir);
+  run(["npm", "install", "-g", "."], cliDir);
 
   log("update complete — restart gateway to apply");
 }
