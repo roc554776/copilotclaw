@@ -633,7 +633,8 @@ export class AgentSessionManager {
 
     const boundChannelId = entry.info.boundChannelId;
     const sessionId = entry.sessionId;
-    const clientToStop = entry.client; // Capture for the finally closure
+    // Capture this revival's client so finally stops the correct one even if revived again
+    const clientToStop = entry.client;
 
     const promise = this.runSession(entry).then(() => {
       if (!entry.abortController.signal.aborted) {
