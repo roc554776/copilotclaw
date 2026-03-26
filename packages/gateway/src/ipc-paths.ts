@@ -1,9 +1,6 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-function getProfileName(): string | undefined {
-  return process.env["COPILOTCLAW_PROFILE"] || undefined;
-}
+import { getProfileName } from "./config.js";
 
 export function getAgentSocketPath(profile?: string): string {
   const p = profile ?? getProfileName();

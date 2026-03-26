@@ -1,12 +1,9 @@
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getProfileName } from "./config.js";
 
 const BASE_DIR = join(homedir(), ".copilotclaw");
-
-function getProfileName(): string | undefined {
-  return process.env["COPILOTCLAW_PROFILE"] || undefined;
-}
 
 export function getWorkspaceRoot(profile?: string): string {
   const p = profile ?? getProfileName();

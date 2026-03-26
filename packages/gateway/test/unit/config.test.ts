@@ -1,26 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-// We test the pure logic by directly testing the module functions
-// Since config.ts reads from ~/.copilotclaw/, we mock the filesystem path
-// by setting up a temp directory and patching the module
+import { afterEach, describe, expect, it } from "vitest";
 
 describe("config", () => {
-  const testDir = join(tmpdir(), `copilotclaw-config-test-${Date.now()}`);
-  const configPath = join(testDir, "config.json");
-  const profileConfigPath = join(testDir, "config-staging.json");
-
-  beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
-    delete process.env["COPILOTCLAW_UPSTREAM"];
-    delete process.env["COPILOTCLAW_PORT"];
-    delete process.env["COPILOTCLAW_PROFILE"];
-  });
-
   afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
     delete process.env["COPILOTCLAW_UPSTREAM"];
     delete process.env["COPILOTCLAW_PORT"];
     delete process.env["COPILOTCLAW_PROFILE"];
@@ -48,7 +29,6 @@ describe("config", () => {
 
   it("loadConfig returns empty config when file does not exist", async () => {
     const { loadConfig } = await import("../../src/config.js");
-    // No config file exists at the default path, but loadConfig handles it gracefully
     const config = loadConfig("nonexistent-profile-" + Date.now());
     expect(config.upstream).toBeUndefined();
     expect(config.port).toBeUndefined();
@@ -68,6 +48,20 @@ describe("config", () => {
     expect(config.port).toBe(12345);
   });
 
+  it("loadConfig ignores invalid COPILOTCLAW_PORT (NaN)", async () => {
+    process.env["COPILOTCLAW_PORT"] = "abc";
+    const { loadConfig } = await import("../../src/config.js");
+    const config = loadConfig("nonexistent-profile-" + Date.now());
+    expect(config.port).toBeUndefined();
+  });
+
+  it("loadConfig ignores negative COPILOTCLAW_PORT", async () => {
+    process.env["COPILOTCLAW_PORT"] = "-1";
+    const { loadConfig } = await import("../../src/config.js");
+    const config = loadConfig("nonexistent-profile-" + Date.now());
+    expect(config.port).toBeUndefined();
+  });
+
   it("resolvePort returns default when no config or env", async () => {
     const { resolvePort } = await import("../../src/config.js");
     const port = resolvePort("nonexistent-profile-" + Date.now());
@@ -79,5 +73,12 @@ describe("config", () => {
     const { resolvePort } = await import("../../src/config.js");
     const port = resolvePort("nonexistent-profile-" + Date.now());
     expect(port).toBe(55555);
+  });
+
+  it("resolvePort falls back to default for invalid env var", async () => {
+    process.env["COPILOTCLAW_PORT"] = "notanumber";
+    const { resolvePort } = await import("../../src/config.js");
+    const port = resolvePort("nonexistent-profile-" + Date.now());
+    expect(port).toBe(19741);
   });
 });

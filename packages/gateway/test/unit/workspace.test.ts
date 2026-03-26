@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { getDataDir, getStoreFilePath, getWorkspaceRoot } from "../../src/workspace.js";
 
 describe("workspace paths", () => {

@@ -13,7 +13,8 @@ const thisDir = dirname(fileURLToPath(import.meta.url));
 const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string };
 const GATEWAY_VERSION = pkgJson.version;
 
-export const DEFAULT_PORT = 19741;
+import { DEFAULT_PORT } from "./config.js";
+export { DEFAULT_PORT };
 
 const MAX_BODY_SIZE = 1_048_576; // 1 MB
 

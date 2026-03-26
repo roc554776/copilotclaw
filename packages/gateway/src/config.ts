@@ -4,12 +4,14 @@ import { join } from "node:path";
 
 const BASE_DIR = join(homedir(), ".copilotclaw");
 
+export const DEFAULT_PORT = 19741;
+
 export interface CopilotclawConfig {
   upstream?: string;
   port?: number;
 }
 
-function getProfileName(): string | undefined {
+export function getProfileName(): string | undefined {
   return process.env["COPILOTCLAW_PROFILE"] || undefined;
 }
 
@@ -19,6 +21,11 @@ export function getConfigFilePath(profile?: string): string {
     return join(BASE_DIR, `config-${p}.json`);
   }
   return join(BASE_DIR, "config.json");
+}
+
+function parsePort(raw: string): number | undefined {
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 export function loadConfig(profile?: string): CopilotclawConfig {
@@ -39,8 +46,8 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   const result: CopilotclawConfig = {};
   const upstream = envUpstream ?? fileConfig.upstream;
   if (upstream !== undefined) result.upstream = upstream;
-  const port = envPort !== undefined ? parseInt(envPort, 10) : fileConfig.port;
-  if (port !== undefined) result.port = port;
+  const port = envPort !== undefined ? parsePort(envPort) : fileConfig.port;
+  if (port !== undefined && Number.isFinite(port) && port > 0) result.port = port;
   return result;
 }
 
@@ -49,16 +56,8 @@ export function saveConfig(config: CopilotclawConfig, profile?: string): void {
   writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
-const DEFAULT_PORT = 19741;
-
 /** Resolve gateway port: env var > config file > default (19741). */
 export function resolvePort(profile?: string): number {
-  const envPort = process.env["COPILOTCLAW_PORT"];
-  if (envPort !== undefined) {
-    const n = parseInt(envPort, 10);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
   const config = loadConfig(profile);
-  if (config.port !== undefined && Number.isFinite(config.port) && config.port > 0) return config.port;
-  return DEFAULT_PORT;
+  return config.port ?? DEFAULT_PORT;
 }
