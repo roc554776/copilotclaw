@@ -1,5 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import Database from "better-sqlite3";
 
 export interface SessionEvent {
   /** SDK session event type (e.g. "tool.execution_start", "assistant.message"). */
@@ -18,87 +19,83 @@ export interface SystemPromptSnapshot {
   capturedAt: string;
 }
 
-const DEFAULT_MAX_STORAGE_BYTES = 50 * 1024 * 1024; // 50 MB
+const DEFAULT_MAX_EVENTS = 100_000; // max total events across all sessions
 
 export class SessionEventStore {
-  private readonly dir: string;
+  private readonly db: Database.Database;
   private readonly promptDir: string;
-  private readonly maxStorageBytes: number;
+  private readonly maxEvents: number;
 
-  constructor(dataDir: string, maxStorageBytes?: number) {
-    this.dir = join(dataDir, "events");
+  constructor(dataDir: string, maxEvents?: number) {
     this.promptDir = join(dataDir, "prompts");
-    this.maxStorageBytes = maxStorageBytes ?? DEFAULT_MAX_STORAGE_BYTES;
-    mkdirSync(this.dir, { recursive: true });
     mkdirSync(this.promptDir, { recursive: true });
+
+    const dbPath = join(dataDir, "session-events.db");
+    mkdirSync(dirname(dbPath), { recursive: true });
+    this.db = new Database(dbPath);
+    this.db.pragma("journal_mode = WAL");
+    this.maxEvents = maxEvents ?? DEFAULT_MAX_EVENTS;
+    this.initSchema();
   }
 
-  private sessionFilePath(sessionId: string): string {
-    // Sanitize sessionId to prevent path traversal
-    const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    return join(this.dir, `${safe}.jsonl`);
+  private initSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS session_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sessionId TEXT NOT NULL,
+        type TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        data TEXT NOT NULL,
+        parentId TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_events_session ON session_events(sessionId);
+      CREATE INDEX IF NOT EXISTS idx_events_session_time ON session_events(sessionId, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_events_type ON session_events(type);
+    `);
   }
 
   /** Append an event for a session. */
   appendEvent(sessionId: string, event: SessionEvent): void {
-    const filePath = this.sessionFilePath(sessionId);
-    appendFileSync(filePath, JSON.stringify(event) + "\n", "utf-8");
+    const stmt = this.db.prepare("INSERT INTO session_events (sessionId, type, timestamp, data, parentId) VALUES (?, ?, ?, ?, ?)");
+    stmt.run(sessionId, event.type, event.timestamp, JSON.stringify(event.data), event.parentId ?? null);
     this.maybeEnforceStorageCap();
   }
 
-  /**
-   * Periodically check and enforce the storage cap.
-   * Runs the actual enforcement every ~100 appends to avoid stat overhead on every write.
-   */
-  private appendCount = 0;
+  private insertCount = 0;
   private maybeEnforceStorageCap(): void {
-    this.appendCount++;
-    if (this.appendCount % 100 === 0) {
+    this.insertCount++;
+    if (this.insertCount % 500 === 0) {
       this.enforceStorageCap();
     }
   }
 
   /** Get all events for a session. */
   getEvents(sessionId: string): SessionEvent[] {
-    const filePath = this.sessionFilePath(sessionId);
-    if (!existsSync(filePath)) return [];
-    try {
-      const lines = readFileSync(filePath, "utf-8").trim().split("\n");
-      return lines.filter((l) => l.length > 0).map((l) => JSON.parse(l) as SessionEvent);
-    } catch {
-      return [];
-    }
+    const rows = this.db.prepare("SELECT type, timestamp, data, parentId FROM session_events WHERE sessionId = ? ORDER BY id ASC").all(sessionId) as Array<{ type: string; timestamp: string; data: string; parentId: string | null }>;
+    return rows.map((r) => {
+      const event: SessionEvent = {
+        type: r.type,
+        timestamp: r.timestamp,
+        data: JSON.parse(r.data) as Record<string, unknown>,
+      };
+      if (r.parentId !== null) event.parentId = r.parentId;
+      return event;
+    });
   }
 
   /** List all session IDs that have events. */
   listSessions(): string[] {
-    try {
-      return readdirSync(this.dir)
-        .filter((f) => f.endsWith(".jsonl"))
-        .map((f) => f.slice(0, -6)); // remove .jsonl
-    } catch {
-      return [];
-    }
+    const rows = this.db.prepare("SELECT DISTINCT sessionId FROM session_events").all() as Array<{ sessionId: string }>;
+    return rows.map((r) => r.sessionId);
   }
 
-  /** Enforce storage cap by deleting oldest session event files. */
+  /** Enforce storage cap by deleting oldest events. */
   enforceStorageCap(): void {
     try {
-      const files = readdirSync(this.dir)
-        .filter((f) => f.endsWith(".jsonl"))
-        .map((f) => {
-          const p = join(this.dir, f);
-          const s = statSync(p);
-          return { path: p, size: s.size, mtime: s.mtimeMs };
-        })
-        .sort((a, b) => a.mtime - b.mtime); // oldest first
-
-      let totalSize = files.reduce((sum, f) => sum + f.size, 0);
-      for (const file of files) {
-        if (totalSize <= this.maxStorageBytes) break;
-        unlinkSync(file.path);
-        totalSize -= file.size;
-      }
+      const countRow = this.db.prepare("SELECT COUNT(*) as c FROM session_events").get() as { c: number };
+      if (countRow.c <= this.maxEvents) return;
+      const excess = countRow.c - this.maxEvents;
+      this.db.prepare("DELETE FROM session_events WHERE id IN (SELECT id FROM session_events ORDER BY id ASC LIMIT ?)").run(excess);
     } catch {
       // Non-fatal
     }
@@ -158,5 +155,10 @@ export class SessionEventStore {
     } catch {
       return undefined;
     }
+  }
+
+  /** Close the database connection. */
+  close(): void {
+    this.db.close();
   }
 }

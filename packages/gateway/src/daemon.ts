@@ -5,7 +5,7 @@ import { LogBuffer } from "./log-buffer.js";
 import { startServer } from "./server.js";
 import { SessionEventStore } from "./session-event-store.js";
 import { Store } from "./store.js";
-import { ensureWorkspace, getDataDir, getStoreFilePath } from "./workspace.js";
+import { ensureWorkspace, getDataDir, getStoreDbPath, getStoreFilePath } from "./workspace.js";
 
 const AGENT_MONITOR_INTERVAL_MS = 30_000; // 30 seconds
 const AGENT_MONITOR_ERROR_THRESHOLD = 3;
@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   const logBuffer = new LogBuffer();
   logBuffer.enableFileOutput(join(getDataDir(getProfileName()), "gateway.log"));
   logBuffer.interceptConsole();
-  const store = new Store({ persistPath: getStoreFilePath(getProfileName()) });
+  const store = new Store({ persistPath: getStoreDbPath(getProfileName()), legacyJsonPath: getStoreFilePath(getProfileName()) });
   const port = resolvePort(getProfileName());
   const agentManager = new AgentManager({ gatewayPort: port });
 

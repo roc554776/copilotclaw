@@ -87,6 +87,8 @@
 - 物理セッションシステムプロンプトの表示（API `/api/system-prompts/session/{{sessionId}}`、SystemStatus で表示、オリジナルとの区別）
 - Session イベント store（disk ベース JSON Lines、セッション別ファイル、ストレージ上限）
 
+- 永続化戦略のハイブリッド移行（Store: JSON → SQLite、SessionEventStore: JSONL → SQLite。better-sqlite3 + WAL モード。legacy JSON からの自動マイグレーション）
+
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
 - OpenTelemetry 導入（構造化ログ基盤は実装済み、OTel ログブリッジへの移行が残）

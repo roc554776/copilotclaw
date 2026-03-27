@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { getDataDir, getStoreFilePath, getWorkspaceRoot } from "../../src/workspace.js";
+import { getDataDir, getStoreDbPath, getStoreFilePath, getWorkspaceRoot } from "../../src/workspace.js";
 
 describe("workspace paths", () => {
   afterEach(() => {
@@ -19,7 +19,13 @@ describe("workspace paths", () => {
     expect(dataDir).not.toContain("workspace");
   });
 
-  it("getStoreFilePath returns a JSON file path under data dir", () => {
+  it("getStoreDbPath returns a SQLite DB path under data dir", () => {
+    const storePath = getStoreDbPath();
+    expect(storePath).toContain("store.db");
+    expect(storePath).toContain("data");
+  });
+
+  it("getStoreFilePath returns legacy JSON file path under data dir", () => {
     const storePath = getStoreFilePath();
     expect(storePath).toContain("store.json");
     expect(storePath).toContain("data");

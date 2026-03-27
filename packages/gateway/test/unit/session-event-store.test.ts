@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ describe("SessionEventStore", () => {
   });
 
   afterEach(() => {
+    store.close();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -25,6 +26,7 @@ describe("SessionEventStore", () => {
       const events = store.getEvents("sess-1");
       expect(events).toHaveLength(2);
       expect(events[0]!.type).toBe("tool.execution_start");
+      expect(events[0]!.data).toEqual({ toolName: "bash" });
       expect(events[1]!.type).toBe("tool.execution_complete");
     });
 
@@ -38,6 +40,12 @@ describe("SessionEventStore", () => {
       expect(events[0]!.parentId).toBe("tool-123");
     });
 
+    it("omits parentId when not set", () => {
+      store.appendEvent("sess-3", { type: "session.idle", timestamp: "2026-03-27T00:00:00Z", data: {} });
+      const events = store.getEvents("sess-3");
+      expect(events[0]!.parentId).toBeUndefined();
+    });
+
     it("lists sessions with events", () => {
       store.appendEvent("sess-a", { type: "session.idle", timestamp: "2026-03-27T00:00:00Z", data: {} });
       store.appendEvent("sess-b", { type: "session.idle", timestamp: "2026-03-27T00:00:00Z", data: {} });
@@ -49,16 +57,15 @@ describe("SessionEventStore", () => {
   });
 
   describe("storage cap", () => {
-    it("enforces storage cap by deleting oldest files", () => {
-      const smallStore = new SessionEventStore(tmpDir, 100); // 100 bytes cap
-      // Write enough data to exceed cap
-      for (let i = 0; i < 10; i++) {
-        smallStore.appendEvent(`sess-cap-${i}`, { type: "test", timestamp: "2026-03-27T00:00:00Z", data: { payload: "x".repeat(50) } });
+    it("enforces storage cap by deleting oldest events", () => {
+      const smallStore = new SessionEventStore(tmpDir, 10); // 10 events max
+      for (let i = 0; i < 600; i++) {
+        smallStore.appendEvent(`sess-cap`, { type: "test", timestamp: `2026-03-27T00:00:${String(i).padStart(2, "0")}Z`, data: { i } });
       }
-      smallStore.enforceStorageCap();
-
-      const remaining = smallStore.listSessions();
-      expect(remaining.length).toBeLessThan(10);
+      // After 500 inserts, enforcement runs (every 500)
+      const events = smallStore.getEvents("sess-cap");
+      expect(events.length).toBeLessThanOrEqual(510); // allow some slack before next enforcement
+      smallStore.close();
     });
   });
 

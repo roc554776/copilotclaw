@@ -18,6 +18,11 @@ export function getDataDir(profile?: string): string {
   return join(getStateDir(profile), "data");
 }
 
+export function getStoreDbPath(profile?: string): string {
+  return join(getDataDir(profile), "store.db");
+}
+
+/** @deprecated Use getStoreDbPath instead. Kept for legacy JSON migration. */
 export function getStoreFilePath(profile?: string): string {
   return join(getDataDir(profile), "store.json");
 }

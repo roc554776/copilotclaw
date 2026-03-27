@@ -122,6 +122,35 @@ function migrate_v0_to_v1(config: Record<string, unknown>): Record<string, unkno
 | `packages/gateway/src/config.ts` | `configVersion` フィールド追加、マイグレーション関数群、`loadConfig` でのマイグレーション適用 |
 | `packages/gateway/src/doctor.ts` | configVersion チェック追加 |
 
+### NFR: 永続化戦略のハイブリッド移行
+
+成長するデータを JSON/JSONL から SQLite（better-sqlite3）に移行し、静的データは JSON のまま維持するハイブリッド方式。
+
+**現状の問題:**
+- store.json: メッセージ追加のたびに全データを JSON シリアライズして全書き換え（書き込み増幅）
+- session events (JSONL): クエリ時に全ファイル読み込み → パース（O(N) フルスキャン）
+- structured logs: 上限なし（disk 圧迫リスク）
+
+**方針:**
+
+| データ | 現行 | 移行先 | 理由 |
+|:---|:---|:---|:---|
+| config.json | JSON snapshot | JSON のまま | 小さい静的データ。変更頻度低い |
+| agent-bindings.json | JSON snapshot | JSON のまま | 小さい。数十セッション程度 |
+| system prompt snapshots | JSON files | JSON のまま | 小さい。モデル数分 |
+| チャンネルメッセージ + pending queue | JSON snapshot (store.json) | **SQLite** | 毎メッセージ全書き換え → INSERT で解決 |
+| セッションイベント | JSON Lines (per session) | **SQLite** | 全ファイル読み込み → インデックスクエリで解決 |
+| 構造化ログ | JSON Lines | **対象外（OTel 移行予定）** | OpenTelemetry ブリッジへの移行が既に要件として存在 |
+
+**SQLite 選定理由:**
+- OpenClaw が `better-sqlite3` で memory store を実装済み（実績あり）
+- ローカルツールに最適（外部プロセス不要、単一ファイル）
+- インデックスによる O(log N) クエリ、トランザクションによる原子的書き込み
+
+**フェーズ案:**
+- **Phase A**: messages + pending queue → SQLite（書き込み増幅解消、効果最大）
+- **Phase B**: session events → SQLite（イベントクエリ高速化、type/timestamp フィルタ）
+
 ### NFR: セキュリティ
 <!-- TODO: 未実装 — ツール実行時のパーミッション制御 -->
 
