@@ -55,6 +55,8 @@ const MIGRATIONS: Record<number, MigrationFn> = {
   // v1 → v2: Move auth.* to auth.github.* (namespace clarification)
   1: (config) => {
     const auth = config["auth"] as Record<string, unknown> | undefined;
+    // Guard: only wrap if auth has a "type" field (flat AuthConfig from v1).
+    // If auth already has "github" key (manually written or partial migration), skip wrapping.
     if (auth !== undefined && auth["type"] !== undefined) {
       // auth has type field → it's a flat AuthConfig, wrap in { github: ... }
       const { auth: _, ...rest } = config;

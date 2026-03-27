@@ -69,6 +69,17 @@ describe("config migration", () => {
       expect(config["port"]).toBe(19741);
     });
 
+    it("does not double-wrap already-nested auth.github at v1 (v1→v2)", () => {
+      const { config, migrated } = migrateConfig({
+        configVersion: 1,
+        auth: { github: { type: "gh-auth", user: "already-nested" } },
+      });
+      expect(migrated).toBe(true);
+      expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
+      // auth.github should NOT be double-wrapped
+      expect(config["auth"]).toEqual({ github: { type: "gh-auth", user: "already-nested" } });
+    });
+
     it("does not migrate when configVersion is above latest (future version)", () => {
       const { config, migrated } = migrateConfig({ configVersion: 99, port: 19741 });
       expect(migrated).toBe(false);

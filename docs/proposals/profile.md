@@ -305,8 +305,8 @@ copilotclaw --profile work setup
 gh auth login
 
 # config に認証設定を追加（user を指定して特定アカウントのトークンを使う）
-copilotclaw --profile work config set auth.type gh-auth
-copilotclaw --profile work config set auth.user my-work-account
+copilotclaw --profile work config set auth.github.type gh-auth
+copilotclaw --profile work config set auth.github.user my-work-account
 
 # work profile は gh auth token --user my-work-account で取得したトークンを使用
 copilotclaw --profile work start
@@ -315,7 +315,7 @@ copilotclaw --profile work start
 **gh auth を使う場合（デフォルトアカウント）:**
 
 ```bash
-copilotclaw --profile work config set auth.type gh-auth
+copilotclaw --profile work config set auth.github.type gh-auth
 # user 未設定 → gh auth token のデフォルトアカウントを使用
 ```
 
@@ -329,8 +329,8 @@ copilotclaw --profile work setup
 export COPILOTCLAW_WORK_TOKEN="github_pat_xxxx..."
 
 # config に認証設定を追加
-copilotclaw --profile work config set auth.type pat
-copilotclaw --profile work config set auth.tokenEnv COPILOTCLAW_WORK_TOKEN
+copilotclaw --profile work config set auth.github.type pat
+copilotclaw --profile work config set auth.github.tokenEnv COPILOTCLAW_WORK_TOKEN
 
 # work profile は PAT で認証
 copilotclaw --profile work start
@@ -401,8 +401,11 @@ copilotclaw --profile work doctor
 ```typescript
 // v1 → v2: auth.* を auth.github.* に移動
 MIGRATIONS[1] = (config) => {
-  const { auth, ...rest } = config;
-  if (auth !== undefined) {
+  const auth = config["auth"];
+  // Guard: only wrap if auth has a "type" field (flat AuthConfig from v1).
+  // If auth already has "github" key (manually written), skip wrapping.
+  if (auth !== undefined && auth["type"] !== undefined) {
+    const { auth: _, ...rest } = config;
     return { ...rest, auth: { github: auth }, configVersion: 2 };
   }
   return { ...config, configVersion: 2 };

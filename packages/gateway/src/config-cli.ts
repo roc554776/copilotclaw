@@ -1,6 +1,14 @@
 import { CONFIG_ENV_VARS, type CopilotclawConfig, ensureConfigFile, getProfileName, loadConfig, loadFileConfig, saveConfig } from "./config.js";
 
-const VALID_KEYS: readonly string[] = Object.keys(CONFIG_ENV_VARS);
+const TOP_LEVEL_KEYS: readonly string[] = Object.keys(CONFIG_ENV_VARS);
+
+/** Auth config keys supported under auth.github.* */
+const AUTH_GITHUB_KEYS: readonly string[] = ["type", "user", "hostname", "tokenEnv", "tokenFile", "tokenCommand"];
+
+const VALID_KEYS: readonly string[] = [
+  ...TOP_LEVEL_KEYS,
+  ...AUTH_GITHUB_KEYS.map((k) => `auth.github.${k}`),
+];
 
 function log(message: string): void {
   console.error(`[config] ${message}`);
@@ -34,7 +42,14 @@ export function configGet(key: string): void {
   }
 
   const resolved = loadConfig(getProfileName());
-  const value = resolved[key as keyof CopilotclawConfig];
+
+  let value: unknown;
+  if (key.startsWith("auth.github.")) {
+    const subKey = key.slice("auth.github.".length);
+    value = (resolved.auth?.github as Record<string, unknown> | undefined)?.[subKey];
+  } else {
+    value = resolved[key as keyof CopilotclawConfig];
+  }
 
   if (value === undefined) {
     log(`${key}: (not set)`);
@@ -57,7 +72,16 @@ export function configSet(key: string, rawValue: string): void {
   const value = parseValue(key, rawValue);
   ensureConfigFile(getProfileName());
   const fileConfig = loadFileConfig(getProfileName());
-  (fileConfig as Record<string, unknown>)[key] = value;
+
+  if (key.startsWith("auth.github.")) {
+    const subKey = key.slice("auth.github.".length);
+    if (fileConfig.auth === undefined) fileConfig.auth = {};
+    if (fileConfig.auth.github === undefined) fileConfig.auth.github = { type: "gh-auth" };
+    (fileConfig.auth.github as unknown as Record<string, unknown>)[subKey] = value;
+  } else {
+    (fileConfig as Record<string, unknown>)[key] = value;
+  }
+
   saveConfig(fileConfig, getProfileName());
   log(`${key} = ${String(value)}`);
 
