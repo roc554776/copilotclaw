@@ -94,6 +94,24 @@ async function refresh() {
               html += '<div style="margin-left:1rem;font-size:0.8rem;color:#8b949e"><div class="row"><span class="label">Cumulative tokens</span><span class="value">in: ' + cIn + ' / out: ' + cOut + ' / total: ' + (cIn+cOut) + '</span></div></div>';
             }
           }
+          // Stopped physical session history
+          const history = sess.physicalSessionHistory || [];
+          if (history.length > 0) {
+            html += '<div style="margin-left:1rem;font-size:0.8rem;margin-top:0.3rem">';
+            html += '<details><summary style="color:#58a6ff;cursor:pointer">Stopped sessions (' + history.length + ')</summary>';
+            for (const hps of history) {
+              html += '<div style="margin:0.3rem 0;padding:0.3rem;border:1px solid #21262d;border-radius:0.3rem;color:#8b949e">';
+              html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(hps.sessionId.slice(0,12)) + '</span></div>';
+              html += '<div class="row"><span class="label">Model</span><span class="value">' + escHtml(hps.model) + '</span></div>';
+              if (hps.totalInputTokens != null || hps.totalOutputTokens != null) {
+                html += '<div class="row"><span class="label">Tokens</span><span class="value">in: ' + (hps.totalInputTokens??0) + ' / out: ' + (hps.totalOutputTokens??0) + '</span></div>';
+              }
+              html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(hps.startedAt) + '</span></div>';
+              html += '<div class="row"><span class="label">Events</span><span class="value"><a href="/sessions/' + encodeURIComponent(hps.sessionId) + '/events">View events &rarr;</a></span></div>';
+              html += '</div>';
+            }
+            html += '</details></div>';
+          }
         }
         html += '</div>';
       }

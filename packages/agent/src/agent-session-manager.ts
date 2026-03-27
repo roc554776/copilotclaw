@@ -133,6 +133,8 @@ export interface AgentSessionInfo {
   /** Cumulative token usage across all physical sessions (survives suspend/revive). */
   cumulativeInputTokens?: number | undefined;
   cumulativeOutputTokens?: number | undefined;
+  /** History of stopped physical sessions (most recent last). Preserved across suspend/revive. */
+  physicalSessionHistory?: PhysicalSessionSummary[] | undefined;
 }
 
 interface AgentSessionEntry {
@@ -854,6 +856,12 @@ export class AgentSessionManager {
     if (ps !== undefined) {
       entry.info.cumulativeInputTokens = (entry.info.cumulativeInputTokens ?? 0) + (ps.totalInputTokens ?? 0);
       entry.info.cumulativeOutputTokens = (entry.info.cumulativeOutputTokens ?? 0) + (ps.totalOutputTokens ?? 0);
+      // Preserve stopped physical session in history for dashboard visibility
+      const history = entry.info.physicalSessionHistory ?? [];
+      history.push({ ...ps, currentState: "stopped" });
+      // Keep only the last 10 physical sessions to prevent unbounded growth
+      if (history.length > 10) history.splice(0, history.length - 10);
+      entry.info.physicalSessionHistory = history;
     }
     entry.info.status = "suspended";
     entry.copilotSession = undefined;

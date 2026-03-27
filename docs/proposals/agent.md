@@ -309,6 +309,20 @@ channel binding の永続化:
 - 物理 session の停止・再作成をまたいで、同一の抽象 session に帰属するトークン消費を集計できる
 - dashboard から、停止済みの物理 session を含む全履歴を参照できる
 
+### 停止した物理セッションの Dashboard 継続表示
+
+物理セッションが停止した後も、そのセッションの情報を dashboard および SystemStatus で継続的に参照可能にする。
+
+**現状の問題:**
+- `suspendSession()` で `entry.info.physicalSession = undefined` に設定するため、物理セッション情報が消える
+- dashboard / SystemStatus のモーダルや `/status` ページから、停止済みの物理セッションの情報（モデル、トークン、開始時刻、イベントへのリンク等）が参照できなくなる
+
+**方針:**
+- 抽象セッションに `physicalSessionHistory` を追加し、停止した物理セッションの情報を蓄積する
+- `suspendSession()` でトークン累積後、`physicalSession` の情報を `physicalSessionHistory` に退避してから `undefined` に設定する
+- dashboard では停止済みの物理セッションを折りたたみ表示（デフォルト折りたたみ、クリックで展開）する
+- イベントページへのリンクも停止済みセッションから引き続きアクセス可能にする
+
 ### 物理 Session 停止後の記憶保持
 
 物理 session が停止した後に再開する際、直前のコンテキスト（会話履歴や作業状態）をできる限り保持する。

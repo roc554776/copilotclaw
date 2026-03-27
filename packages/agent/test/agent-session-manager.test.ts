@@ -1273,3 +1273,72 @@ describe("AgentSessionManager — cumulative token history across physical sessi
     expect(restored?.cumulativeOutputTokens).toBe(100);
   });
 });
+
+describe("AgentSessionManager — physicalSessionHistory preservation", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("preserves stopped physical session in physicalSessionHistory on suspend", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-hist" });
+    await waitForPhysicalSession(manager);
+
+    // Emit some usage
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 } });
+
+    // End session → suspended → physicalSession moves to history
+    mockSession.emit("session.idle");
+    await wait(50);
+
+    const statuses = manager.getSessionStatuses();
+    const session = Object.values(statuses)[0];
+    expect(session?.status).toBe("suspended");
+    expect(session?.physicalSession).toBeUndefined();
+    expect(session?.physicalSessionHistory).toHaveLength(1);
+    expect(session?.physicalSessionHistory?.[0]?.sessionId).toBe("mock-sdk-session");
+    expect(session?.physicalSessionHistory?.[0]?.currentState).toBe("stopped");
+    expect(session?.physicalSessionHistory?.[0]?.totalInputTokens).toBe(100);
+  });
+
+  it("keeps events link accessible for stopped sessions via sessionId", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-link" });
+    await waitForPhysicalSession(manager);
+
+    mockSession.emit("session.idle");
+    await wait(50);
+
+    const statuses = manager.getSessionStatuses();
+    const session = Object.values(statuses)[0];
+    // The stopped session's sessionId is preserved for linking to events page
+    expect(session?.physicalSessionHistory?.[0]?.sessionId).toBeDefined();
+    expect(typeof session?.physicalSessionHistory?.[0]?.sessionId).toBe("string");
+  });
+});

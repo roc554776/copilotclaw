@@ -29,6 +29,7 @@ export interface AgentSessionStatusResponse {
   subagentSessions?: SubagentInfo[];
   cumulativeInputTokens?: number;
   cumulativeOutputTokens?: number;
+  physicalSessionHistory?: PhysicalSessionSummary[];
 }
 
 export interface AgentStatusResponse {

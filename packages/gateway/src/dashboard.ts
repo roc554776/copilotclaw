@@ -291,6 +291,28 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
                   html += '</div>';
                 }
               }
+              // Stopped physical session history (collapsed by default)
+              const history = sess.physicalSessionHistory || [];
+              if (history.length > 0) {
+                const histId = 'hist-' + escHtml(id.slice(0,8));
+                html += '<div style="margin-left:1rem;font-size:0.8rem;margin-top:0.3rem">';
+                html += '<a href="#" style="color:#58a6ff;text-decoration:none" onclick="document.getElementById(\\'' + histId + '\\').style.display=document.getElementById(\\'' + histId + '\\').style.display===\\'none\\'?\\'block\\':\\'none\\';return false;">Stopped sessions (' + escHtml(String(history.length)) + ') ▸</a>';
+                html += '<div id="' + histId + '" style="display:none;margin-top:0.3rem">';
+                for (const hps of history) {
+                  html += '<div style="margin-bottom:0.5rem;padding:0.3rem;border:1px solid #21262d;border-radius:0.3rem;color:#8b949e">';
+                  html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(hps.sessionId.slice(0,12)) + '</span></div>';
+                  html += '<div class="row"><span class="label">Model</span><span class="value">' + escHtml(hps.model) + '</span></div>';
+                  if (hps.totalInputTokens != null || hps.totalOutputTokens != null) {
+                    const hi = hps.totalInputTokens ?? 0;
+                    const ho = hps.totalOutputTokens ?? 0;
+                    html += '<div class="row"><span class="label">Tokens used</span><span class="value">in: ' + escHtml(String(hi)) + ' / out: ' + escHtml(String(ho)) + '</span></div>';
+                  }
+                  html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(hps.startedAt) + '</span></div>';
+                  html += '<div class="row"><span class="label">Events</span><span class="value"><a href="/sessions/' + encodeURIComponent(hps.sessionId) + '/events" style="color:#58a6ff;text-decoration:none">View events &rarr;</a></span></div>';
+                  html += '</div>';
+                }
+                html += '</div></div>';
+              }
             }
             html += '</div>';
           } else {
