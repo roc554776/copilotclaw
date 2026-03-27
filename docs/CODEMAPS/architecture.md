@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.28.0 | Token estimate: ~2000 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.29.0 | Token estimate: ~2000 -->
 
 # Architecture
 
@@ -107,9 +107,9 @@ Environment variables:
 - **savedCopilotSessionIds map**: no longer the primary resume mechanism — copilotSessionId lives on the suspended entry; map kept for potential compatibility
 - **Channel notifications**: session stopped (unexpected end) and session timed out (stale processing) post system messages to bound channel
 
-## Observability (v0.28.0)
+## Observability (v0.28.0, SQLite v0.29.0)
 
-- **SessionEventStore**: disk-based JSON Lines event storage per SDK session; stores events in `{{stateDir}}/data/events/{{sessionId}}.jsonl`; stores system prompt snapshots in `{{stateDir}}/data/prompts/`; enforces configurable storage cap (default 50 MB) by deleting oldest event files
+- **SessionEventStore**: SQLite-based event storage (session-events.db in data dir, WAL mode); table: session_events (sessionId, type, timestamp, data as JSON, parentId; indexed by sessionId, sessionId+timestamp, type); stores system prompt snapshots as JSON files in `{{stateDir}}/data/prompts/`; enforces configurable storage cap by row count (default 100k events) by deleting oldest rows every 500 inserts
 - **Event Forwarding**: agent registers SDK event listeners (session.idle, session.error, tool.execution_start/complete, subagent.started/completed/failed, assistant.message/usage/turn_start/turn_end, session.compaction_start/complete, session.usage_info, session.model_change, session.title_changed) and forwards them to gateway via fire-and-forget POST to /api/session-events
 - **System Prompt Capture**: agent uses registerTransformCallbacks("*") on CopilotSession to intercept the original system prompt from the SDK; captured prompt forwarded to gateway as both original prompt (per-model, /api/system-prompts/original) and session prompt (per-session, /api/system-prompts/session)
 - **Status Page** (`/status`): standalone HTML page showing gateway, agent, sessions, config, and original system prompts; auto-refreshes every 5s; links to session event pages and session prompt viewer
