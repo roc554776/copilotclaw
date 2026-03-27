@@ -367,3 +367,44 @@ copilotclaw --profile work doctor
 - ログにトークン値を出力しない
 - `tokenFile` 使用時はパーミッションチェック（0600 推奨）を doctor でチェック
 - `tokenCommand` 使用時はコマンドインジェクション対策（シェル展開を使わず `execFileSync` で実行）
+
+### 認証設定の名前空間移行（auth → auth.github）
+
+現在の `auth.*` を `auth.github.*` に移動し、GitHub の認証情報であることを明確にする。
+
+**移行前:**
+```json
+{
+  "auth": {
+    "type": "gh-auth",
+    "user": "my-work-account"
+  }
+}
+```
+
+**移行後:**
+```json
+{
+  "auth": {
+    "github": {
+      "type": "gh-auth",
+      "user": "my-work-account"
+    }
+  }
+}
+```
+
+この変更はスキーマの破壊的変更に該当するため、config migration を利用する:
+- `configVersion` をインクリメント（v1 → v2）
+- マイグレーション関数: `auth` の中身を `auth.github` に移動
+
+```typescript
+// v1 → v2: auth.* を auth.github.* に移動
+MIGRATIONS[1] = (config) => {
+  const { auth, ...rest } = config;
+  if (auth !== undefined) {
+    return { ...rest, auth: { github: auth }, configVersion: 2 };
+  }
+  return { ...config, configVersion: 2 };
+};
+```

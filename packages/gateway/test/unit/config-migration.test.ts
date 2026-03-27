@@ -26,7 +26,7 @@ describe("config migration", () => {
       expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
     });
 
-    it("preserves all existing fields during migration", () => {
+    it("preserves all existing fields during migration from v0", () => {
       const original = {
         port: 12345,
         upstream: "https://example.com",
@@ -40,7 +40,8 @@ describe("config migration", () => {
       expect(config["upstream"]).toBe("https://example.com");
       expect(config["model"]).toBe("gpt-4.1");
       expect(config["zeroPremium"]).toBe(true);
-      expect(config["auth"]).toEqual({ type: "gh-auth", user: "test-user" });
+      // v0→v1→v2: auth.* moved to auth.github.*
+      expect(config["auth"]).toEqual({ github: { type: "gh-auth", user: "test-user" } });
       expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
     });
 
@@ -48,6 +49,24 @@ describe("config migration", () => {
       const { config, migrated } = migrateConfig({});
       expect(migrated).toBe(true);
       expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
+    });
+
+    it("migrates v1 auth to auth.github (v1→v2)", () => {
+      const { config, migrated } = migrateConfig({
+        configVersion: 1,
+        auth: { type: "pat", tokenEnv: "MY_TOKEN" },
+      });
+      expect(migrated).toBe(true);
+      expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
+      expect(config["auth"]).toEqual({ github: { type: "pat", tokenEnv: "MY_TOKEN" } });
+    });
+
+    it("migrates v1 without auth (v1→v2, no auth field)", () => {
+      const { config, migrated } = migrateConfig({ configVersion: 1, port: 19741 });
+      expect(migrated).toBe(true);
+      expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
+      expect(config["auth"]).toBeUndefined();
+      expect(config["port"]).toBe(19741);
     });
 
     it("does not migrate when configVersion is above latest (future version)", () => {

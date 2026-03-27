@@ -23,6 +23,10 @@ export interface AuthConfig {
   tokenCommand?: string;
 }
 
+export interface AuthContainerConfig {
+  github?: AuthConfig;
+}
+
 export interface CopilotclawConfig {
   /** Schema version for config migration. Absent in legacy configs (treated as 0). */
   configVersion?: number;
@@ -31,11 +35,11 @@ export interface CopilotclawConfig {
   model?: string;
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
-  auth?: AuthConfig;
+  auth?: AuthContainerConfig;
 }
 
 /** Current schema version. Increment when a breaking config change is introduced. */
-export const LATEST_CONFIG_VERSION = 1;
+export const LATEST_CONFIG_VERSION = 2;
 
 /** Migration function type: transforms a raw config object from version N to N+1. */
 type MigrationFn = (config: Record<string, unknown>) => Record<string, unknown>;
@@ -48,6 +52,16 @@ type MigrationFn = (config: Record<string, unknown>) => Record<string, unknown>;
 const MIGRATIONS: Record<number, MigrationFn> = {
   // v0 → v1: Add configVersion field. No schema changes to existing fields.
   0: (config) => ({ ...config, configVersion: 1 }),
+  // v1 → v2: Move auth.* to auth.github.* (namespace clarification)
+  1: (config) => {
+    const auth = config["auth"] as Record<string, unknown> | undefined;
+    if (auth !== undefined && auth["type"] !== undefined) {
+      // auth has type field → it's a flat AuthConfig, wrap in { github: ... }
+      const { auth: _, ...rest } = config;
+      return { ...rest, auth: { github: auth }, configVersion: 2 };
+    }
+    return { ...config, configVersion: 2 };
+  },
 };
 
 /**
@@ -149,6 +163,7 @@ export function loadConfig(profile?: string): CopilotclawConfig {
 
   // Auth config is file-only (no env var override — secrets are resolved by the agent)
   if (fileConfig.auth !== undefined) result.auth = fileConfig.auth;
+  // Note: auth is now { github?: AuthConfig } after v1→v2 migration
 
   // Preserve configVersion from migrated file config
   if (fileConfig.configVersion !== undefined) result.configVersion = fileConfig.configVersion;

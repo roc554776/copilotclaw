@@ -124,7 +124,7 @@ describe("doctor", () => {
 
     it("returns fail when pat tokenEnv is not set", () => {
       delete process.env["NONEXISTENT_TOKEN_VAR"];
-      saveConfig({ auth: { type: "pat", tokenEnv: "NONEXISTENT_TOKEN_VAR" } });
+      saveConfig({ auth: { github: { type: "pat", tokenEnv: "NONEXISTENT_TOKEN_VAR" } } });
       const result = checkAuth();
       expect(result.result).toBe("fail");
       expect(result.message).toContain("NONEXISTENT_TOKEN_VAR");
@@ -132,28 +132,28 @@ describe("doctor", () => {
 
     it("returns pass when pat tokenEnv is set", () => {
       process.env["TEST_AUTH_TOKEN"] = "github_pat_test";
-      saveConfig({ auth: { type: "pat", tokenEnv: "TEST_AUTH_TOKEN" } });
+      saveConfig({ auth: { github: { type: "pat", tokenEnv: "TEST_AUTH_TOKEN" } } });
       const result = checkAuth();
       expect(result.result).toBe("pass");
       delete process.env["TEST_AUTH_TOKEN"];
     });
 
     it("returns fail when pat has no token source", () => {
-      saveConfig({ auth: { type: "pat" } });
+      saveConfig({ auth: { github: { type: "pat" } } });
       const result = checkAuth();
       expect(result.result).toBe("fail");
       expect(result.message).toContain("no tokenEnv");
     });
 
     it("returns pass for gh-auth with valid tokenCommand", () => {
-      saveConfig({ auth: { type: "gh-auth", tokenCommand: "echo test-token" } });
+      saveConfig({ auth: { github: { type: "gh-auth", tokenCommand: "echo test-token" } } });
       const result = checkAuth();
       expect(result.result).toBe("pass");
       expect(result.message).toContain("command");
     });
 
     it("returns fail for gh-auth with invalid tokenCommand", () => {
-      saveConfig({ auth: { type: "gh-auth", tokenCommand: "nonexistent-binary-xyz" } });
+      saveConfig({ auth: { github: { type: "gh-auth", tokenCommand: "nonexistent-binary-xyz" } } });
       const result = checkAuth();
       expect(result.result).toBe("fail");
       expect(result.message).toContain("failed");

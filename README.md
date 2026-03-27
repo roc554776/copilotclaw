@@ -127,28 +127,28 @@ Each profile can use different GitHub Copilot credentials. Configure via `auth` 
 
 ```sh
 # Use a specific GitHub account
-copilotclaw --profile work config set auth.type gh-auth
-copilotclaw --profile work config set auth.user my-work-account
+copilotclaw --profile work config set auth.github.type gh-auth
+copilotclaw --profile work config set auth.github.user my-work-account
 ```
 
 **Using a Fine-grained Personal Access Token:**
 
 ```sh
 export COPILOTCLAW_WORK_TOKEN="github_pat_xxxx..."
-copilotclaw --profile work config set auth.type pat
-copilotclaw --profile work config set auth.tokenEnv COPILOTCLAW_WORK_TOKEN
+copilotclaw --profile work config set auth.github.type pat
+copilotclaw --profile work config set auth.github.tokenEnv COPILOTCLAW_WORK_TOKEN
 ```
 
-When `auth` is not configured, the default Copilot CLI credentials are used.
+When `auth.github` is not configured, the default Copilot CLI credentials are used. Old configs with `auth.*` are automatically migrated to `auth.github.*`.
 
 | Auth key | Description |
 |:---|:---|
-| `auth.type` | `gh-auth` (gh CLI), `pat` (Personal Access Token) |
-| `auth.user` | GitHub username for `gh auth token --user` (gh-auth only) |
-| `auth.hostname` | GitHub hostname for `gh auth token --hostname` (gh-auth only) |
-| `auth.tokenEnv` | Environment variable containing the token (pat) |
-| `auth.tokenFile` | File path containing the token (pat) |
-| `auth.tokenCommand` | Custom command to obtain the token (any type, no spaces in paths) |
+| `auth.github.type` | `gh-auth` (gh CLI), `pat` (Personal Access Token) |
+| `auth.github.user` | GitHub username for `gh auth token --user` (gh-auth only) |
+| `auth.github.hostname` | GitHub hostname for `gh auth token --hostname` (gh-auth only) |
+| `auth.github.tokenEnv` | Environment variable containing the token (pat) |
+| `auth.github.tokenFile` | File path containing the token (pat) |
+| `auth.github.tokenCommand` | Custom command to obtain the token (any type, no spaces in paths) |
 
 ## Commands
 

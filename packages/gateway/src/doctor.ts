@@ -127,11 +127,12 @@ export function checkZeroPremium(): DiagnosticResult {
 
 export function checkAuth(): DiagnosticResult {
   const config = loadConfig(getProfileName());
-  if (config.auth === undefined) {
+  const githubAuth = config.auth?.github;
+  if (githubAuth === undefined) {
     return { name: "auth", result: "pass", message: "not configured (using default Copilot CLI auth)" };
   }
 
-  const auth: AuthConfig = config.auth;
+  const auth: AuthConfig = githubAuth;
 
   if (auth.type === "gh-auth") {
     if (auth.tokenCommand !== undefined) {
