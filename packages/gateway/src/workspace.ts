@@ -3,14 +3,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { getProfileName } from "./config.js";
 
-const BASE_DIR = join(homedir(), ".copilotclaw");
-
+/**
+ * State directory per profile (OpenClaw-style separation).
+ * Default profile: ~/.copilotclaw/
+ * Named profile:   ~/.copilotclaw-{{profile}}/
+ */
 export function getWorkspaceRoot(profile?: string): string {
   const p = profile ?? getProfileName();
   if (p !== undefined) {
-    return join(BASE_DIR, `workspace-${p}`);
+    return join(homedir(), `.copilotclaw-${p}`);
   }
-  return BASE_DIR;
+  return join(homedir(), ".copilotclaw");
 }
 
 export function getDataDir(profile?: string): string {

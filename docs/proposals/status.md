@@ -58,8 +58,9 @@
 - Workspace Bootstrap Files（SOUL.md, AGENTS.md, USER.md, TOOLS.md, MEMORY.md テンプレート生成 + setup 時の git init）
 - System prompt に SOUL.md 優先読み取り指示を追加
 
+- State ディレクトリの profile 分離（`~/.copilotclaw-{{profile}}/` 方式 — OpenClaw 準拠）
+
 **今後の課題:**
-- State ディレクトリの profile 分離（`~/.copilotclaw-{{profile}}/` 方式への移行 — OpenClaw 準拠）
 - Dashboard フロントエンドの vite + React 移行（server-side HTML テンプレート + inline JS → 型安全な JSX + コンポーネントテスト）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）
 - コーディング支援ツール群（ファイル操作・シェル実行・検索・Git）の実装

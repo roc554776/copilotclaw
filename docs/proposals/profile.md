@@ -2,8 +2,6 @@
 
 ## State ディレクトリの profile 分離
 
-<!-- TODO: 未実装 -->
-
 OpenClaw に合わせて、profile ごとに state ディレクトリ自体を分離する。
 
 **現在の方式:**

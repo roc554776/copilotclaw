@@ -2,7 +2,6 @@
 
 ### Req: State ディレクトリの profile 分離
 
-<!-- TODO: 未実装 — 現在は同一ベースディレクトリ内で suffix 分離。OpenClaw 方式の state ディレクトリ分離に変更が必要 -->
 
 OpenClaw に合わせて、profile ごとに state ディレクトリ自体を分離する。
 

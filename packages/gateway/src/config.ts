@@ -1,8 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-
-const BASE_DIR = join(homedir(), ".copilotclaw");
+import { dirname, join } from "node:path";
 
 export const DEFAULT_PORT = 19741;
 
@@ -24,10 +22,10 @@ export function getProfileName(): string | undefined {
 
 export function getConfigFilePath(profile?: string): string {
   const p = profile ?? getProfileName();
-  if (p !== undefined) {
-    return join(BASE_DIR, `config-${p}.json`);
-  }
-  return join(BASE_DIR, "config.json");
+  const root = p !== undefined
+    ? join(homedir(), `.copilotclaw-${p}`)
+    : join(homedir(), ".copilotclaw");
+  return join(root, "config.json");
 }
 
 function parsePort(raw: string): number | undefined {
@@ -101,7 +99,7 @@ export const CONFIG_ENV_VARS: Record<string, string> = {
 
 export function saveConfig(config: CopilotclawConfig, profile?: string): void {
   const filePath = getConfigFilePath(profile);
-  mkdirSync(BASE_DIR, { recursive: true });
+  mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
@@ -109,7 +107,7 @@ export function saveConfig(config: CopilotclawConfig, profile?: string): void {
 export function ensureConfigFile(profile?: string): void {
   const filePath = getConfigFilePath(profile);
   if (!existsSync(filePath)) {
-    mkdirSync(BASE_DIR, { recursive: true });
+    mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, "{}\n", "utf-8");
   }
 }

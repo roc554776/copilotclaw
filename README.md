@@ -117,7 +117,7 @@ COPILOTCLAW_PROFILE=staging copilotclaw setup
 COPILOTCLAW_PROFILE=staging copilotclaw start
 ```
 
-Each profile gets its own workspace, config, gateway, agent, and IPC socket.
+Each profile gets its own state directory (`~/.copilotclaw-staging/`), completely isolated from other profiles.
 
 ## Commands
 
@@ -135,7 +135,7 @@ copilotclaw agent stop           Stop the agent process only
 
 ## Data
 
-All persistent data is stored under `~/.copilotclaw/`:
+All persistent data is stored under `~/.copilotclaw/` (or `~/.copilotclaw-{{profile}}/` for named profiles):
 
 | Path | Purpose |
 |:---|:---|
