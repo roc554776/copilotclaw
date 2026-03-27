@@ -86,7 +86,7 @@ async function checkAgentCompatibility(port: number, waitForAgent = false): Prom
 }
 
 async function main(): Promise<void> {
-  const port = resolvePort();
+  const port = resolvePort(getProfileName());
   const forceAgentRestart = process.argv.includes("--force-agent-restart") || process.env["COPILOTCLAW_FORCE_AGENT_RESTART_FLAG"] === "1";
 
   if (forceAgentRestart) {

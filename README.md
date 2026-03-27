@@ -15,7 +15,13 @@ cd copilotclaw
 mise install
 pnpm install
 pnpm run build
-cd packages/cli && npm pack && npm install -g copilotclaw-*.tgz && rm copilotclaw-*.tgz && cd ../..
+node --input-type=module -e "
+  import { rewriteWorkspaceDeps } from './packages/gateway/dist/update.js';
+  import { resolve } from 'node:path';
+  rewriteWorkspaceDeps(resolve('packages/cli'), process.cwd());
+"
+npm install -g ./packages/cli
+git checkout packages/cli/package.json
 ```
 
 After installation, the `copilotclaw` command is available globally.
@@ -26,7 +32,11 @@ After installation, the `copilotclaw` command is available globally.
 copilotclaw setup
 ```
 
-This creates `~/.copilotclaw/` with the data directory and config file.
+This creates `~/.copilotclaw/` with:
+- Config file (`config.json`)
+- Data directory for channels and messages
+- Workspace files: `SOUL.md` (persona), `AGENTS.md` (operating guide), `USER.md`, `TOOLS.md`, `MEMORY.md`, `memory/`
+- Git repository (if git is available)
 
 ## Usage
 
@@ -46,11 +56,7 @@ Open the gateway URL shown at startup in your browser.
 - Use the "+" button to create additional channels for parallel conversations
 - Click the status bar for detailed status (gateway, agent, Copilot sessions, premium requests, models)
 - A typing indicator shows when the agent is processing
-- Agent responses appear in the chat automatically — even when the agent responds with text instead of using the send message tool
-- The agent periodically reinforces its critical operating instructions to maintain stability during long sessions
-- Custom agent architecture: channel-operator handles user interaction, worker handles delegated subtasks
-- Subagent completion notifications are delivered to the parent agent in real time
-- Sessions survive physical disconnections — the agent automatically resumes with conversation history intact
+- Sessions survive disconnections and agent restarts — conversations resume automatically
 
 ### Stop
 
@@ -104,37 +110,44 @@ Environment variables override config file values.
 
 ### Profiles
 
-Use `COPILOTCLAW_PROFILE` to run multiple independent instances:
+Use `--profile` to run multiple independent instances:
 
 ```sh
-COPILOTCLAW_PROFILE=staging copilotclaw setup
-COPILOTCLAW_PROFILE=staging copilotclaw start
+copilotclaw --profile staging setup
+copilotclaw --profile staging start
 ```
 
-Each profile gets its own workspace, config, gateway, agent, and IPC socket.
+Each profile gets its own state directory (`~/.copilotclaw-staging/`), completely isolated from other profiles. The `COPILOTCLAW_PROFILE` environment variable can also be used; `--profile` takes precedence.
 
 ## Commands
 
 ```
-copilotclaw setup                Initialize workspace
-copilotclaw start [options]      Start the gateway daemon
-copilotclaw stop                 Stop the gateway (agent keeps running)
-copilotclaw restart              Restart the gateway (stop + start)
-copilotclaw update               Update copilotclaw (git pull + build)
-copilotclaw config get <key>     Show config value
-copilotclaw config set <key> <v> Set config value
-copilotclaw doctor [--fix]       Diagnose environment
-copilotclaw agent stop           Stop the agent process only
+copilotclaw [--profile <name>] setup                Initialize workspace
+copilotclaw [--profile <name>] start [options]      Start the gateway daemon
+copilotclaw [--profile <name>] stop                 Stop the gateway
+copilotclaw [--profile <name>] restart              Restart the gateway
+copilotclaw [--profile <name>] update               Update copilotclaw
+copilotclaw [--profile <name>] config get <key>     Show config value
+copilotclaw [--profile <name>] config set <key> <v> Set config value
+copilotclaw [--profile <name>] doctor [--fix]       Diagnose environment
+copilotclaw [--profile <name>] agent stop           Stop the agent
 ```
 
 ## Data
 
-All persistent data is stored under `~/.copilotclaw/`:
+All persistent data is stored under `~/.copilotclaw/` (or `~/.copilotclaw-{{profile}}/` for named profiles):
 
 | Path | Purpose |
 |:---|:---|
 | `config.json` | Configuration |
 | `data/store.json` | Channels and message history |
+| `data/agent-bindings.json` | Agent session bindings (survives agent restarts) |
+| `SOUL.md` | Agent persona and tone (user-customizable) |
+| `AGENTS.md` | Agent operating guide (user-customizable) |
+| `USER.md` | User information |
+| `TOOLS.md` | Local tool notes |
+| `MEMORY.md` | Agent long-term memory |
+| `memory/` | Daily memory logs (`YYYY-MM-DD.md`) |
 
 ## Contributing
 

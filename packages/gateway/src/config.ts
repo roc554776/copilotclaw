@@ -1,8 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-
-const BASE_DIR = join(homedir(), ".copilotclaw");
+import { dirname, join } from "node:path";
 
 export const DEFAULT_PORT = 19741;
 
@@ -22,12 +20,18 @@ export function getProfileName(): string | undefined {
   return process.env["COPILOTCLAW_PROFILE"] || undefined;
 }
 
-export function getConfigFilePath(profile?: string): string {
+/** Resolve the state directory for a given profile.
+ *  Shared logic used by both config.ts and workspace.ts to avoid circular imports. */
+export function getStateDir(profile?: string): string {
   const p = profile ?? getProfileName();
   if (p !== undefined) {
-    return join(BASE_DIR, `config-${p}.json`);
+    return join(homedir(), `.copilotclaw-${p}`);
   }
-  return join(BASE_DIR, "config.json");
+  return join(homedir(), ".copilotclaw");
+}
+
+export function getConfigFilePath(profile?: string): string {
+  return join(getStateDir(profile), "config.json");
 }
 
 function parsePort(raw: string): number | undefined {
@@ -101,7 +105,7 @@ export const CONFIG_ENV_VARS: Record<string, string> = {
 
 export function saveConfig(config: CopilotclawConfig, profile?: string): void {
   const filePath = getConfigFilePath(profile);
-  mkdirSync(BASE_DIR, { recursive: true });
+  mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
@@ -109,7 +113,7 @@ export function saveConfig(config: CopilotclawConfig, profile?: string): void {
 export function ensureConfigFile(profile?: string): void {
   const filePath = getConfigFilePath(profile);
   if (!existsSync(filePath)) {
-    mkdirSync(BASE_DIR, { recursive: true });
+    mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, "{}\n", "utf-8");
   }
 }

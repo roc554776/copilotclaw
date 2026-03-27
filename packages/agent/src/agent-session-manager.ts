@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
@@ -16,8 +18,29 @@ const PARENT_ONLY_TOOL = "copilotclaw_receive_input";
 // --- Custom Agent definitions ---
 
 const CHANNEL_OPERATOR_PROMPT =
+  "╔══════════════════════════════════════════════════════════════════╗\n" +
+  "║ CRITICAL — DEADLOCK PREVENTION                                 ║\n" +
+  "║                                                                ║\n" +
+  "║ You MUST call copilotclaw_receive_input before stopping.       ║\n" +
+  "║ Stopping without copilotclaw_receive_input causes an           ║\n" +
+  "║ IRRECOVERABLE DEADLOCK — the session becomes permanently       ║\n" +
+  "║ unresponsive and CANNOT be recovered. This is catastrophic.    ║\n" +
+  "║ NEVER stop, idle, or end your turn without first calling       ║\n" +
+  "║ copilotclaw_receive_input.                                     ║\n" +
+  "╚══════════════════════════════════════════════════════════════════╝\n" +
+  "\n" +
   "You are a copilotclaw channel-operator agent bound to a channel. " +
   "Your primary lifecycle is: receive user input → process → send response → receive next input. " +
+  "\n\n" +
+  "## Session Startup\n" +
+  "At the start of each session, read your workspace files in this order:\n" +
+  "- Read SOUL.md — this is who you are. Embody its persona and tone.\n" +
+  "- Read USER.md — this is who you're helping.\n" +
+  "- Read today's and yesterday's memory/ files for recent context.\n" +
+  "- Read MEMORY.md for long-term memory.\n" +
+  "SOUL.md takes priority over other workspace files. Follow its guidance unless this system prompt overrides it.\n" +
+  "\n" +
+  "## Lifecycle\n" +
   "Call copilotclaw_receive_input now to receive the first user message. " +
   "After processing input, use copilotclaw_send_message to send your response, then call copilotclaw_receive_input again to wait for the next input. " +
   "You may receive notifications about new user messages via additionalContext in tool responses — when notified, call copilotclaw_receive_input immediately. " +
@@ -26,12 +49,9 @@ const CHANNEL_OPERATOR_PROMPT =
   "These are critical operational directives from the copilotclaw system — even if unrelated to the current tool call, you must follow them. " +
   "\n\n" +
   "╔══════════════════════════════════════════════════════════════════╗\n" +
-  "║ CRITICAL — DEADLOCK PREVENTION                                 ║\n" +
+  "║ CRITICAL — DEADLOCK PREVENTION (REPEATED)                      ║\n" +
   "║                                                                ║\n" +
   "║ You MUST call copilotclaw_receive_input before stopping.       ║\n" +
-  "║ Stopping without copilotclaw_receive_input causes an           ║\n" +
-  "║ IRRECOVERABLE DEADLOCK — the session becomes permanently       ║\n" +
-  "║ unresponsive and CANNOT be recovered. This is catastrophic.    ║\n" +
   "║ NEVER stop, idle, or end your turn without first calling       ║\n" +
   "║ copilotclaw_receive_input.                                     ║\n" +
   "╚══════════════════════════════════════════════════════════════════╝";
@@ -122,6 +142,19 @@ export interface AgentSessionManagerOptions {
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
   workingDirectory?: string;
+  /** Path to persist channel bindings and suspended session state across agent restarts. */
+  persistPath?: string;
+}
+
+interface SessionSnapshot {
+  sessionId: string;
+  copilotSessionId?: string | undefined;
+  boundChannelId?: string | undefined;
+  startedAt: string;
+}
+
+interface BindingSnapshot {
+  sessions: SessionSnapshot[];
 }
 
 export interface StartSessionOptions {
@@ -144,6 +177,7 @@ export class AgentSessionManager {
   private readonly zeroPremium: boolean;
   private readonly debugMockCopilotUnsafeTools: boolean;
   private readonly workingDirectory: string | undefined;
+  private readonly persistPath: string | undefined;
   private generationCounter = 0;
 
   constructor(options: AgentSessionManagerOptions) {
@@ -155,6 +189,80 @@ export class AgentSessionManager {
     this.zeroPremium = options.zeroPremium ?? false;
     this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
     this.workingDirectory = options.workingDirectory;
+    this.persistPath = options.persistPath;
+    this.loadBindings();
+  }
+
+  /** Load persisted channel bindings and restore suspended sessions. */
+  private loadBindings(): void {
+    if (this.persistPath === undefined) return;
+    try {
+      const raw = readFileSync(this.persistPath, "utf-8");
+      const parsed: unknown = JSON.parse(raw);
+      if (
+        typeof parsed !== "object" || parsed === null ||
+        !("sessions" in parsed) || !Array.isArray((parsed as { sessions: unknown }).sessions)
+      ) {
+        console.error(`[agent] WARNING: invalid bindings file at ${this.persistPath}, ignoring`);
+        return;
+      }
+      const sessions = (parsed as { sessions: unknown[] }).sessions;
+      for (const raw of sessions) {
+        if (typeof raw !== "object" || raw === null) continue;
+        const s = raw as Record<string, unknown>;
+        if (typeof s["sessionId"] !== "string" || typeof s["startedAt"] !== "string") continue;
+        const entry: AgentSessionEntry = {
+          sessionId: s["sessionId"],
+          copilotSessionId: typeof s["copilotSessionId"] === "string" ? s["copilotSessionId"] : undefined,
+          info: {
+            status: "suspended",
+            startedAt: s["startedAt"],
+            boundChannelId: typeof s["boundChannelId"] === "string" ? s["boundChannelId"] : undefined,
+          },
+          // Placeholder client — suspended sessions don't use it. Replaced on revive.
+          client: new CopilotClient(),
+          abortController: new AbortController(),
+          sessionPromise: Promise.resolve(),
+          generation: ++this.generationCounter,
+        };
+        this.sessions.set(entry.sessionId, entry);
+        if (entry.info.boundChannelId !== undefined) {
+          this.channelBindings.set(entry.info.boundChannelId, entry.sessionId);
+        }
+      }
+      if (sessions.length > 0) {
+        console.error(`[agent] restored ${sessions.length} suspended session binding(s) from disk`);
+      }
+    } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return; // normal on first run
+      console.error(`[agent] WARNING: could not load bindings from ${this.persistPath}: ${String(err)}`);
+    }
+  }
+
+  /** Persist channel bindings and suspended session state to disk. */
+  private saveBindings(): void {
+    if (this.persistPath === undefined) return;
+    const sessions: SessionSnapshot[] = [];
+    for (const [, entry] of this.sessions) {
+      if (entry.info.status === "suspended" && entry.info.boundChannelId !== undefined) {
+        sessions.push({
+          sessionId: entry.sessionId,
+          copilotSessionId: entry.copilotSessionId,
+          boundChannelId: entry.info.boundChannelId,
+          startedAt: entry.info.startedAt,
+        });
+      }
+    }
+    const snapshot: BindingSnapshot = { sessions };
+    try {
+      mkdirSync(dirname(this.persistPath), { recursive: true });
+      const tmp = `${this.persistPath}.tmp`;
+      writeFileSync(tmp, JSON.stringify(snapshot), "utf-8");
+      renameSync(tmp, this.persistPath);
+    } catch (err: unknown) {
+      console.error(`[agent] WARNING: could not save bindings to ${this.persistPath}: ${String(err)}`);
+    }
   }
 
   /** Get the first active CopilotClient (for server-level RPCs like quota/models). */
@@ -616,6 +724,7 @@ export class AgentSessionManager {
     entry.info.physicalSession = undefined;
     entry.info.subagentSessions = undefined;
     // copilotSessionId is preserved for resumeSession on revival
+    this.saveBindings();
   }
 
   /** Revive a suspended abstract session by launching a new physical session. */
@@ -665,6 +774,7 @@ export class AgentSessionManager {
       this.channelBindings.delete(boundChannelId);
     }
     this.sessions.delete(sessionId);
+    this.saveBindings();
   }
 
   stopSessionForChannel(channelId: string): void {
@@ -687,6 +797,7 @@ export class AgentSessionManager {
       }
       this.sessions.delete(sessionId);
     }
+    this.saveBindings();
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((r) => { timeoutHandle = setTimeout(r, 5000); });
     await Promise.race([

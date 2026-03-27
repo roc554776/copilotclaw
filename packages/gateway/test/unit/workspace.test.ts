@@ -6,10 +6,10 @@ describe("workspace paths", () => {
     delete process.env["COPILOTCLAW_PROFILE"];
   });
 
-  it("getWorkspaceRoot returns a path under home directory", () => {
+  it("getWorkspaceRoot returns default state dir for no profile", () => {
     const root = getWorkspaceRoot();
-    expect(root).toContain(".copilotclaw");
-    expect(root).not.toContain("workspace-");
+    expect(root).toMatch(/\.copilotclaw$/);
+    expect(root).not.toContain(".copilotclaw-");
   });
 
   it("getDataDir returns a path under workspace root", () => {
@@ -24,33 +24,33 @@ describe("workspace paths", () => {
     expect(storePath).toContain("data");
   });
 
-  it("getWorkspaceRoot with explicit profile returns profile-suffixed path", () => {
+  it("getWorkspaceRoot with profile returns separate state dir (.copilotclaw-{{profile}})", () => {
     const root = getWorkspaceRoot("staging");
-    expect(root).toContain("workspace-staging");
+    expect(root).toContain(".copilotclaw-staging");
   });
 
   it("getWorkspaceRoot reads COPILOTCLAW_PROFILE env var", () => {
     process.env["COPILOTCLAW_PROFILE"] = "dev";
     const root = getWorkspaceRoot();
-    expect(root).toContain("workspace-dev");
+    expect(root).toContain(".copilotclaw-dev");
   });
 
   it("explicit profile parameter overrides env var", () => {
     process.env["COPILOTCLAW_PROFILE"] = "dev";
     const root = getWorkspaceRoot("prod");
-    expect(root).toContain("workspace-prod");
-    expect(root).not.toContain("workspace-dev");
+    expect(root).toContain(".copilotclaw-prod");
+    expect(root).not.toContain(".copilotclaw-dev");
   });
 
   it("getDataDir with profile returns profile-scoped data dir", () => {
     const dataDir = getDataDir("test");
-    expect(dataDir).toContain("workspace-test");
+    expect(dataDir).toContain(".copilotclaw-test");
     expect(dataDir).toContain("data");
   });
 
   it("getStoreFilePath with profile returns profile-scoped store path", () => {
     const storePath = getStoreFilePath("test");
-    expect(storePath).toContain("workspace-test");
+    expect(storePath).toContain(".copilotclaw-test");
     expect(storePath).toContain("store.json");
   });
 });

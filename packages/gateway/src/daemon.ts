@@ -1,5 +1,5 @@
 import { AgentManager } from "./agent-manager.js";
-import { resolvePort } from "./config.js";
+import { getProfileName, resolvePort } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
 import { startServer } from "./server.js";
 import { Store } from "./store.js";
@@ -11,11 +11,11 @@ const AGENT_MONITOR_ERROR_THRESHOLD = 3;
 async function main(): Promise<void> {
   const forceAgentRestart = process.env["COPILOTCLAW_FORCE_AGENT_RESTART"] === "1";
 
-  ensureWorkspace();
+  ensureWorkspace(getProfileName());
   const logBuffer = new LogBuffer();
   logBuffer.interceptConsole();
-  const store = new Store({ persistPath: getStoreFilePath() });
-  const port = resolvePort();
+  const store = new Store({ persistPath: getStoreFilePath(getProfileName()) });
+  const port = resolvePort(getProfileName());
   const agentManager = new AgentManager({ gatewayPort: port });
 
   // Always ensure agent process on gateway start (version check + spawn if absent)

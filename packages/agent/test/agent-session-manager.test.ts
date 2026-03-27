@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock @github/copilot-sdk before importing the module under test.
 // CopilotClient is used with `new`, so we use a vi.fn() that is a constructor.
@@ -388,6 +391,93 @@ describe("AgentSessionManager — suspended session revival", () => {
     // Fully removed — not just suspended
     expect(manager.getSessionStatuses()[sessionId]).toBeUndefined();
     expect(manager.hasSessionForChannel("ch-explicit-stop")).toBe(false);
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+});
+
+describe("AgentSessionManager — binding persistence", () => {
+  let tmpDir: string;
+  let persistPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-test-"));
+    persistPath = join(tmpDir, "agent-bindings.json");
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("persists suspended session bindings (including copilotSessionId) and restores on new manager", async () => {
+    installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-persist" });
+    await wait(50); // session idles → suspended → saved to disk
+
+    // Verify file was written with copilotSessionId
+    const raw = readFileSync(persistPath, "utf-8");
+    const snapshot = JSON.parse(raw) as { sessions: Array<{ sessionId: string; boundChannelId: string; copilotSessionId?: string }> };
+    expect(snapshot.sessions).toHaveLength(1);
+    expect(snapshot.sessions[0]!.sessionId).toBe(sessionId);
+    expect(snapshot.sessions[0]!.boundChannelId).toBe("ch-persist");
+    expect(snapshot.sessions[0]!.copilotSessionId).toBe("mock-sdk-session");
+
+    // Create a new manager from the same persist file — simulates agent restart
+    installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+    const manager2 = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    // Channel binding should be restored
+    expect(manager2.hasSessionForChannel("ch-persist")).toBe(true);
+    expect(manager2.hasActiveSessionForChannel("ch-persist")).toBe(false);
+
+    // Session should be in suspended state
+    const statuses = manager2.getSessionStatuses();
+    const restored = Object.values(statuses).find((s) => s.boundChannelId === "ch-persist");
+    expect(restored?.status).toBe("suspended");
+  });
+
+  it("removes binding from persist file on explicit stopSession", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-persist-stop" });
+    await waitForPhysicalSession(manager);
+
+    manager.stopSession(sessionId);
+    await wait(30);
+
+    // Persist file should have no sessions
+    const raw = readFileSync(persistPath, "utf-8");
+    const snapshot = JSON.parse(raw) as { sessions: unknown[] };
+    expect(snapshot.sessions).toHaveLength(0);
 
     mockSession.emit("session.idle");
     await wait(30);

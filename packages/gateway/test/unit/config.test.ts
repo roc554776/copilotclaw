@@ -17,17 +17,19 @@ describe("config", () => {
     expect(path).not.toContain("config-");
   });
 
-  it("getConfigFilePath returns profile-suffixed path", async () => {
+  it("getConfigFilePath returns config.json inside profile state dir", async () => {
     const { getConfigFilePath } = await import("../../src/config.js");
     const path = getConfigFilePath("staging");
-    expect(path).toContain("config-staging.json");
+    expect(path).toContain(".copilotclaw-staging");
+    expect(path).toMatch(/config\.json$/);
   });
 
   it("getConfigFilePath reads COPILOTCLAW_PROFILE env var", async () => {
     process.env["COPILOTCLAW_PROFILE"] = "prod";
     const { getConfigFilePath } = await import("../../src/config.js");
     const path = getConfigFilePath();
-    expect(path).toContain("config-prod.json");
+    expect(path).toContain(".copilotclaw-prod");
+    expect(path).toMatch(/config\.json$/);
   });
 
   it("loadConfig returns empty config when file does not exist", async () => {

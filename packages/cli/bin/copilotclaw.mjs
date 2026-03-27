@@ -10,12 +10,30 @@ if (nodeVersion[0] < 20) {
 }
 
 const args = process.argv.slice(2);
+
+// Parse --profile before command routing (applies to all commands).
+// --profile overrides COPILOTCLAW_PROFILE env var. First occurrence wins.
+const profileIdx = args.indexOf("--profile");
+if (profileIdx !== -1) {
+  const profileValue = args[profileIdx + 1];
+  if (!profileValue || profileValue.startsWith("-")) {
+    console.error("Error: --profile requires a <name> argument");
+    process.exit(1);
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(profileValue)) {
+    console.error(`Error: invalid profile name "${profileValue}" (must be alphanumeric, underscore, or dash)`);
+    process.exit(1);
+  }
+  process.env.COPILOTCLAW_PROFILE = profileValue;
+  args.splice(profileIdx, 2);
+}
+
 const command = args[0];
 
 const USAGE = `Usage: copilotclaw <command> [options]
 
 Commands:
-  setup                Initialize workspace (~/.copilotclaw/)
+  setup                Initialize workspace
   start [options]      Start the gateway daemon
   stop                 Stop the gateway (agent keeps running)
   restart              Restart the gateway (stop + start)
@@ -24,6 +42,9 @@ Commands:
   config set <key> <v> Set config value
   doctor [--fix]       Diagnose environment (fix issues with --fix)
   agent stop           Stop the agent process only
+
+Global options:
+  --profile <name>       Use a named profile (overrides COPILOTCLAW_PROFILE)
 
 Start options:
   --force-agent-restart  Stop outdated agent before starting
