@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getConfigFilePath, saveConfig } from "../../src/config.js";
 import { checkAuth, checkConfig, checkWorkspace, checkZeroPremium, runDoctor } from "../../src/doctor.js";
@@ -56,20 +56,23 @@ describe("doctor", () => {
       expect(result.result).toBe("warn");
     });
 
-    it("returns warn for missing configVersion", () => {
+    it("auto-migrates config with missing configVersion and returns pass", () => {
       saveConfig({});
       writeFileSync(getConfigFilePath(), JSON.stringify({ port: 19741 }), "utf-8");
       const result = checkConfig();
-      expect(result.result).toBe("warn");
-      expect(result.message).toContain("missing configVersion");
+      expect(result.result).toBe("pass");
+      // Verify the file was migrated
+      const onDisk = JSON.parse(readFileSync(getConfigFilePath(), "utf-8")) as Record<string, unknown>;
+      expect(onDisk["configVersion"]).toBe(2);
     });
 
-    it("returns warn for outdated configVersion", () => {
+    it("auto-migrates config with outdated configVersion and returns pass", () => {
       saveConfig({});
       writeFileSync(getConfigFilePath(), JSON.stringify({ configVersion: 0, port: 19741 }), "utf-8");
       const result = checkConfig();
-      expect(result.result).toBe("warn");
-      expect(result.message).toContain("auto-migrated");
+      expect(result.result).toBe("pass");
+      const onDisk = JSON.parse(readFileSync(getConfigFilePath(), "utf-8")) as Record<string, unknown>;
+      expect(onDisk["configVersion"]).toBe(2);
     });
 
     it("returns warn for malformed JSON config", () => {

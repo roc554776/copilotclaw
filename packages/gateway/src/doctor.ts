@@ -39,24 +39,31 @@ export function checkConfig(): DiagnosticResult {
     return { name: "config", result: "warn", message: `config file missing: ${configPath}`, fixable: true };
   }
 
-  // Parse raw file to detect malformed JSON (loadFileConfig silently swallows errors)
-  let config: Record<string, unknown>;
+  // Parse raw file to detect malformed JSON before attempting migration
   try {
-    config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+    JSON.parse(readFileSync(configPath, "utf-8"));
   } catch {
     return { name: "config", result: "warn", message: `config file is malformed: ${configPath}` };
   }
 
-  // Check configVersion
+  // Apply migration if needed by calling loadConfig (triggers migration + write-back).
+  // Then re-read the (possibly migrated) file for structural validation.
+  loadConfig(getProfileName());
+
+  let config: Record<string, unknown>;
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return { name: "config", result: "warn", message: `config file is malformed after migration: ${configPath}` };
+  }
+
+  // Check configVersion (post-migration)
   const version = config["configVersion"];
   if (version === undefined) {
-    return { name: "config", result: "warn", message: `config file missing configVersion (will be auto-migrated on next load)` };
+    return { name: "config", result: "warn", message: `config file missing configVersion` };
   }
   if (typeof version !== "number" || version > LATEST_CONFIG_VERSION) {
     return { name: "config", result: "warn", message: `unexpected configVersion: ${String(version)} (latest: ${LATEST_CONFIG_VERSION})` };
-  }
-  if (version < LATEST_CONFIG_VERSION) {
-    return { name: "config", result: "warn", message: `config file at v${version} (latest: v${LATEST_CONFIG_VERSION}, will be auto-migrated on next load)` };
   }
 
   // Validate port if set
