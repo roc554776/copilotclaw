@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.18.0 | Token estimate: ~1600 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.19.0 | Token estimate: ~1600 -->
 
 # Architecture
 
@@ -76,6 +76,12 @@ Environment variables:
 - **Worker**: subagent available for task delegation (infer:true); can only access `copilotclaw_send_message` and `copilotclaw_list_messages` (never receives `copilotclaw_receive_input`); started by parent agent via subagent dispatch
 - Session begins with `agent: "channel-operator"` configuration; custom agent definitions passed to SDK createSession/resumeSession
 
+## System Prompt (v0.19.0+)
+
+- **CHANNEL_OPERATOR_PROMPT**: includes deadlock prevention at start and end, session startup section instructing agent to read SOUL.md (priority), USER.md, memory/ (daily files), and MEMORY.md for context
+- **Session Startup**: agent reads workspace bootstrap files in order: SOUL.md (persona), USER.md (user context), memory/YYYY-MM-DD.md files (recent sessions), MEMORY.md (long-term memory)
+- **SYSTEM_REMINDER**: periodic deadlock prevention reinforcement via additionalContext
+
 ## Subagent Completion Notification (v0.16.0+)
 
 - SDK events `subagent.completed` and `subagent.failed` push completion info (agentName, status, totalTokens, durationMs, error) to a completion queue
@@ -93,7 +99,7 @@ Environment variables:
 - **Suspension via checkSessionMaxAge**: if "waiting" session exceeds 2 days (default, configurable), suspend and save copilotSessionId for resume
 - **Revival via reviveSession**: suspended sessions auto-revive with new physical session when triggered (e.g., user message arrives for the channel); same abstract sessionId reused, copilotSessionId preserved for resumeSession
 - **Auto-revival in polling**: startSession auto-detects suspended sessions for a channel via hasActiveSessionForChannel; if suspended, revives with saved copilotSessionId
-- **Binding Persistence (v0.18.0)**: AgentSessionManager optionally accepts `persistPath` option; suspended sessions with channel bindings persisted to disk via `agent-bindings.json` using atomic write (tmp → rename); `loadBindings()` called in constructor restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries
+- **Binding Persistence (v0.18.0+)**: AgentSessionManager accepts optional `persistPath` option (defaults to {{workspaceRoot}}/data/agent-bindings.json); suspended sessions with channel bindings persisted to disk via atomic write (tmp → rename); `loadBindings()` called in constructor (line 192) restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries; `saveBindings()` called on suspendSession and stopSession; SessionSnapshot and BindingSnapshot types define persist format
 - **savedCopilotSessionIds map**: no longer the primary resume mechanism — copilotSessionId lives on the suspended entry; map kept for potential compatibility
 - **Channel notifications**: session stopped (unexpected end) and session timed out (stale processing) post system messages to bound channel
 
