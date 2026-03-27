@@ -1,6 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { MIN_AGENT_VERSION, semverSatisfies } from "./agent-manager.js";
-import { NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, resolvePort } from "./config.js";
+import { type AuthConfig, NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, resolvePort } from "./config.js";
 import { getAgentStatus } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
@@ -112,6 +113,55 @@ export function checkZeroPremium(): DiagnosticResult {
   return { name: "zero-premium", result: "pass", message: `enabled (model: ${config.model ?? NON_PREMIUM_MODELS[0]})` };
 }
 
+export function checkAuth(): DiagnosticResult {
+  const config = loadConfig(getProfileName());
+  if (config.auth === undefined) {
+    return { name: "auth", result: "pass", message: "not configured (using default Copilot CLI auth)" };
+  }
+
+  const auth: AuthConfig = config.auth;
+
+  if (auth.type === "gh-auth") {
+    // Check tokenCommand or gh CLI availability
+    if (auth.tokenCommand !== undefined) {
+      return { name: "auth", result: "pass", message: `gh-auth via custom command` };
+    }
+    try {
+      const args = ["auth", "token"];
+      if (auth.user !== undefined) args.push("--user", auth.user);
+      if (auth.hostname !== undefined) args.push("--hostname", auth.hostname);
+      execFileSync("gh", args, { encoding: "utf-8", timeout: 5000 });
+      const detail = auth.user !== undefined ? ` (user: ${auth.user})` : "";
+      return { name: "auth", result: "pass", message: `gh-auth${detail}` };
+    } catch {
+      const detail = auth.user !== undefined ? ` --user ${auth.user}` : "";
+      return { name: "auth", result: "fail", message: `gh auth token${detail} failed — run "gh auth login" first` };
+    }
+  }
+
+  if (auth.type === "pat" || auth.type === "oauth") {
+    if (auth.tokenCommand !== undefined) {
+      return { name: "auth", result: "pass", message: `${auth.type} via custom command` };
+    }
+    if (auth.tokenEnv !== undefined) {
+      const val = process.env[auth.tokenEnv];
+      if (val === undefined || val === "") {
+        return { name: "auth", result: "fail", message: `${auth.type}: env var "${auth.tokenEnv}" is not set` };
+      }
+      return { name: "auth", result: "pass", message: `${auth.type} via env ${auth.tokenEnv}` };
+    }
+    if (auth.tokenFile !== undefined) {
+      if (!existsSync(auth.tokenFile)) {
+        return { name: "auth", result: "fail", message: `${auth.type}: token file not found: ${auth.tokenFile}` };
+      }
+      return { name: "auth", result: "pass", message: `${auth.type} via file ${auth.tokenFile}` };
+    }
+    return { name: "auth", result: "fail", message: `${auth.type}: no tokenEnv, tokenFile, or tokenCommand configured` };
+  }
+
+  return { name: "auth", result: "warn", message: `unknown auth type: ${String(auth.type)}` };
+}
+
 export function fixWorkspace(): boolean {
   try {
     ensureWorkspace(getProfileName());
@@ -148,6 +198,7 @@ export async function runDoctor(fix: boolean): Promise<boolean> {
   results.push(checkWorkspace());
   results.push(checkConfig());
   results.push(checkZeroPremium());
+  results.push(checkAuth());
 
   // Async checks
   results.push(await checkGateway());

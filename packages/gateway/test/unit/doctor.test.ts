@@ -1,7 +1,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getConfigFilePath, saveConfig } from "../../src/config.js";
-import { checkConfig, checkWorkspace, checkZeroPremium, runDoctor } from "../../src/doctor.js";
+import { checkAuth, checkConfig, checkWorkspace, checkZeroPremium, runDoctor } from "../../src/doctor.js";
 import { ensureWorkspace, getDataDir } from "../../src/workspace.js";
 
 describe("doctor", () => {
@@ -95,6 +95,45 @@ describe("doctor", () => {
       saveConfig({ zeroPremium: true });
       const result = checkZeroPremium();
       expect(result.result).toBe("pass");
+    });
+  });
+
+  describe("checkAuth", () => {
+    it("returns pass when auth is not configured", () => {
+      saveConfig({});
+      const result = checkAuth();
+      expect(result.result).toBe("pass");
+      expect(result.message).toContain("not configured");
+    });
+
+    it("returns fail when pat tokenEnv is not set", () => {
+      delete process.env["NONEXISTENT_TOKEN_VAR"];
+      saveConfig({ auth: { type: "pat", tokenEnv: "NONEXISTENT_TOKEN_VAR" } });
+      const result = checkAuth();
+      expect(result.result).toBe("fail");
+      expect(result.message).toContain("NONEXISTENT_TOKEN_VAR");
+    });
+
+    it("returns pass when pat tokenEnv is set", () => {
+      process.env["TEST_AUTH_TOKEN"] = "github_pat_test";
+      saveConfig({ auth: { type: "pat", tokenEnv: "TEST_AUTH_TOKEN" } });
+      const result = checkAuth();
+      expect(result.result).toBe("pass");
+      delete process.env["TEST_AUTH_TOKEN"];
+    });
+
+    it("returns fail when pat has no token source", () => {
+      saveConfig({ auth: { type: "pat" } });
+      const result = checkAuth();
+      expect(result.result).toBe("fail");
+      expect(result.message).toContain("no tokenEnv");
+    });
+
+    it("returns pass for gh-auth with tokenCommand", () => {
+      saveConfig({ auth: { type: "gh-auth", tokenCommand: "echo test" } });
+      const result = checkAuth();
+      expect(result.result).toBe("pass");
+      expect(result.message).toContain("custom command");
     });
   });
 

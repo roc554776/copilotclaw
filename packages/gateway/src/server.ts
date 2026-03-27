@@ -124,6 +124,7 @@ function createRequestHandler(
           zeroPremium: config.zeroPremium ?? false,
           debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
           workspaceRoot: getWorkspaceRoot(getProfileName()),
+          auth: config.auth !== undefined ? { type: config.auth.type, user: config.auth.user } : null,
         },
       });
       return;

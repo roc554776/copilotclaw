@@ -44,7 +44,8 @@
       "Bash(pnpm -r run typecheck)",
       "Bash(pnpm --filter @copilotclaw/agent run typecheck)",
       "Bash(npm run:*)",
-      "Bash(npx vitest:*)"
+      "Bash(npx vitest:*)",
+      "Bash(pnpm -r run test)"
     ]
   }
 }

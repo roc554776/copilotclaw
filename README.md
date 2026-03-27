@@ -119,6 +119,37 @@ copilotclaw --profile staging start
 
 Each profile gets its own state directory (`~/.copilotclaw-staging/`), completely isolated from other profiles. The `COPILOTCLAW_PROFILE` environment variable can also be used; `--profile` takes precedence.
 
+### Profile Authentication
+
+Each profile can use different GitHub Copilot credentials. Configure via `auth` in `config.json`.
+
+**Using gh CLI authentication:**
+
+```sh
+# Use a specific GitHub account
+copilotclaw --profile work config set auth.type gh-auth
+copilotclaw --profile work config set auth.user my-work-account
+```
+
+**Using a Fine-grained Personal Access Token:**
+
+```sh
+export COPILOTCLAW_WORK_TOKEN="github_pat_xxxx..."
+copilotclaw --profile work config set auth.type pat
+copilotclaw --profile work config set auth.tokenEnv COPILOTCLAW_WORK_TOKEN
+```
+
+When `auth` is not configured, the default Copilot CLI credentials are used.
+
+| Auth key | Description |
+|:---|:---|
+| `auth.type` | `gh-auth` (gh CLI), `pat` (Personal Access Token) |
+| `auth.user` | GitHub username for `gh auth token --user` (gh-auth only) |
+| `auth.hostname` | GitHub hostname for `gh auth token --hostname` (gh-auth only) |
+| `auth.tokenEnv` | Environment variable containing the token (pat) |
+| `auth.tokenFile` | File path containing the token (pat) |
+| `auth.tokenCommand` | Custom command to obtain the token (any type) |
+
 ## Commands
 
 ```

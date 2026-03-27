@@ -66,7 +66,10 @@
 - セッション失敗時のバックオフ（30秒未満の即時失敗で60秒バックオフ、ポーリングループでスキップ）
 - エラー詳細のユーザー通知（"stopped unexpectedly: {{reason}}" 形式でエラー理由を表示）
 
+- Profile ごとの認証情報設定（gh auth + PAT 対応。config に auth 設定、tokenEnv/tokenFile/tokenCommand でシークレット間接参照、doctor チェック）
+
 **今後の課題:**
+- Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
 - OpenTelemetry 導入（構造化ログ基盤は実装済み、OTel ログブリッジへの移行が残）
 - Dashboard フロントエンドの vite + React 移行（server-side HTML テンプレート + inline JS → 型安全な JSX + コンポーネントテスト）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）

@@ -3,6 +3,7 @@ import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-se
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { listenIpc } from "./ipc-server.js";
 import { StructuredLogger } from "./structured-logger.js";
+import { type AuthConfig, resolveToken } from "./token-resolver.js";
 
 const GATEWAY_URL = process.env["COPILOTCLAW_GATEWAY_URL"] ?? "http://localhost:19741";
 const POLL_INTERVAL_MS = 5000;
@@ -12,6 +13,7 @@ interface GatewayConfig {
   zeroPremium: boolean;
   debugMockCopilotUnsafeTools: boolean;
   workspaceRoot: string | null;
+  auth: { type: string; user?: string } | null;
 }
 
 let structuredLogger: StructuredLogger | undefined;
@@ -36,7 +38,7 @@ async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
   } catch (err: unknown) {
     log(`failed to fetch gateway config: ${String(err)}`);
   }
-  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, workspaceRoot: null };
+  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, workspaceRoot: null, auth: null };
 }
 
 async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, number>> {
@@ -82,11 +84,23 @@ async function main(): Promise<void> {
     log("structured logger initialized");
   }
 
+  // Resolve auth token from gateway config (if configured)
+  let githubToken: string | undefined;
+  if (config.auth !== null) {
+    try {
+      githubToken = resolveToken(config.auth as AuthConfig);
+      log(`auth: resolved token via ${config.auth.type}${config.auth.user !== undefined ? ` (user: ${config.auth.user})` : ""}`);
+    } catch (err: unknown) {
+      logError(`auth: failed to resolve token: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const managerOpts: AgentSessionManagerOptions = {
     gatewayBaseUrl: GATEWAY_URL,
     zeroPremium: config.zeroPremium,
     debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
   };
+  if (githubToken !== undefined) managerOpts.githubToken = githubToken;
   if (config.model !== null) managerOpts.model = config.model;
   if (config.workspaceRoot !== null) {
     managerOpts.workingDirectory = config.workspaceRoot;

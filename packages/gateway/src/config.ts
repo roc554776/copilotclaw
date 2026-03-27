@@ -8,12 +8,28 @@ export const DEFAULT_PORT = 19741;
  * The agent resolves this dynamically from the SDK at runtime via client.rpc.models.list(). */
 export const NON_PREMIUM_MODELS: readonly string[] = ["gpt-4.1-nano", "gpt-4.1-mini"];
 
+export interface AuthConfig {
+  /** Authentication type: "gh-auth" (gh CLI), "pat" (Fine-grained PAT), "oauth" (future). */
+  type: "gh-auth" | "pat" | "oauth";
+  /** GitHub username for gh auth token --user. Only used with type "gh-auth". */
+  user?: string;
+  /** Hostname for gh auth token --hostname. Only used with type "gh-auth". */
+  hostname?: string;
+  /** Environment variable name containing the token. Used with "pat" and "oauth". */
+  tokenEnv?: string;
+  /** File path containing the token. Used with "pat" and "oauth". */
+  tokenFile?: string;
+  /** Custom command to execute to obtain the token. Overrides default gh auth token invocation. */
+  tokenCommand?: string;
+}
+
 export interface CopilotclawConfig {
   upstream?: string;
   port?: number;
   model?: string;
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
+  auth?: AuthConfig;
 }
 
 export function getProfileName(): string | undefined {
@@ -79,6 +95,9 @@ export function loadConfig(profile?: string): CopilotclawConfig {
 
   const debugMockCopilotUnsafeTools = (envMockTools !== undefined && envMockTools !== "") ? parseBool(envMockTools) : fileConfig.debugMockCopilotUnsafeTools;
   if (debugMockCopilotUnsafeTools !== undefined) result.debugMockCopilotUnsafeTools = debugMockCopilotUnsafeTools;
+
+  // Auth config is file-only (no env var override — secrets are resolved by the agent)
+  if (fileConfig.auth !== undefined) result.auth = fileConfig.auth;
 
   return result;
 }

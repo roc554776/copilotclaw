@@ -144,6 +144,8 @@ export interface AgentSessionManagerOptions {
   workingDirectory?: string;
   /** Path to persist channel bindings and suspended session state across agent restarts. */
   persistPath?: string;
+  /** GitHub token for authentication (from profile auth config). When set, passed to CopilotClient. */
+  githubToken?: string;
 }
 
 interface SessionSnapshot {
@@ -183,6 +185,7 @@ export class AgentSessionManager {
   private readonly debugMockCopilotUnsafeTools: boolean;
   private readonly workingDirectory: string | undefined;
   private readonly persistPath: string | undefined;
+  private readonly githubToken: string | undefined;
   private generationCounter = 0;
   // Backoff tracking: channelId → timestamp when backoff expires.
   // Intentionally in-memory only — not persisted across agent restarts.
@@ -200,7 +203,16 @@ export class AgentSessionManager {
     this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
     this.workingDirectory = options.workingDirectory;
     this.persistPath = options.persistPath;
+    this.githubToken = options.githubToken;
     this.loadBindings();
+  }
+
+  /** Create a CopilotClient with the configured auth token (if any). */
+  private createClient(): CopilotClient {
+    if (this.githubToken !== undefined) {
+      return new CopilotClient({ githubToken: this.githubToken });
+    }
+    return new CopilotClient();
   }
 
   /** Load persisted channel bindings and restore suspended sessions. */
@@ -230,7 +242,7 @@ export class AgentSessionManager {
             boundChannelId: typeof s["boundChannelId"] === "string" ? s["boundChannelId"] : undefined,
           },
           // Placeholder client — suspended sessions don't use it. Replaced on revive.
-          client: new CopilotClient(),
+          client: this.createClient(),
           abortController: new AbortController(),
           sessionPromise: Promise.resolve(),
           generation: ++this.generationCounter,
@@ -374,7 +386,7 @@ export class AgentSessionManager {
 
     const sessionId = randomUUID();
     const abortController = new AbortController();
-    const client = new CopilotClient();
+    const client = this.createClient();
     const generation = ++this.generationCounter;
     const entry: AgentSessionEntry = {
       sessionId,
@@ -741,7 +753,7 @@ export class AgentSessionManager {
 
     entry.info.status = "starting";
     entry.abortController = new AbortController();
-    entry.client = new CopilotClient();
+    entry.client = this.createClient();
     entry.generation = ++this.generationCounter;
 
     // Capture this revival's client so finally stops the correct one even if revived again
