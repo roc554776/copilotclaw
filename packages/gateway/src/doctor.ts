@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { MIN_AGENT_VERSION, semverSatisfies } from "./agent-manager.js";
 import { type AuthConfig, LATEST_CONFIG_VERSION, NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, resolvePort } from "./config.js";
 import { getAgentStatus } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
-import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
+import { checkWorkspaceHealth, ensureWorkspaceReady } from "./setup.js";
+import { getDataDir, getWorkspaceRoot } from "./workspace.js";
 
 type CheckResult = "pass" | "warn" | "fail";
 
@@ -24,11 +25,12 @@ function log(result: DiagnosticResult): void {
 export function checkWorkspace(): DiagnosticResult {
   const root = getWorkspaceRoot(getProfileName());
   const dataDir = getDataDir(getProfileName());
-  if (!existsSync(root)) {
-    return { name: "workspace", result: "fail", message: `workspace directory missing: ${root}`, fixable: true };
-  }
   if (!existsSync(dataDir)) {
     return { name: "workspace", result: "fail", message: `data directory missing: ${dataDir}`, fixable: true };
+  }
+  const issues = checkWorkspaceHealth(root);
+  if (issues.length > 0) {
+    return { name: "workspace", result: "fail", message: issues.join(", "), fixable: true };
   }
   return { name: "workspace", result: "pass", message: root };
 }
@@ -204,7 +206,8 @@ function validateTokenCommand(command: string, authType: string): DiagnosticResu
 
 export function fixWorkspace(): boolean {
   try {
-    ensureWorkspace(getProfileName());
+    mkdirSync(getDataDir(getProfileName()), { recursive: true });
+    ensureWorkspaceReady(getWorkspaceRoot(getProfileName()));
     return true;
   } catch {
     return false;

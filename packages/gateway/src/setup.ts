@@ -139,11 +139,8 @@ async function main(): Promise<void> {
   // Migrate workspace files from state dir root to workspace/ subdirectory (v0.26 → v0.27 transition)
   migrateWorkspaceFiles(getStateDir(getProfileName()), root);
 
-  // Bootstrap workspace files (SOUL.md, AGENTS.md, USER.md, TOOLS.md, MEMORY.md, memory/) — write only if missing
-  seedWorkspaceBootstrapFiles(root);
-
-  // Initialize git repo in workspace (if git available and no .git yet)
-  initWorkspaceGit(root);
+  // Ensure workspace is fully set up: dir, git init, bootstrap files, initial commit
+  ensureWorkspaceReady(root);
 
   log("setup complete");
 }
@@ -197,10 +194,14 @@ export function seedWorkspaceBootstrapFiles(workspaceRoot: string): void {
     "USER.md": USER_TEMPLATE,
     "TOOLS.md": TOOLS_TEMPLATE,
   };
-  // Ensure memory directory exists
+  // Ensure memory directory exists with .gitkeep
   const memoryDir = join(workspaceRoot, "memory");
   if (!existsSync(memoryDir) || !statSync(memoryDir).isDirectory()) {
     mkdirSync(memoryDir, { recursive: true });
+  }
+  const gitkeep = join(memoryDir, ".gitkeep");
+  if (!existsSync(gitkeep)) {
+    writeFileSync(gitkeep, "", "utf-8");
   }
   if (!existsSync(join(workspaceRoot, "MEMORY.md"))) {
     writeFileSync(join(workspaceRoot, "MEMORY.md"), MEMORY_TEMPLATE, "utf-8");
@@ -219,14 +220,73 @@ export function seedWorkspaceBootstrapFiles(workspaceRoot: string): void {
 /** Initialize git repo in workspace if git is available and .git doesn't exist. */
 function initWorkspaceGit(workspaceRoot: string): void {
   if (existsSync(join(workspaceRoot, ".git"))) return;
-  const check = spawnSync("git", ["--version"], { encoding: "utf-8", stdio: "pipe" });
-  if (check.status !== 0) return; // git unavailable or broken — skip init
+  if (!isGitAvailable()) return;
   const init = spawnSync("git", ["init"], { cwd: workspaceRoot, encoding: "utf-8", stdio: "pipe" });
   if (init.status === 0) {
     log("initialized git repo in workspace");
   } else {
     log(`WARNING: git init failed (exit ${init.status ?? "null"}) — workspace will not be version-controlled`);
   }
+}
+
+/** Check if git CLI is available. */
+export function isGitAvailable(): boolean {
+  const check = spawnSync("git", ["--version"], { encoding: "utf-8", stdio: "pipe" });
+  return check.status === 0;
+}
+
+/** Ensure workspace is fully set up: directory, git init, bootstrap files, initial commit.
+ *  Safe to call multiple times — only creates/commits what is missing. */
+export function ensureWorkspaceReady(workspaceRoot: string): void {
+  mkdirSync(workspaceRoot, { recursive: true });
+  initWorkspaceGit(workspaceRoot);
+  seedWorkspaceBootstrapFiles(workspaceRoot);
+  commitInitialWorkspaceFiles(workspaceRoot);
+}
+
+/** Git add + commit initial workspace files if the repo has no commits yet. */
+function commitInitialWorkspaceFiles(workspaceRoot: string): void {
+  if (!existsSync(join(workspaceRoot, ".git"))) return;
+
+  // Check if there are any commits already
+  const logCheck = spawnSync("git", ["rev-parse", "HEAD"], { cwd: workspaceRoot, encoding: "utf-8", stdio: "pipe" });
+  if (logCheck.status === 0) return; // commits exist — skip
+
+  // Stage all workspace files
+  const add = spawnSync("git", ["add", "-A"], { cwd: workspaceRoot, encoding: "utf-8", stdio: "pipe" });
+  if (add.status !== 0) return;
+
+  // Check if there's anything staged
+  const diffIndex = spawnSync("git", ["diff", "--cached", "--quiet"], { cwd: workspaceRoot, encoding: "utf-8", stdio: "pipe" });
+  if (diffIndex.status === 0) return; // nothing staged
+
+  const commit = spawnSync("git", ["commit", "-m", "Initial workspace setup"], { cwd: workspaceRoot, encoding: "utf-8", stdio: "pipe" });
+  if (commit.status === 0) {
+    log("committed initial workspace files");
+  }
+}
+
+/** Check workspace health. Returns list of issues found. */
+export function checkWorkspaceHealth(workspaceRoot: string): string[] {
+  const issues: string[] = [];
+  if (!existsSync(workspaceRoot)) {
+    issues.push("workspace directory missing");
+    return issues; // can't check further
+  }
+
+  const requiredFiles = ["SOUL.md", "USER.md", "TOOLS.md", "MEMORY.md"];
+  for (const file of requiredFiles) {
+    if (!existsSync(join(workspaceRoot, file))) {
+      issues.push(`missing ${file}`);
+    }
+  }
+  if (!existsSync(join(workspaceRoot, "memory"))) {
+    issues.push("missing memory/ directory");
+  }
+  if (!existsSync(join(workspaceRoot, ".git")) && isGitAvailable()) {
+    issues.push("workspace not git-initialized");
+  }
+  return issues;
 }
 
 const SOUL_TEMPLATE = `# SOUL.md - Who You Are

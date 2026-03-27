@@ -51,6 +51,27 @@
     - （将来の機能の話）そのため、OpenClaw のような、同じ profile の中で複数の役割の agent を分ける機能を実装するには、OpenClaw と同じ設計ではだめ
     - 将来的には OpenClaw とは異なる workspace 設計を行い、同じ profile の中で複数の役割の agent を分ける機能を実現する
 
+## Workspace の ensure と doctor チェック
+
+<!-- 2026-03-27 -->
+
+- workspace は agent によって git 管理されるべきもの（agent が SOUL.md や TOOLS.md, USER.md などを自分で管理する）
+- workspace の ensure:
+  - workspace dir を作って、git init し、`SOUL.md` `TOOLS.md` `USER.md` `memory/.gitkeep` などのファイルがなければ作り、それらを git add してコミットする
+- `copilotclaw setup` を実行したときに、workspace の ensure を行う
+- 物理 session の開始前にも、workspace の ensure を行う
+- `copilotclaw doctor` したときに、workspace に不備があれば、エラーを出す
+- `copilotclaw doctor --fix` で修正する
+
+## Workspace の構造と使い方をシステムインストラクションに含める
+
+<!-- 2026-03-27 -->
+
+- workspace の構造やその使い方、git 管理することなどは、CopilotClaw 共通のシステムインストラクション部分（`CHANNEL_OPERATOR_PROMPT`）に入れておく
+- CopilotClaw 共通のシステムインストラクションと SOUL.md 等はレイヤーが違うので注意する
+  - CopilotClaw 共通のシステムインストラクション: ユーザーが変更しない。CopilotClaw システムが規定する
+  - SOUL.md 等: ユーザーが変更してもいいし、agent が自分で変更してもいい（ユーザーの好みにカスタマイズする）
+
 ## 抽象セッションへのトークン消費履歴の紐づけ
 
 - agent session は抽象層と物理層に分かれている
