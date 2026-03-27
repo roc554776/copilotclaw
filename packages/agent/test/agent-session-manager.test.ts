@@ -1068,6 +1068,33 @@ describe("AgentSessionManager — session failure backoff", () => {
 
     expect(manager.isChannelInBackoff("ch-no-failure")).toBe(false);
   });
+
+  it("backoff expires after the backoff duration", async () => {
+    installClientMock(vi.fn().mockRejectedValue(new Error("auth failed")));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-backoff-expiry" });
+    await wait(50);
+
+    expect(manager.isChannelInBackoff("ch-backoff-expiry")).toBe(true);
+
+    // Fast-forward past the backoff duration by manipulating Date.now
+    const originalNow = Date.now;
+    Date.now = () => originalNow() + 61_000; // 61 seconds later
+    try {
+      expect(manager.isChannelInBackoff("ch-backoff-expiry")).toBe(false);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
 });
 
 describe("AgentSessionManager — error detail in channel notification", () => {

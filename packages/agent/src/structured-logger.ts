@@ -13,6 +13,11 @@ export interface StructuredLogEntry {
  * Minimal structured logger that writes JSON lines to a file.
  * Each log entry is a single JSON object on one line.
  * Designed for future OpenTelemetry log bridge compatibility.
+ *
+ * NOTE: This class is intentionally duplicated in @copilotclaw/gateway
+ * (packages/gateway/src/structured-logger.ts) to keep the two process
+ * packages fully self-contained without a shared dependency. If you
+ * change this file, apply the same change to the gateway copy.
  */
 export class StructuredLogger {
   private readonly filePath: string;
@@ -21,7 +26,11 @@ export class StructuredLogger {
   constructor(filePath: string, component: string) {
     this.filePath = filePath;
     this.component = component;
-    mkdirSync(dirname(filePath), { recursive: true });
+    try {
+      mkdirSync(dirname(filePath), { recursive: true });
+    } catch {
+      // Directory creation failure must not crash the process
+    }
   }
 
   info(msg: string, data?: Record<string, unknown>): void {

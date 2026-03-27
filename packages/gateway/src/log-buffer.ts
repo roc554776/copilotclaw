@@ -38,12 +38,13 @@ export class LogBuffer {
     if (this.entries.length > this.maxEntries) {
       this.entries.shift();
     }
-    // Write to structured log file if enabled
+    // Write to structured log file if enabled, preserving source distinction
     if (this.structuredLogger !== undefined) {
+      const data = source !== "gateway" ? { source } : undefined;
       if (level === "error") {
-        this.structuredLogger.error(message);
+        this.structuredLogger.error(message, data);
       } else {
-        this.structuredLogger.info(message);
+        this.structuredLogger.info(message, data);
       }
     }
   }

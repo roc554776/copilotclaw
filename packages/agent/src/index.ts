@@ -72,9 +72,12 @@ async function main(): Promise<void> {
   const config = await fetchGatewayConfig(GATEWAY_URL);
   log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, debugMockCopilotUnsafeTools=${config.debugMockCopilotUnsafeTools}`);
 
-  // Initialize structured logger if workspace is available
+  // Initialize structured logger if workspace is available.
+  // When workspaceRoot is null (gateway unreachable at startup), structured
+  // file logging is unavailable — stderr redirect from gateway is the fallback.
   if (config.workspaceRoot !== null) {
-    const agentLogPath = join(config.workspaceRoot, "data", "agent.log");
+    const dataDir = join(config.workspaceRoot, "data");
+    const agentLogPath = join(dataDir, "agent.log");
     structuredLogger = new StructuredLogger(agentLogPath, "agent");
     log("structured logger initialized");
   }

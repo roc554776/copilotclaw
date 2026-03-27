@@ -184,7 +184,10 @@ export class AgentSessionManager {
   private readonly workingDirectory: string | undefined;
   private readonly persistPath: string | undefined;
   private generationCounter = 0;
-  // Backoff tracking: channelId → timestamp when backoff expires
+  // Backoff tracking: channelId → timestamp when backoff expires.
+  // Intentionally in-memory only — not persisted across agent restarts.
+  // On restart the agent process is fresh and the failure condition may
+  // have been resolved, so retrying immediately is acceptable.
   private readonly channelBackoff = new Map<string, number>();
 
   constructor(options: AgentSessionManagerOptions) {
@@ -395,28 +398,7 @@ export class AgentSessionManager {
       entry.copilotSessionId = options.copilotSessionId;
     }
 
-    const startTime = Date.now();
-    const promise = this.runSession(entry).then(() => {
-      // Physical session ended normally (idle) — unexpected, suspend the abstract session
-      if (!entry.abortController.signal.aborted) {
-        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
-        this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId);
-      }
-    }).catch((err: unknown) => {
-      const reason = err instanceof Error ? err.message : String(err);
-      console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
-      if (!entry.abortController.signal.aborted) {
-        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
-        this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId, reason);
-      }
-    }).finally(() => {
-      // Clean up the CopilotClient — the abstract session survives in suspended state
-      client.stop().catch(() => {});
-    });
-
-    entry.sessionPromise = promise;
+    entry.sessionPromise = this.attachSessionLifecycle(entry, client);
     this.sessions.set(sessionId, entry);
     return sessionId;
   }
@@ -762,31 +744,10 @@ export class AgentSessionManager {
     entry.client = new CopilotClient();
     entry.generation = ++this.generationCounter;
 
-    const boundChannelId = entry.info.boundChannelId;
-    const sessionId = entry.sessionId;
     // Capture this revival's client so finally stops the correct one even if revived again
     const clientToStop = entry.client;
 
-    const startTime = Date.now();
-    const promise = this.runSession(entry).then(() => {
-      if (!entry.abortController.signal.aborted) {
-        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
-        this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId);
-      }
-    }).catch((err: unknown) => {
-      const reason = err instanceof Error ? err.message : String(err);
-      console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
-      if (!entry.abortController.signal.aborted) {
-        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
-        this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId, reason);
-      }
-    }).finally(() => {
-      clientToStop.stop().catch(() => {});
-    });
-
-    entry.sessionPromise = promise;
+    entry.sessionPromise = this.attachSessionLifecycle(entry, clientToStop);
   }
 
   /** Explicitly stop a session — fully removes the abstract session and channel binding. */
@@ -858,6 +819,32 @@ export class AgentSessionManager {
     // Return "flushed" so the caller flushes stale inputs; the deferred resume will only
     // fire when a genuinely new user message arrives after the flush.
     return "flushed";
+  }
+
+  /** Attach lifecycle handlers (suspend on idle/error, backoff, notification) to a session's runSession promise.
+   *  Used by both startSession and reviveSession to avoid duplicating the .then/.catch/.finally chain. */
+  private attachSessionLifecycle(entry: AgentSessionEntry, clientToStop: CopilotClient): Promise<void> {
+    const startTime = Date.now();
+    const sessionId = entry.sessionId;
+    const boundChannelId = entry.info.boundChannelId;
+
+    return this.runSession(entry).then(() => {
+      if (!entry.abortController.signal.aborted) {
+        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
+        this.suspendSession(entry);
+        this.notifyChannelSessionStopped(boundChannelId);
+      }
+    }).catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
+      if (!entry.abortController.signal.aborted) {
+        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
+        this.suspendSession(entry);
+        this.notifyChannelSessionStopped(boundChannelId, reason);
+      }
+    }).finally(() => {
+      clientToStop.stop().catch(() => {});
+    });
   }
 
   /** Record a backoff for a channel if the session failed rapidly (< RAPID_FAILURE_THRESHOLD_MS). */
