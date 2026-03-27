@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 32 | Version: 0.19.0 | Token estimate: ~2300 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 32 | Version: 0.20.0 | Token estimate: ~2300 -->
 
 # Backend
 
@@ -29,7 +29,7 @@ GET  /                                     → 200 HTML dashboard (status bar + 
 
 ```
 src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents; /api/quota, /api/models, and /api/sessions/:sessionId/messages proxy to agent via agentManager
-src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, CONFIG_ENV_VARS, parseBool helper; profile-aware (~/.copilotclaw/config.json or config-{{profile}}.json); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS) take precedence over file values; CopilotclawConfig includes model, zeroPremium, debugMockCopilotUnsafeTools fields
+src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, CONFIG_ENV_VARS, parseBool helper; profile-aware ({{stateDir}}/config.json where {{stateDir}}=~/.copilotclaw/ or ~/.copilotclaw-{{profile}}/); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS) take precedence over file values; CopilotclawConfig includes model, zeroPremium, debugMockCopilotUnsafeTools fields
 src/config-cli.ts          — `copilotclaw config` CLI: configGet (resolve + display, notes env var override), configSet (validate + save, warns if env var shadows); valid keys: upstream, port, model, zeroPremium, debugMockCopilotUnsafeTools; BOOLEAN_KEYS handling for zeroPremium/debugMockCopilotUnsafeTools
 src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + LogBuffer creation + console intercept + startServer on resolvePort() + periodic agent monitor every 30s, max 3 retries)
 src/index.ts               — CLI entry point (health check on resolvePort() → detached spawn → exit); reads GATEWAY_VERSION from package.json, shows version in all CLI log messages; after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible; checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart)
@@ -38,7 +38,7 @@ src/stop.ts                — POST /api/stop CLI (uses resolvePort())
 src/restart.ts             — `copilotclaw restart` CLI: stop gateway → wait for shutdown → start (uses resolvePort())
 src/setup.ts               — `copilotclaw setup` CLI: create workspace directories + auto-port selection (isPortAvailable, findAvailablePort from candidate list; saves port to config if default busy); seedWorkspaceBootstrapFiles() generates SOUL.md, AGENTS.md, USER.md, TOOLS.md, MEMORY.md, and memory/ directory (v0.19.0); initWorkspaceGit() runs git init in workspace (v0.19.0)
 src/update.ts              — `copilotclaw update` CLI: fetches upstream to ~/.copilotclaw/source/ via getUpdateDir (git init + fetch --depth 1 + checkout FETCH_HEAD), pnpm (via npx -y pnpm@PNPM_VERSION, no global pnpm required) install + build, rewriteWorkspaceDeps converts workspace:* to file: paths in CLI package.json, npm install -g from packages/cli/; upstream from config file (COPILOTCLAW_UPSTREAM env var takes precedence); skips build if SHA unchanged
-src/workspace.ts           — workspace paths: profile-aware (~/.copilotclaw/ or ~/.copilotclaw/workspace-{{profile}}/), data/, store.json; ensureWorkspace(); getUpdateDir() returns profile-independent source dir (~/.copilotclaw/source/); profile via COPILOTCLAW_PROFILE env var
+src/workspace.ts           — workspace paths: getWorkspaceRoot() returns ~/.copilotclaw/ (default) or ~/.copilotclaw-{{profile}}/ (profiled); getDataDir(), getStoreFilePath() derive data/ and store.json; ensureWorkspace(); getUpdateDir() returns profile-independent source dir (~/.copilotclaw/source/); profile via COPILOTCLAW_PROFILE env var
 src/store.ts               — persistent store (Channel, Message, per-channel pending queue); JSON file via atomic rename
 src/channel-provider.ts    — ChannelProvider interface (plugin contract for chat mediums)
 src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, SSE broadcast via SseBroadcaster); passes compatibility info to dashboard
@@ -54,23 +54,24 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 
 ```
 ~/.copilotclaw/
-  config.json                — config file (port, upstream, model, zeroPremium, debugMockCopilotUnsafeTools); env vars take precedence
-  config-{{profile}}.json    — profile-specific config (when COPILOTCLAW_PROFILE set)
+  config.json                — default profile config (port, upstream, model, zeroPremium, debugMockCopilotUnsafeTools); env vars take precedence
   source/                    — update source directory (profile-independent, shared across all profiles)
   data/
     store.json               — persisted channels + messages + pending queues (atomic write via .tmp rename)
-  workspace-{{profile}}/     — profile-specific workspace root (when COPILOTCLAW_PROFILE set)
-    SOUL.md                  — agent persona and core truths (generated v0.19.0)
-    AGENTS.md                — workspace conventions and memory guidelines (generated v0.19.0)
-    USER.md                  — user context and preferences (generated v0.19.0)
-    TOOLS.md                 — available tools and local notes (generated v0.19.0)
-    MEMORY.md                — long-term curated memory (generated v0.19.0)
-    memory/
-      YYYY-MM-DD.md          — daily session logs (agent-created)
-    .git/                    — git repo (initialized v0.19.0 if git available)
-    data/
-      store.json
-      agent-bindings.json    — persisted channel bindings and suspended sessions (atomic write, v0.19.0)
+
+~/.copilotclaw-{{profile}}/
+  config.json                — profile-specific config (when COPILOTCLAW_PROFILE set)
+  data/
+    store.json               — persisted channels + messages + pending queues
+    agent-bindings.json      — persisted channel bindings and suspended sessions (atomic write, v0.19.0)
+  SOUL.md                    — agent persona and core truths (generated v0.19.0)
+  AGENTS.md                  — workspace conventions and memory guidelines (generated v0.19.0)
+  USER.md                    — user context and preferences (generated v0.19.0)
+  TOOLS.md                   — available tools and local notes (generated v0.19.0)
+  MEMORY.md                  — long-term curated memory (generated v0.19.0)
+  memory/
+    YYYY-MM-DD.md            — daily session logs (agent-created)
+  .git/                      — git repo (initialized v0.19.0 if git available)
 ```
 
 ## Agent (packages/agent)
