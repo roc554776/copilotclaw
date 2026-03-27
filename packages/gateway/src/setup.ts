@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_PORT, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, saveConfig } from "./config.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
@@ -41,6 +42,42 @@ export async function findAvailablePort(candidates: readonly number[] = PORT_CAN
   return undefined;
 }
 
+/** Scan all profile state directories and collect their configured ports. */
+function collectOtherProfilePorts(currentProfile: string | undefined): number[] {
+  const home = homedir();
+  const ports: number[] = [];
+  try {
+    const entries = readdirSync(home);
+    for (const entry of entries) {
+      // Match .copilotclaw (default) and .copilotclaw-{{profile}} (named)
+      if (!entry.startsWith(".copilotclaw")) continue;
+      const isDefault = entry === ".copilotclaw";
+      const isNamed = entry.startsWith(".copilotclaw-") && entry.length > ".copilotclaw-".length;
+      if (!isDefault && !isNamed) continue;
+
+      // Determine the profile name for this entry
+      const entryProfile = isDefault ? undefined : entry.slice(".copilotclaw-".length);
+      // Skip the current profile
+      if (entryProfile === currentProfile) continue;
+      if (entryProfile === undefined && currentProfile === undefined) continue;
+
+      const configPath = join(home, entry, "config.json");
+      try {
+        const raw = readFileSync(configPath, "utf-8");
+        const config = JSON.parse(raw) as { port?: number };
+        if (typeof config.port === "number" && config.port > 0) {
+          ports.push(config.port);
+        }
+      } catch {
+        // Config missing or malformed — skip
+      }
+    }
+  } catch {
+    // Home directory unreadable — unlikely but non-fatal
+  }
+  return ports;
+}
+
 async function main(): Promise<void> {
   const root = getWorkspaceRoot(getProfileName());
   const alreadyExists = existsSync(getDataDir(getProfileName()));
@@ -57,16 +94,25 @@ async function main(): Promise<void> {
   log(`config: ${getConfigFilePath(getProfileName())}`);
 
   // Port selection: if config already has a port, skip. Otherwise find an available port.
-  // Named profiles must never default to DEFAULT_PORT — it's likely already used by the default profile.
+  // Exclude ports already claimed by other profiles to prevent collisions.
   const existingConfig = loadConfig(getProfileName());
   if (existingConfig.port === undefined) {
     const profile = getProfileName();
+    const otherPorts = collectOtherProfilePorts(profile);
+    const excludePorts = new Set(otherPorts);
+    if (profile !== undefined) {
+      // Named profiles must never use DEFAULT_PORT (likely used by default profile)
+      excludePorts.add(DEFAULT_PORT);
+    }
+    const candidates = PORT_CANDIDATES.filter((p) => !excludePorts.has(p));
+
     if (profile === undefined) {
-      // Default profile: try the default port first
-      const defaultAvailable = await isPortAvailable(DEFAULT_PORT);
-      if (!defaultAvailable) {
-        log(`default port ${DEFAULT_PORT} is in use, searching for available port...`);
-        const available = await findAvailablePort(PORT_CANDIDATES.filter((p) => p !== DEFAULT_PORT));
+      // Default profile: try DEFAULT_PORT first if not claimed by another profile
+      if (!excludePorts.has(DEFAULT_PORT) && await isPortAvailable(DEFAULT_PORT)) {
+        log(`using default port ${DEFAULT_PORT}`);
+      } else {
+        log(`default port ${DEFAULT_PORT} is unavailable, searching for available port...`);
+        const available = await findAvailablePort(candidates);
         if (available !== undefined) {
           saveConfig({ ...existingConfig, port: available }, profile);
           log(`port ${available} selected and saved to config`);
@@ -76,9 +122,8 @@ async function main(): Promise<void> {
         }
       }
     } else {
-      // Named profile: always find a unique available port (never use DEFAULT_PORT)
       log(`searching for available port for profile "${profile}"...`);
-      const available = await findAvailablePort(PORT_CANDIDATES.filter((p) => p !== DEFAULT_PORT));
+      const available = await findAvailablePort(candidates);
       if (available !== undefined) {
         saveConfig({ ...existingConfig, port: available }, profile);
         log(`port ${available} selected and saved to config`);

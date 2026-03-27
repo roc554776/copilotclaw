@@ -4,3 +4,5 @@ dist/
 .reports/
 test-results/
 *.tgz
+.serena/
+!/.serena/
