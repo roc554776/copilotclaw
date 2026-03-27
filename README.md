@@ -142,6 +142,8 @@ All persistent data is stored under `~/.copilotclaw/` (or `~/.copilotclaw-{{prof
 | `config.json` | Configuration |
 | `data/store.json` | Channels and message history |
 | `data/agent-bindings.json` | Agent session bindings (survives agent restarts) |
+| `data/gateway.log` | Gateway structured log (JSON Lines) |
+| `data/agent.log` | Agent structured log (JSON Lines) |
 | `SOUL.md` | Agent persona and tone (user-customizable) |
 | `AGENTS.md` | Agent operating guide (user-customizable) |
 | `USER.md` | User information |

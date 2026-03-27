@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { listenIpc } from "./ipc-server.js";
+import { StructuredLogger } from "./structured-logger.js";
 
 const GATEWAY_URL = process.env["COPILOTCLAW_GATEWAY_URL"] ?? "http://localhost:19741";
 const POLL_INTERVAL_MS = 5000;
@@ -13,8 +14,16 @@ interface GatewayConfig {
   workspaceRoot: string | null;
 }
 
+let structuredLogger: StructuredLogger | undefined;
+
 function log(message: string): void {
   console.error(`[agent] ${message}`);
+  structuredLogger?.info(message);
+}
+
+function logError(message: string): void {
+  console.error(`[agent] ${message}`);
+  structuredLogger?.error(message);
 }
 
 async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
@@ -63,6 +72,13 @@ async function main(): Promise<void> {
   const config = await fetchGatewayConfig(GATEWAY_URL);
   log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, debugMockCopilotUnsafeTools=${config.debugMockCopilotUnsafeTools}`);
 
+  // Initialize structured logger if workspace is available
+  if (config.workspaceRoot !== null) {
+    const agentLogPath = join(config.workspaceRoot, "data", "agent.log");
+    structuredLogger = new StructuredLogger(agentLogPath, "agent");
+    log("structured logger initialized");
+  }
+
   const managerOpts: AgentSessionManagerOptions = {
     gatewayBaseUrl: GATEWAY_URL,
     zeroPremium: config.zeroPremium,
@@ -99,6 +115,8 @@ async function main(): Promise<void> {
 
       for (const [channelId, count] of Object.entries(pending)) {
         if (count > 0 && !sessionManager.hasActiveSessionForChannel(channelId)) {
+          // Skip channels in backoff (recent session failure — avoid retry storm)
+          if (sessionManager.isChannelInBackoff(channelId)) continue;
           // startSession will revive a suspended session (with its saved copilotSessionId)
           // or create a new one if no abstract session exists for this channel.
           log(`starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
@@ -121,7 +139,7 @@ async function main(): Promise<void> {
         }
       }
     } catch (err: unknown) {
-      log(`poll error: ${String(err)}`);
+      logError(`poll error: ${String(err)}`);
     }
 
     await new Promise((r) => { setTimeout(r, POLL_INTERVAL_MS); });

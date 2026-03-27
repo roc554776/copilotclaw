@@ -39,6 +39,21 @@ API およびダッシュボードで、agent session（論理）と Copilot SDK
 - 設定項目: upstream（update 用 URL）、port（gateway ポート）、model（デフォルトモデル）、zeroPremium（ゼロプレミアムリクエストモード）、debugMockCopilotUnsafeTools（開発用モックツールモード）
 - CLI コマンド（`config get` / `config set`）で設定値の取得・変更ができる
 
+### Req: ログのファイル出力と構造化ログ
+
+gateway および agent のログをファイルに出力し、プロセス停止時の調査を可能にする。
+
+- gateway と agent の両プロセスのログをファイルに永続化する
+- ログは構造化ログ（structured logging）を採用する
+- 将来的に OpenTelemetry へ移行することを前提とする <!-- TODO: 未実装 -->
+
+### Req: エラー無限ループの抑制
+
+エラーが継続する場合に無限ループを引き起こさない設計上の工夫を、特別な理由がない限り常に施す。
+
+- リトライを行う箇所では、連続失敗時にバックオフまたはリトライ上限を設ける
+- 例外的にバックオフを設けない場合は、その理由を明示する
+
 ### Req: CLI 設計原則
 
 copilotclaw の CLI は non-interactive とする。カラーコード、raw mode は使用しない。

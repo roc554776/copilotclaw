@@ -166,6 +166,11 @@ export interface StartSessionOptions {
 const DEFAULT_STALE_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_SESSION_AGE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 
+// Session failure backoff: if a session fails within this time after starting,
+// the channel enters a backoff period to prevent retry storms.
+const RAPID_FAILURE_THRESHOLD_MS = 30_000; // session lasted < 30s = rapid failure
+const BACKOFF_DURATION_MS = 60_000; // wait 60s before retrying
+
 export class AgentSessionManager {
   private readonly sessions = new Map<string, AgentSessionEntry>();
   private readonly channelBindings = new Map<string, string>(); // channelId → sessionId
@@ -179,6 +184,8 @@ export class AgentSessionManager {
   private readonly workingDirectory: string | undefined;
   private readonly persistPath: string | undefined;
   private generationCounter = 0;
+  // Backoff tracking: channelId → timestamp when backoff expires
+  private readonly channelBackoff = new Map<string, number>();
 
   constructor(options: AgentSessionManagerOptions) {
     this.gatewayBaseUrl = options.gatewayBaseUrl;
@@ -336,6 +343,17 @@ export class AgentSessionManager {
     return entry !== undefined && entry.info.status !== "suspended";
   }
 
+  /** Check if a channel is in backoff period after a rapid session failure. */
+  isChannelInBackoff(channelId: string): boolean {
+    const expiresAt = this.channelBackoff.get(channelId);
+    if (expiresAt === undefined) return false;
+    if (Date.now() >= expiresAt) {
+      this.channelBackoff.delete(channelId);
+      return false;
+    }
+    return true;
+  }
+
   startSession(options?: StartSessionOptions): string {
     const boundChannelId = options?.boundChannelId;
 
@@ -377,17 +395,21 @@ export class AgentSessionManager {
       entry.copilotSessionId = options.copilotSessionId;
     }
 
+    const startTime = Date.now();
     const promise = this.runSession(entry).then(() => {
       // Physical session ended normally (idle) — unexpected, suspend the abstract session
       if (!entry.abortController.signal.aborted) {
+        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
         this.notifyChannelSessionStopped(boundChannelId);
       }
     }).catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
       console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
       if (!entry.abortController.signal.aborted) {
+        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId);
+        this.notifyChannelSessionStopped(boundChannelId, reason);
       }
     }).finally(() => {
       // Clean up the CopilotClient — the abstract session survives in suspended state
@@ -745,16 +767,20 @@ export class AgentSessionManager {
     // Capture this revival's client so finally stops the correct one even if revived again
     const clientToStop = entry.client;
 
+    const startTime = Date.now();
     const promise = this.runSession(entry).then(() => {
       if (!entry.abortController.signal.aborted) {
+        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
         this.notifyChannelSessionStopped(boundChannelId);
       }
     }).catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
       console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
       if (!entry.abortController.signal.aborted) {
+        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId);
+        this.notifyChannelSessionStopped(boundChannelId, reason);
       }
     }).finally(() => {
       clientToStop.stop().catch(() => {});
@@ -834,9 +860,20 @@ export class AgentSessionManager {
     return "flushed";
   }
 
-  private notifyChannelSessionStopped(channelId: string | undefined): void {
+  /** Record a backoff for a channel if the session failed rapidly (< RAPID_FAILURE_THRESHOLD_MS). */
+  private recordBackoffIfRapidFailure(channelId: string | undefined, startTime: number): void {
     if (channelId === undefined) return;
-    const message = "[SYSTEM] Agent session stopped unexpectedly. A new session will start when you send a message.";
+    const elapsed = Date.now() - startTime;
+    if (elapsed < RAPID_FAILURE_THRESHOLD_MS) {
+      this.channelBackoff.set(channelId, Date.now() + BACKOFF_DURATION_MS);
+      console.error(`[agent] channel ${channelId.slice(0, 8)} entering ${BACKOFF_DURATION_MS / 1000}s backoff after rapid failure (${elapsed}ms)`);
+    }
+  }
+
+  private notifyChannelSessionStopped(channelId: string | undefined, reason?: string): void {
+    if (channelId === undefined) return;
+    const detail = reason !== undefined ? `: ${reason}` : "";
+    const message = `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`;
     this.postChannelMessage(channelId, message);
   }
 
