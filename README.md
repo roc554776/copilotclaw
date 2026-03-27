@@ -110,27 +110,27 @@ Environment variables override config file values.
 
 ### Profiles
 
-Use `COPILOTCLAW_PROFILE` to run multiple independent instances:
+Use `--profile` to run multiple independent instances:
 
 ```sh
-COPILOTCLAW_PROFILE=staging copilotclaw setup
-COPILOTCLAW_PROFILE=staging copilotclaw start
+copilotclaw --profile staging setup
+copilotclaw --profile staging start
 ```
 
-Each profile gets its own state directory (`~/.copilotclaw-staging/`), completely isolated from other profiles.
+Each profile gets its own state directory (`~/.copilotclaw-staging/`), completely isolated from other profiles. The `COPILOTCLAW_PROFILE` environment variable can also be used; `--profile` takes precedence.
 
 ## Commands
 
 ```
-copilotclaw setup                Initialize workspace
-copilotclaw start [options]      Start the gateway daemon
-copilotclaw stop                 Stop the gateway (agent keeps running)
-copilotclaw restart              Restart the gateway (stop + start)
-copilotclaw update               Update copilotclaw (git pull + build)
-copilotclaw config get <key>     Show config value
-copilotclaw config set <key> <v> Set config value
-copilotclaw doctor [--fix]       Diagnose environment
-copilotclaw agent stop           Stop the agent process only
+copilotclaw [--profile <name>] setup                Initialize workspace
+copilotclaw [--profile <name>] start [options]      Start the gateway daemon
+copilotclaw [--profile <name>] stop                 Stop the gateway
+copilotclaw [--profile <name>] restart              Restart the gateway
+copilotclaw [--profile <name>] update               Update copilotclaw
+copilotclaw [--profile <name>] config get <key>     Show config value
+copilotclaw [--profile <name>] config set <key> <v> Set config value
+copilotclaw [--profile <name>] doctor [--fix]       Diagnose environment
+copilotclaw [--profile <name>] agent stop           Stop the agent
 ```
 
 ## Data

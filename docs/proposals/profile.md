@@ -62,8 +62,6 @@ return join(getWorkspaceRoot(p), "config.json");
 
 ## CLI --profile オプション
 
-<!-- TODO: 未実装 -->
-
 全コマンドに `--profile` オプションを追加する。現在は `COPILOTCLAW_PROFILE` 環境変数のみで profile を指定する方式だが、CLI オプションがないため使い勝手が悪い。
 
 **実装方針:**
