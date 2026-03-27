@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { MIN_AGENT_VERSION, semverSatisfies } from "./agent-manager.js";
-import { NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, loadConfig, resolvePort } from "./config.js";
+import { NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, resolvePort } from "./config.js";
 import { getAgentStatus } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
@@ -21,8 +21,8 @@ function log(result: DiagnosticResult): void {
 }
 
 export function checkWorkspace(): DiagnosticResult {
-  const root = getWorkspaceRoot();
-  const dataDir = getDataDir();
+  const root = getWorkspaceRoot(getProfileName());
+  const dataDir = getDataDir(getProfileName());
   if (!existsSync(root)) {
     return { name: "workspace", result: "fail", message: `workspace directory missing: ${root}`, fixable: true };
   }
@@ -33,7 +33,7 @@ export function checkWorkspace(): DiagnosticResult {
 }
 
 export function checkConfig(): DiagnosticResult {
-  const configPath = getConfigFilePath();
+  const configPath = getConfigFilePath(getProfileName());
   if (!existsSync(configPath)) {
     return { name: "config", result: "warn", message: `config file missing: ${configPath}`, fixable: true };
   }
@@ -57,7 +57,7 @@ export function checkConfig(): DiagnosticResult {
 }
 
 export async function checkGateway(): Promise<DiagnosticResult> {
-  const port = resolvePort();
+  const port = resolvePort(getProfileName());
   try {
     const res = await fetch(`http://localhost:${port}/healthz`, {
       signal: AbortSignal.timeout(3000),
@@ -72,7 +72,7 @@ export async function checkGateway(): Promise<DiagnosticResult> {
 }
 
 export async function checkAgent(): Promise<DiagnosticResult> {
-  const socketPath = getAgentSocketPath();
+  const socketPath = getAgentSocketPath(getProfileName());
   if (!existsSync(socketPath)) {
     return { name: "agent", result: "warn", message: "not running (no socket file)" };
   }
@@ -94,7 +94,7 @@ export async function checkAgent(): Promise<DiagnosticResult> {
 }
 
 export function checkZeroPremium(): DiagnosticResult {
-  const config = loadConfig();
+  const config = loadConfig(getProfileName());
   if (!config.zeroPremium) {
     return { name: "zero-premium", result: "pass", message: "disabled" };
   }
@@ -114,7 +114,7 @@ export function checkZeroPremium(): DiagnosticResult {
 
 export function fixWorkspace(): boolean {
   try {
-    ensureWorkspace();
+    ensureWorkspace(getProfileName());
     return true;
   } catch {
     return false;
@@ -123,7 +123,7 @@ export function fixWorkspace(): boolean {
 
 export function fixConfig(): boolean {
   try {
-    ensureConfigFile();
+    ensureConfigFile(getProfileName());
     return true;
   } catch {
     return false;
@@ -131,7 +131,7 @@ export function fixConfig(): boolean {
 }
 
 export function fixStaleSocket(): boolean {
-  const socketPath = getAgentSocketPath();
+  const socketPath = getAgentSocketPath(getProfileName());
   if (!existsSync(socketPath)) return true;
   try {
     unlinkSync(socketPath);

@@ -1,4 +1,4 @@
-import { resolvePort } from "./config.js";
+import { getProfileName, resolvePort } from "./config.js";
 
 function log(message: string): void {
   console.error(`[gateway] ${message}`);
@@ -30,7 +30,7 @@ async function waitForShutdown(port: number): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  const port = resolvePort();
+  const port = resolvePort(getProfileName());
 
   // Stop existing gateway
   log("stopping gateway...");

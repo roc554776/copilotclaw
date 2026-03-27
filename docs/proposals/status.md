@@ -54,11 +54,11 @@
 - Copilot 物理セッション状態可視化（物理 session / subagent 追跡、`/api/quota` / `/api/models` エンドポイント、ダッシュボードモーダル表示）
 - パッケージ構成の修正（root `private: true`、`packages/cli/` 新設、`workspace:*` 依存宣言、`npm pack` + `npm install -g tgz`）
 
+- Profile 機能の完成（全コンポーネントで getProfileName() 伝搬修正）
+- Workspace Bootstrap Files（SOUL.md, AGENTS.md, USER.md, TOOLS.md, MEMORY.md テンプレート生成 + setup 時の git init）
+- System prompt に SOUL.md 優先読み取り指示を追加
+
 **今後の課題:**
-- Profile 機能の完成（setup/daemon/doctor/config-cli/stop/restart/server の全コンポーネントで profile パラメータ伝搬が欠落 — 8ファイル29箇所の修正が必要）
-- Workspace Bootstrap Files（SOUL.md, AGENTS.md, USER.md, TOOLS.md のテンプレート生成と自発的ロード）
-- Memory（MEMORY.md + memory/YYYY-MM-DD.md による永続記憶）
-- Workspace Git 管理（setup 時の git init）
 - Dashboard フロントエンドの vite + React 移行（server-side HTML テンプレート + inline JS → 型安全な JSX + コンポーネントテスト）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）
 - コーディング支援ツール群（ファイル操作・シェル実行・検索・Git）の実装

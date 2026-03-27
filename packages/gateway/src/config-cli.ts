@@ -1,4 +1,4 @@
-import { CONFIG_ENV_VARS, type CopilotclawConfig, ensureConfigFile, loadConfig, loadFileConfig, saveConfig } from "./config.js";
+import { CONFIG_ENV_VARS, type CopilotclawConfig, ensureConfigFile, getProfileName, loadConfig, loadFileConfig, saveConfig } from "./config.js";
 
 const VALID_KEYS: readonly string[] = Object.keys(CONFIG_ENV_VARS);
 
@@ -33,7 +33,7 @@ export function configGet(key: string): void {
     process.exit(1);
   }
 
-  const resolved = loadConfig();
+  const resolved = loadConfig(getProfileName());
   const value = resolved[key as keyof CopilotclawConfig];
 
   if (value === undefined) {
@@ -55,10 +55,10 @@ export function configSet(key: string, rawValue: string): void {
   }
 
   const value = parseValue(key, rawValue);
-  ensureConfigFile();
-  const fileConfig = loadFileConfig();
+  ensureConfigFile(getProfileName());
+  const fileConfig = loadFileConfig(getProfileName());
   (fileConfig as Record<string, unknown>)[key] = value;
-  saveConfig(fileConfig);
+  saveConfig(fileConfig, getProfileName());
   log(`${key} = ${String(value)}`);
 
   const envVar = CONFIG_ENV_VARS[key];

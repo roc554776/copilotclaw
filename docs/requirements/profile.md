@@ -1,6 +1,5 @@
 # 要求定義: Profile 機能の完成
 
-<!-- TODO: 未実装 — profile 対応が不完全。以下の全ファイルで profile パラメータの伝搬が欠落している -->
 
 ### Req: Profile による完全な分離
 

@@ -1,7 +1,7 @@
-import { resolvePort } from "./config.js";
+import { getProfileName, resolvePort } from "./config.js";
 
 async function main(): Promise<void> {
-  const port = resolvePort();
+  const port = resolvePort(getProfileName());
   const url = `http://localhost:${port}/api/stop`;
   try {
     const res = await fetch(url, { method: "POST" });

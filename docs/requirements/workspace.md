@@ -2,8 +2,6 @@
 
 ### Req: Workspace Bootstrap Files（SOUL.md, AGENTS.md, MEMORY.md 等）
 
-<!-- TODO: 未実装 -->
-
 OpenClaw の workspace bootstrap files に相当するファイルを workspace に配置し、agent がセッション開始時に自発的に読み取る仕組みを提供する。OpenClaw はシステムプロンプトにファイルを直接埋め込む方式（Project Context 注入）だが、CopilotClaw では agent がビルトインツールで自発的に読む方式とする（Copilot SDK の制約による）。
 
 - SOUL.md（人格・トーン・価値観）、AGENTS.md（操作マニュアル）、USER.md（ユーザー情報）等をデフォルトテンプレートから生成する
@@ -17,8 +15,6 @@ OpenClaw の workspace bootstrap files に相当するファイルを workspace 
 
 ### Req: Memory（永続記憶）
 
-<!-- TODO: 未実装 -->
-
 agent が学んだことや覚えておくべき情報を、session をまたいで永続的に記録・参照できる仕組みを提供する。
 
 - workspace 内に memory ファイル（Markdown）として保存する
@@ -26,8 +22,6 @@ agent が学んだことや覚えておくべき情報を、session をまたい
 - AGENTS.md に memory の使い方を記載し、agent が自発的に memory を活用するよう導く
 
 ### Req: Workspace Git 管理
-
-<!-- TODO: 未実装 -->
 
 agent の workspace での作業内容を Git で追跡できるようにする。
 

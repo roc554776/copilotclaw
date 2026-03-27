@@ -2,7 +2,6 @@
 
 ## Workspace Bootstrap Files・Memory・Workspace Git 管理
 
-<!-- TODO: 未実装 -->
 
 OpenClaw の workspace 構造を参考に、CopilotClaw 固有の workspace ファイル群・記憶・Git 管理を設計する。
 

@@ -1,6 +1,9 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { describe, expect, it } from "vitest";
-import { findAvailablePort, isPortAvailable } from "../../src/setup.js";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { findAvailablePort, isPortAvailable, seedWorkspaceBootstrapFiles } from "../../src/setup.js";
 
 function listenOnRandomPort(): Promise<{ server: ReturnType<typeof createServer>; port: number }> {
   return new Promise((resolve) => {
@@ -60,5 +63,51 @@ describe("port selection", () => {
     } finally {
       await closeServer(server);
     }
+  });
+});
+
+describe("workspace bootstrap files", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-setup-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates SOUL.md, AGENTS.md, USER.md, TOOLS.md, MEMORY.md, and memory/ directory", () => {
+    seedWorkspaceBootstrapFiles(tmpDir);
+
+    expect(existsSync(join(tmpDir, "SOUL.md"))).toBe(true);
+    expect(existsSync(join(tmpDir, "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(tmpDir, "USER.md"))).toBe(true);
+    expect(existsSync(join(tmpDir, "TOOLS.md"))).toBe(true);
+    expect(existsSync(join(tmpDir, "MEMORY.md"))).toBe(true);
+    expect(existsSync(join(tmpDir, "memory"))).toBe(true);
+
+    // SOUL.md should contain persona content
+    const soul = readFileSync(join(tmpDir, "SOUL.md"), "utf-8");
+    expect(soul).toContain("Who You Are");
+    expect(soul).toContain("Core Truths");
+
+    // AGENTS.md should contain session startup instructions
+    const agents = readFileSync(join(tmpDir, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("Session Startup");
+    expect(agents).toContain("SOUL.md");
+  });
+
+  it("does not overwrite existing files", () => {
+    const customContent = "# My Custom SOUL";
+    const soulPath = join(tmpDir, "SOUL.md");
+    writeFileSync(soulPath, customContent, "utf-8");
+
+    seedWorkspaceBootstrapFiles(tmpDir);
+
+    // Should preserve the custom content
+    expect(readFileSync(soulPath, "utf-8")).toBe(customContent);
+    // But should still create other files
+    expect(existsSync(join(tmpDir, "AGENTS.md"))).toBe(true);
   });
 });

@@ -114,7 +114,7 @@ function createRequestHandler(
     if (fullPathname === "/api/status" && method === "GET") {
       const agentStatus = agentManager !== null ? await agentManager.getStatus() : null;
       const agentCompatibility = agentManager !== null ? await agentManager.checkCompatibility() : "unavailable";
-      const config = loadConfig();
+      const config = loadConfig(getProfileName());
       json(res, 200, {
         gateway: { status: "running", version: GATEWAY_VERSION, profile: getProfileName() ?? null },
         agent: agentStatus,
@@ -123,7 +123,7 @@ function createRequestHandler(
           model: config.model ?? null,
           zeroPremium: config.zeroPremium ?? false,
           debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
-          workspaceRoot: getWorkspaceRoot(),
+          workspaceRoot: getWorkspaceRoot(getProfileName()),
         },
       });
       return;

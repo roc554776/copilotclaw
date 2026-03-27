@@ -32,7 +32,11 @@ After installation, the `copilotclaw` command is available globally.
 copilotclaw setup
 ```
 
-This creates `~/.copilotclaw/` with the data directory and config file.
+This creates `~/.copilotclaw/` with:
+- Config file (`config.json`)
+- Data directory for channels and messages
+- Workspace files: `SOUL.md` (persona), `AGENTS.md` (operating guide), `USER.md`, `TOOLS.md`, `MEMORY.md`, `memory/`
+- Git repository (if git is available)
 
 ## Usage
 
@@ -138,6 +142,12 @@ All persistent data is stored under `~/.copilotclaw/`:
 | `config.json` | Configuration |
 | `data/store.json` | Channels and message history |
 | `data/agent-bindings.json` | Agent session bindings (survives agent restarts) |
+| `SOUL.md` | Agent persona and tone (user-customizable) |
+| `AGENTS.md` | Agent operating guide (user-customizable) |
+| `USER.md` | User information |
+| `TOOLS.md` | Local tool notes |
+| `MEMORY.md` | Agent long-term memory |
+| `memory/` | Daily memory logs (`YYYY-MM-DD.md`) |
 
 ## Contributing
 
