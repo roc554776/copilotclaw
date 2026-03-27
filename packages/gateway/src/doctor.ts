@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { MIN_AGENT_VERSION, semverSatisfies } from "./agent-manager.js";
-import { type AuthConfig, NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, resolvePort } from "./config.js";
+import { type AuthConfig, LATEST_CONFIG_VERSION, NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, resolvePort } from "./config.js";
 import { getAgentStatus } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
@@ -45,6 +45,15 @@ export function checkConfig(): DiagnosticResult {
     config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
   } catch {
     return { name: "config", result: "warn", message: `config file is malformed: ${configPath}` };
+  }
+
+  // Check configVersion
+  const version = config["configVersion"];
+  if (version === undefined) {
+    return { name: "config", result: "warn", message: `config file missing configVersion (will be auto-migrated on next load)` };
+  }
+  if (typeof version !== "number" || version > LATEST_CONFIG_VERSION) {
+    return { name: "config", result: "warn", message: `unexpected configVersion: ${String(version)} (latest: ${LATEST_CONFIG_VERSION})` };
   }
 
   // Validate port if set

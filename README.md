@@ -89,7 +89,7 @@ copilotclaw doctor --fix  # Auto-fix fixable issues
 
 ## Configuration
 
-Config file: `~/.copilotclaw/config.json` (created by `copilotclaw setup`)
+Config file: `~/.copilotclaw/config.json` (created by `copilotclaw setup`). The config file includes a `configVersion` field for schema versioning — old configs are automatically migrated on load.
 
 ```sh
 copilotclaw config get <key>          # Show config value

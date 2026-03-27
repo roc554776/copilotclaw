@@ -24,12 +24,53 @@ export interface AuthConfig {
 }
 
 export interface CopilotclawConfig {
+  /** Schema version for config migration. Absent in legacy configs (treated as 0). */
+  configVersion?: number;
   upstream?: string;
   port?: number;
   model?: string;
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
   auth?: AuthConfig;
+}
+
+/** Current schema version. Increment when a breaking config change is introduced. */
+export const LATEST_CONFIG_VERSION = 1;
+
+/** Migration function type: transforms a raw config object from version N to N+1. */
+type MigrationFn = (config: Record<string, unknown>) => Record<string, unknown>;
+
+/**
+ * Registry of migration functions. Each entry migrates from version N to N+1.
+ * Key is the source version (0 → migrates to 1, 1 → migrates to 2, etc.).
+ * All functions must be pure — no side effects (file write happens after the chain).
+ */
+const MIGRATIONS: Record<number, MigrationFn> = {
+  // v0 → v1: Add configVersion field. No schema changes to existing fields.
+  0: (config) => ({ ...config, configVersion: 1 }),
+};
+
+/**
+ * Apply sequential migrations from the config's current version to LATEST_CONFIG_VERSION.
+ * Returns { config, migrated } where migrated is true if any migration was applied.
+ */
+export function migrateConfig(raw: Record<string, unknown>): { config: Record<string, unknown>; migrated: boolean } {
+  let version = typeof raw["configVersion"] === "number" ? raw["configVersion"] : 0;
+  let config = raw;
+  let migrated = false;
+
+  while (version < LATEST_CONFIG_VERSION) {
+    const fn = MIGRATIONS[version];
+    if (fn === undefined) {
+      // No migration path — stop and return what we have
+      break;
+    }
+    config = fn(config);
+    version = typeof config["configVersion"] === "number" ? config["configVersion"] : version + 1;
+    migrated = true;
+  }
+
+  return { config, migrated };
 }
 
 export function getProfileName(): string | undefined {
@@ -66,7 +107,17 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   let fileConfig: CopilotclawConfig = {};
   if (existsSync(filePath)) {
     try {
-      fileConfig = JSON.parse(readFileSync(filePath, "utf-8")) as CopilotclawConfig;
+      const raw = JSON.parse(readFileSync(filePath, "utf-8")) as Record<string, unknown>;
+      const { config: migrated, migrated: didMigrate } = migrateConfig(raw);
+      fileConfig = migrated as CopilotclawConfig;
+      if (didMigrate) {
+        // Write back migrated config to persist the version bump
+        try {
+          writeFileSync(filePath, JSON.stringify(migrated, null, 2) + "\n", "utf-8");
+        } catch {
+          // Write-back failure is non-fatal — config is usable in memory
+        }
+      }
     } catch {
       // Ignore malformed config
     }
@@ -102,12 +153,14 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   return result;
 }
 
-/** Load config from file only (no env var override). */
+/** Load config from file only (no env var override). Applies migration if needed. */
 export function loadFileConfig(profile?: string): CopilotclawConfig {
   const filePath = getConfigFilePath(profile);
   if (!existsSync(filePath)) return {};
   try {
-    return JSON.parse(readFileSync(filePath, "utf-8")) as CopilotclawConfig;
+    const raw = JSON.parse(readFileSync(filePath, "utf-8")) as Record<string, unknown>;
+    const { config: migrated } = migrateConfig(raw);
+    return migrated as CopilotclawConfig;
   } catch {
     return {};
   }
@@ -125,15 +178,17 @@ export const CONFIG_ENV_VARS: Record<string, string> = {
 export function saveConfig(config: CopilotclawConfig, profile?: string): void {
   const filePath = getConfigFilePath(profile);
   mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  // Always stamp the latest configVersion when saving
+  const toWrite = { ...config, configVersion: LATEST_CONFIG_VERSION };
+  writeFileSync(filePath, JSON.stringify(toWrite, null, 2) + "\n", "utf-8");
 }
 
-/** Ensure config file exists. Creates parent directory and empty config if missing. */
+/** Ensure config file exists. Creates parent directory and versioned empty config if missing. */
 export function ensureConfigFile(profile?: string): void {
   const filePath = getConfigFilePath(profile);
   if (!existsSync(filePath)) {
     mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, "{}\n", "utf-8");
+    writeFileSync(filePath, JSON.stringify({ configVersion: LATEST_CONFIG_VERSION }, null, 2) + "\n", "utf-8");
   }
 }
 
