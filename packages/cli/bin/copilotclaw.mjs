@@ -91,9 +91,11 @@ async function run() {
       break;
     }
 
-    case "config":
-      await import(join(gatewayDist, "config-cli.js"));
+    case "config": {
+      const { main: configMain } = await import(join(gatewayDist, "config-cli.js"));
+      configMain(args);
       break;
+    }
 
     case "doctor": {
       const { runDoctor } = await import(join(gatewayDist, "doctor.js"));
