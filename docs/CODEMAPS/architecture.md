@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.26.0 | Token estimate: ~1700 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.27.0 | Token estimate: ~1700 -->
 
 # Architecture
 
@@ -102,7 +102,8 @@ Environment variables:
 - **Suspension via checkSessionMaxAge**: if "waiting" session exceeds 2 days (default, configurable), suspend and save copilotSessionId for resume
 - **Revival via reviveSession**: suspended sessions auto-revive with new physical session when triggered (e.g., user message arrives for the channel); same abstract sessionId reused, copilotSessionId preserved for resumeSession
 - **Auto-revival in polling**: startSession auto-detects suspended sessions for a channel via hasActiveSessionForChannel; if suspended, revives with saved copilotSessionId
-- **Binding Persistence (v0.18.0+)**: AgentSessionManager accepts optional `persistPath` option (defaults to {{workspaceRoot}}/data/agent-bindings.json); suspended sessions with channel bindings persisted to disk via atomic write (tmp → rename); `loadBindings()` called in constructor (line 192) restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries; `saveBindings()` called on suspendSession and stopSession; SessionSnapshot and BindingSnapshot types define persist format
+- **Binding Persistence (v0.18.0+)**: AgentSessionManager accepts optional `persistPath` option (defaults to {{workspaceRoot}}/data/agent-bindings.json); suspended sessions with channel bindings persisted to disk via atomic write (tmp → rename); `loadBindings()` called in constructor (line 192) restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries; restores cumulative token data from snapshots; `saveBindings()` called on suspendSession and stopSession; SessionSnapshot and BindingSnapshot types define persist format; SessionSnapshot includes cumulativeInputTokens/cumulativeOutputTokens
+- **Cumulative Token Tracking (v0.27.0)**: AgentSessionInfo tracks cumulativeInputTokens and cumulativeOutputTokens across physical sessions; suspendSession() accumulates token usage from the physical session before clearing it; cumulative totals persisted in SessionSnapshot via saveBindings() and restored via loadBindings(); dashboard shows cumulative tokens; IPC AgentSessionStatusResponse includes cumulative token fields
 - **savedCopilotSessionIds map**: no longer the primary resume mechanism — copilotSessionId lives on the suspended entry; map kept for potential compatibility
 - **Channel notifications**: session stopped (unexpected end) and session timed out (stale processing) post system messages to bound channel
 
