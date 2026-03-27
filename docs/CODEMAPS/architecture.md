@@ -18,7 +18,7 @@
                                                             (mocked in tests)
 ```
 
-- **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, zeroPremium, debugMockCopilotUnsafeTools, workspaceRoot, auth.github) via /api/status; proxies Copilot quota and models from agent via /api/quota and /api/models; serves recent logs via /api/logs (ring buffer)
+- **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, zeroPremium, debugMockCopilotUnsafeTools, stateDir, workspaceRoot, auth.github) via /api/status; proxies Copilot quota and models from agent via /api/quota and /api/models; serves recent logs via /api/logs (ring buffer)
 - **Agent**: single process, manages agent sessions independently of channels
 - **Agent Session**: wraps a Copilot SDK session with its own sessionId, optionally bound to a channel
 - **ChannelProvider**: plugin interface for chat mediums (built-in chat, Discord, Telegram, etc.); providers handle medium-specific routes and receive message notifications
@@ -81,7 +81,7 @@ Environment variables:
 
 ## System Prompt (v0.19.0+)
 
-- **CHANNEL_OPERATOR_PROMPT**: includes deadlock prevention at start and end, session startup section instructing agent to read SOUL.md (priority), USER.md, memory/ (daily files), and MEMORY.md for context
+- **CHANNEL_OPERATOR_PROMPT**: includes deadlock prevention at start and end, Workspace section describing git-managed workspace files (SOUL.md/USER.md/TOOLS.md/MEMORY.md/memory/) and instructing agent to commit changes, session startup section instructing agent to read SOUL.md (priority), USER.md, memory/ (daily files), and MEMORY.md for context
 - **Session Startup**: agent reads workspace bootstrap files in order: SOUL.md (persona), USER.md (user context), memory/YYYY-MM-DD.md files (recent sessions), MEMORY.md (long-term memory)
 - **SYSTEM_REMINDER**: periodic deadlock prevention reinforcement via additionalContext
 
@@ -102,7 +102,7 @@ Environment variables:
 - **Suspension via checkSessionMaxAge**: if "waiting" session exceeds 2 days (default, configurable), suspend and save copilotSessionId for resume
 - **Revival via reviveSession**: suspended sessions auto-revive with new physical session when triggered (e.g., user message arrives for the channel); same abstract sessionId reused, copilotSessionId preserved for resumeSession
 - **Auto-revival in polling**: startSession auto-detects suspended sessions for a channel via hasActiveSessionForChannel; if suspended, revives with saved copilotSessionId
-- **Binding Persistence (v0.18.0+)**: AgentSessionManager accepts optional `persistPath` option (defaults to {{workspaceRoot}}/data/agent-bindings.json); suspended sessions with channel bindings persisted to disk via atomic write (tmp → rename); `loadBindings()` called in constructor (line 192) restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries; restores cumulative token data from snapshots; `saveBindings()` called on suspendSession and stopSession; SessionSnapshot and BindingSnapshot types define persist format; SessionSnapshot includes cumulativeInputTokens/cumulativeOutputTokens
+- **Binding Persistence (v0.18.0+)**: AgentSessionManager accepts optional `persistPath` option (defaults to {{stateDir}}/data/agent-bindings.json — uses stateDir, not workspaceRoot); suspended sessions with channel bindings persisted to disk via atomic write (tmp → rename); `loadBindings()` called in constructor (line 192) restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries; restores cumulative token data from snapshots; `saveBindings()` called on suspendSession and stopSession; SessionSnapshot and BindingSnapshot types define persist format; SessionSnapshot includes cumulativeInputTokens/cumulativeOutputTokens
 - **Cumulative Token Tracking (v0.27.0)**: AgentSessionInfo tracks cumulativeInputTokens and cumulativeOutputTokens across physical sessions; suspendSession() accumulates token usage from the physical session before clearing it; cumulative totals persisted in SessionSnapshot via saveBindings() and restored via loadBindings(); dashboard shows cumulative tokens; IPC AgentSessionStatusResponse includes cumulative token fields
 - **savedCopilotSessionIds map**: no longer the primary resume mechanism — copilotSessionId lives on the suspended entry; map kept for potential compatibility
 - **Channel notifications**: session stopped (unexpected end) and session timed out (stale processing) post system messages to bound channel
@@ -119,5 +119,5 @@ Environment variables:
 - Channel backoff: AgentSessionManager tracks channelBackoff map; recordBackoffIfRapidFailure() sets backoff when session fails within rapid-failure threshold; isChannelInBackoff() checked in polling loop to skip channels in backoff (prevents retry storms); notifyChannelSessionStopped() includes error reason in system message when available
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (254 tests: 77 agent + 177 gateway), Playwright for browser E2E (8 tests); vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (268 tests: 80 agent + 188 gateway), Playwright for browser E2E (8 tests); vitest excludes test/browser/ directory
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
