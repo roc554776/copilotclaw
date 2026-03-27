@@ -124,6 +124,9 @@ function createRequestHandler(
           zeroPremium: config.zeroPremium ?? false,
           debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
           workspaceRoot: getWorkspaceRoot(getProfileName()),
+          // Full auth config is safe to expose on localhost — values are references
+          // to secrets (env var names, file paths, commands), not secrets themselves.
+          auth: config.auth?.github ?? null,
         },
       });
       return;

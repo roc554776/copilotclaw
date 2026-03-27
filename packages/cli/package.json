@@ -1,6 +1,6 @@
 {
   "name": "copilotclaw",
-  "version": "0.21.0",
+  "version": "0.26.0",
   "description": "CLI agent powered by GitHub Copilot SDK",
   "type": "module",
   "bin": {

@@ -2,6 +2,8 @@ import { join } from "node:path";
 import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { listenIpc } from "./ipc-server.js";
+import { StructuredLogger } from "./structured-logger.js";
+import { type AuthConfig, resolveToken } from "./token-resolver.js";
 
 const GATEWAY_URL = process.env["COPILOTCLAW_GATEWAY_URL"] ?? "http://localhost:19741";
 const POLL_INTERVAL_MS = 5000;
@@ -11,10 +13,19 @@ interface GatewayConfig {
   zeroPremium: boolean;
   debugMockCopilotUnsafeTools: boolean;
   workspaceRoot: string | null;
+  auth: AuthConfig | null;
 }
+
+let structuredLogger: StructuredLogger | undefined;
 
 function log(message: string): void {
   console.error(`[agent] ${message}`);
+  structuredLogger?.info(message);
+}
+
+function logError(message: string): void {
+  console.error(`[agent] ${message}`);
+  structuredLogger?.error(message);
 }
 
 async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
@@ -27,7 +38,7 @@ async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
   } catch (err: unknown) {
     log(`failed to fetch gateway config: ${String(err)}`);
   }
-  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, workspaceRoot: null };
+  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, workspaceRoot: null, auth: null };
 }
 
 async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, number>> {
@@ -63,11 +74,33 @@ async function main(): Promise<void> {
   const config = await fetchGatewayConfig(GATEWAY_URL);
   log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, debugMockCopilotUnsafeTools=${config.debugMockCopilotUnsafeTools}`);
 
+  // Initialize structured logger if workspace is available.
+  // When workspaceRoot is null (gateway unreachable at startup), structured
+  // file logging is unavailable — stderr redirect from gateway is the fallback.
+  if (config.workspaceRoot !== null) {
+    const dataDir = join(config.workspaceRoot, "data");
+    const agentLogPath = join(dataDir, "agent.log");
+    structuredLogger = new StructuredLogger(agentLogPath, "agent");
+    log("structured logger initialized");
+  }
+
+  // Resolve auth token from gateway config (if configured)
+  let githubToken: string | undefined;
+  if (config.auth !== null) {
+    try {
+      githubToken = resolveToken(config.auth);
+      log(`auth: resolved token via ${config.auth.type}${config.auth.user !== undefined ? ` (user: ${config.auth.user})` : ""}`);
+    } catch (err: unknown) {
+      logError(`auth: failed to resolve token: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const managerOpts: AgentSessionManagerOptions = {
     gatewayBaseUrl: GATEWAY_URL,
     zeroPremium: config.zeroPremium,
     debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
   };
+  if (githubToken !== undefined) managerOpts.githubToken = githubToken;
   if (config.model !== null) managerOpts.model = config.model;
   if (config.workspaceRoot !== null) {
     managerOpts.workingDirectory = config.workspaceRoot;
@@ -99,6 +132,8 @@ async function main(): Promise<void> {
 
       for (const [channelId, count] of Object.entries(pending)) {
         if (count > 0 && !sessionManager.hasActiveSessionForChannel(channelId)) {
+          // Skip channels in backoff (recent session failure — avoid retry storm)
+          if (sessionManager.isChannelInBackoff(channelId)) continue;
           // startSession will revive a suspended session (with its saved copilotSessionId)
           // or create a new one if no abstract session exists for this channel.
           log(`starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
@@ -121,7 +156,7 @@ async function main(): Promise<void> {
         }
       }
     } catch (err: unknown) {
-      log(`poll error: ${String(err)}`);
+      logError(`poll error: ${String(err)}`);
     }
 
     await new Promise((r) => { setTimeout(r, POLL_INTERVAL_MS); });

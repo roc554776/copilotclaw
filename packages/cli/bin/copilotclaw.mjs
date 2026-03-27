@@ -91,13 +91,19 @@ async function run() {
       break;
     }
 
-    case "config":
-      await import(join(gatewayDist, "config-cli.js"));
+    case "config": {
+      const { main: configMain } = await import(join(gatewayDist, "config-cli.js"));
+      configMain(args);
       break;
+    }
 
-    case "doctor":
-      await import(join(gatewayDist, "doctor.js"));
+    case "doctor": {
+      const { runDoctor } = await import(join(gatewayDist, "doctor.js"));
+      const fix = args.includes("--fix");
+      const ok = await runDoctor(fix);
+      if (!ok) process.exit(1);
       break;
+    }
 
     case "agent":
       if (args[1] === "stop") {

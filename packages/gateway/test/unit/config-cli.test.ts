@@ -58,6 +58,21 @@ describe("config CLI", () => {
       mockExit.mockRestore();
     });
 
+    it("sets auth.github.type via dotted key", () => {
+      saveConfig({});
+      configSet("auth.github.type", "gh-auth");
+      const config = loadFileConfig();
+      expect(config.auth?.github?.type).toBe("gh-auth");
+    });
+
+    it("sets auth.github.user via dotted key", () => {
+      saveConfig({ auth: { github: { type: "gh-auth" } } });
+      configSet("auth.github.user", "my-account");
+      const config = loadFileConfig();
+      expect(config.auth?.github?.user).toBe("my-account");
+      expect(config.auth?.github?.type).toBe("gh-auth");
+    });
+
     it("exits with error for invalid port value", () => {
       saveConfig({});
       const mockExit = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("exit"); });

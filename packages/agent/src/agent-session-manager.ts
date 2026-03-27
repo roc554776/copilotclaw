@@ -144,6 +144,8 @@ export interface AgentSessionManagerOptions {
   workingDirectory?: string;
   /** Path to persist channel bindings and suspended session state across agent restarts. */
   persistPath?: string;
+  /** GitHub token for authentication (from profile auth config). When set, passed to CopilotClient. */
+  githubToken?: string;
 }
 
 interface SessionSnapshot {
@@ -166,6 +168,11 @@ export interface StartSessionOptions {
 const DEFAULT_STALE_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_SESSION_AGE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 
+// Session failure backoff: if a session fails within this time after starting,
+// the channel enters a backoff period to prevent retry storms.
+const RAPID_FAILURE_THRESHOLD_MS = 30_000; // session lasted < 30s = rapid failure
+const BACKOFF_DURATION_MS = 60_000; // wait 60s before retrying
+
 export class AgentSessionManager {
   private readonly sessions = new Map<string, AgentSessionEntry>();
   private readonly channelBindings = new Map<string, string>(); // channelId → sessionId
@@ -178,7 +185,13 @@ export class AgentSessionManager {
   private readonly debugMockCopilotUnsafeTools: boolean;
   private readonly workingDirectory: string | undefined;
   private readonly persistPath: string | undefined;
+  private readonly githubToken: string | undefined;
   private generationCounter = 0;
+  // Backoff tracking: channelId → timestamp when backoff expires.
+  // Intentionally in-memory only — not persisted across agent restarts.
+  // On restart the agent process is fresh and the failure condition may
+  // have been resolved, so retrying immediately is acceptable.
+  private readonly channelBackoff = new Map<string, number>();
 
   constructor(options: AgentSessionManagerOptions) {
     this.gatewayBaseUrl = options.gatewayBaseUrl;
@@ -190,7 +203,16 @@ export class AgentSessionManager {
     this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
     this.workingDirectory = options.workingDirectory;
     this.persistPath = options.persistPath;
+    this.githubToken = options.githubToken;
     this.loadBindings();
+  }
+
+  /** Create a CopilotClient with the configured auth token (if any). */
+  private createClient(): CopilotClient {
+    if (this.githubToken !== undefined) {
+      return new CopilotClient({ githubToken: this.githubToken });
+    }
+    return new CopilotClient();
   }
 
   /** Load persisted channel bindings and restore suspended sessions. */
@@ -220,7 +242,7 @@ export class AgentSessionManager {
             boundChannelId: typeof s["boundChannelId"] === "string" ? s["boundChannelId"] : undefined,
           },
           // Placeholder client — suspended sessions don't use it. Replaced on revive.
-          client: new CopilotClient(),
+          client: this.createClient(),
           abortController: new AbortController(),
           sessionPromise: Promise.resolve(),
           generation: ++this.generationCounter,
@@ -336,6 +358,17 @@ export class AgentSessionManager {
     return entry !== undefined && entry.info.status !== "suspended";
   }
 
+  /** Check if a channel is in backoff period after a rapid session failure. */
+  isChannelInBackoff(channelId: string): boolean {
+    const expiresAt = this.channelBackoff.get(channelId);
+    if (expiresAt === undefined) return false;
+    if (Date.now() >= expiresAt) {
+      this.channelBackoff.delete(channelId);
+      return false;
+    }
+    return true;
+  }
+
   startSession(options?: StartSessionOptions): string {
     const boundChannelId = options?.boundChannelId;
 
@@ -353,7 +386,7 @@ export class AgentSessionManager {
 
     const sessionId = randomUUID();
     const abortController = new AbortController();
-    const client = new CopilotClient();
+    const client = this.createClient();
     const generation = ++this.generationCounter;
     const entry: AgentSessionEntry = {
       sessionId,
@@ -377,24 +410,7 @@ export class AgentSessionManager {
       entry.copilotSessionId = options.copilotSessionId;
     }
 
-    const promise = this.runSession(entry).then(() => {
-      // Physical session ended normally (idle) — unexpected, suspend the abstract session
-      if (!entry.abortController.signal.aborted) {
-        this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId);
-      }
-    }).catch((err: unknown) => {
-      console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
-      if (!entry.abortController.signal.aborted) {
-        this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId);
-      }
-    }).finally(() => {
-      // Clean up the CopilotClient — the abstract session survives in suspended state
-      client.stop().catch(() => {});
-    });
-
-    entry.sessionPromise = promise;
+    entry.sessionPromise = this.attachSessionLifecycle(entry, client);
     this.sessions.set(sessionId, entry);
     return sessionId;
   }
@@ -677,6 +693,10 @@ export class AgentSessionManager {
    * - model set: uses that model (zeroPremium may override if it's premium) */
   private async resolveModel(client: CopilotClient): Promise<string> {
     try {
+      // Ensure the CLI process is started before accessing client.rpc.
+      // createSession calls start() automatically via autoStart, but
+      // resolveModel runs before createSession to determine the model.
+      await client.start();
       const { models } = await client.rpc.models.list();
       if (models.length === 0) {
         console.error("[agent] no models available from SDK, falling back to gpt-4.1");
@@ -737,30 +757,13 @@ export class AgentSessionManager {
 
     entry.info.status = "starting";
     entry.abortController = new AbortController();
-    entry.client = new CopilotClient();
+    entry.client = this.createClient();
     entry.generation = ++this.generationCounter;
 
-    const boundChannelId = entry.info.boundChannelId;
-    const sessionId = entry.sessionId;
     // Capture this revival's client so finally stops the correct one even if revived again
     const clientToStop = entry.client;
 
-    const promise = this.runSession(entry).then(() => {
-      if (!entry.abortController.signal.aborted) {
-        this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId);
-      }
-    }).catch((err: unknown) => {
-      console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
-      if (!entry.abortController.signal.aborted) {
-        this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId);
-      }
-    }).finally(() => {
-      clientToStop.stop().catch(() => {});
-    });
-
-    entry.sessionPromise = promise;
+    entry.sessionPromise = this.attachSessionLifecycle(entry, clientToStop);
   }
 
   /** Explicitly stop a session — fully removes the abstract session and channel binding. */
@@ -834,9 +837,49 @@ export class AgentSessionManager {
     return "flushed";
   }
 
-  private notifyChannelSessionStopped(channelId: string | undefined): void {
+  /** Attach lifecycle handlers (suspend on idle/error, backoff, notification) to a session's runSession promise.
+   *  Used by both startSession and reviveSession to avoid duplicating the .then/.catch/.finally chain. */
+  private attachSessionLifecycle(entry: AgentSessionEntry, clientToStop: CopilotClient): Promise<void> {
+    const startTime = Date.now();
+    const sessionId = entry.sessionId;
+    const boundChannelId = entry.info.boundChannelId;
+
+    return this.runSession(entry).then(() => {
+      if (!entry.abortController.signal.aborted) {
+        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
+        this.suspendSession(entry);
+        this.notifyChannelSessionStopped(boundChannelId);
+      }
+    }).catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
+      if (!entry.abortController.signal.aborted) {
+        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
+        this.suspendSession(entry);
+        this.notifyChannelSessionStopped(boundChannelId, reason);
+      }
+    }).finally(() => {
+      clientToStop.stop().catch(() => {});
+    });
+  }
+
+  /** Record a backoff for a channel if the session failed rapidly (< RAPID_FAILURE_THRESHOLD_MS). */
+  private recordBackoffIfRapidFailure(channelId: string | undefined, startTime: number): void {
     if (channelId === undefined) return;
-    const message = "[SYSTEM] Agent session stopped unexpectedly. A new session will start when you send a message.";
+    const elapsed = Date.now() - startTime;
+    if (elapsed < RAPID_FAILURE_THRESHOLD_MS) {
+      this.channelBackoff.set(channelId, Date.now() + BACKOFF_DURATION_MS);
+      console.error(`[agent] channel ${channelId.slice(0, 8)} entering ${BACKOFF_DURATION_MS / 1000}s backoff after rapid failure (${elapsed}ms)`);
+    }
+  }
+
+  /** Notify the channel that the session stopped. The "unexpectedly" wording is intentional
+   *  even for idle exits — a session ending via session.idle (without explicit abort) is
+   *  unexpected because the agent should keep calling copilotclaw_receive_input indefinitely. */
+  private notifyChannelSessionStopped(channelId: string | undefined, reason?: string): void {
+    if (channelId === undefined) return;
+    const detail = reason !== undefined ? `: ${reason}` : "";
+    const message = `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`;
     this.postChannelMessage(channelId, message);
   }
 

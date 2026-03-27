@@ -62,7 +62,21 @@
 
 - CLI --profile オプション（全コマンドに `--profile {{name}}` オプションを追加）
 
+- ログのファイル出力と構造化ログ（gateway.log / agent.log への JSON Lines 出力、agent stderr リダイレクト）
+- セッション失敗時のバックオフ（30秒未満の即時失敗で60秒バックオフ、ポーリングループでスキップ）
+- エラー詳細のユーザー通知（"stopped unexpectedly: {{reason}}" 形式でエラー理由を表示）
+
+- Profile ごとの認証情報設定（gh auth + PAT 対応。config に auth 設定、tokenEnv/tokenFile/tokenCommand でシークレット間接参照、doctor チェック）
+
+- 設定ファイルのスキーマバージョンとマイグレーション（configVersion フィールド、v0→v1 段階的マイグレーション、loadConfig 時の自動適用とファイル書き戻し、doctor チェック）
+
+- 認証設定の名前空間移行（`auth.*` → `auth.github.*`、config migration v1→v2 で自動移行）
+
+- copilotclaw_receive_input のエラー不可侵性（いかなる例外でもエラーを返さず、keepalive と同一のレスポンスを返す。エラーはシステムログのみ）
+
 **今後の課題:**
+- Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
+- OpenTelemetry 導入（構造化ログ基盤は実装済み、OTel ログブリッジへの移行が残）
 - Dashboard フロントエンドの vite + React 移行（server-side HTML テンプレート + inline JS → 型安全な JSX + コンポーネントテスト）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）
 - コーディング支援ツール群（ファイル操作・シェル実行・検索・Git）の実装

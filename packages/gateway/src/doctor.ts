@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { MIN_AGENT_VERSION, semverSatisfies } from "./agent-manager.js";
-import { NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, resolvePort } from "./config.js";
+import { type AuthConfig, LATEST_CONFIG_VERSION, NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, resolvePort } from "./config.js";
 import { getAgentStatus } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
@@ -38,12 +39,31 @@ export function checkConfig(): DiagnosticResult {
     return { name: "config", result: "warn", message: `config file missing: ${configPath}`, fixable: true };
   }
 
-  // Parse raw file to detect malformed JSON (loadFileConfig silently swallows errors)
+  // Parse raw file to detect malformed JSON before attempting migration
+  try {
+    JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    return { name: "config", result: "warn", message: `config file is malformed: ${configPath}` };
+  }
+
+  // Apply migration if needed by calling loadConfig (triggers migration + write-back).
+  // Then re-read the (possibly migrated) file for structural validation.
+  loadConfig(getProfileName());
+
   let config: Record<string, unknown>;
   try {
     config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
   } catch {
-    return { name: "config", result: "warn", message: `config file is malformed: ${configPath}` };
+    return { name: "config", result: "warn", message: `config file is malformed after migration: ${configPath}` };
+  }
+
+  // Check configVersion (post-migration)
+  const version = config["configVersion"];
+  if (version === undefined) {
+    return { name: "config", result: "warn", message: `config file missing configVersion` };
+  }
+  if (typeof version !== "number" || version > LATEST_CONFIG_VERSION) {
+    return { name: "config", result: "warn", message: `unexpected configVersion: ${String(version)} (latest: ${LATEST_CONFIG_VERSION})` };
   }
 
   // Validate port if set
@@ -112,6 +132,76 @@ export function checkZeroPremium(): DiagnosticResult {
   return { name: "zero-premium", result: "pass", message: `enabled (model: ${config.model ?? NON_PREMIUM_MODELS[0]})` };
 }
 
+export function checkAuth(): DiagnosticResult {
+  const config = loadConfig(getProfileName());
+  const githubAuth = config.auth?.github;
+  if (githubAuth === undefined) {
+    return { name: "auth", result: "pass", message: "not configured (using default Copilot CLI auth)" };
+  }
+
+  const auth: AuthConfig = githubAuth;
+
+  if (auth.type === "gh-auth") {
+    if (auth.tokenCommand !== undefined) {
+      return validateTokenCommand(auth.tokenCommand, "gh-auth");
+    }
+    try {
+      const args = ["auth", "token"];
+      if (auth.user !== undefined) args.push("--user", auth.user);
+      if (auth.hostname !== undefined) args.push("--hostname", auth.hostname);
+      execFileSync("gh", args, { encoding: "utf-8", timeout: 5000 });
+      const detail = auth.user !== undefined ? ` (user: ${auth.user})` : "";
+      return { name: "auth", result: "pass", message: `gh-auth${detail}` };
+    } catch {
+      const detail = auth.user !== undefined ? ` --user ${auth.user}` : "";
+      return { name: "auth", result: "fail", message: `gh auth token${detail} failed — run "gh auth login" first` };
+    }
+  }
+
+  if (auth.type === "pat" || auth.type === "oauth") {
+    if (auth.tokenCommand !== undefined) {
+      return validateTokenCommand(auth.tokenCommand, auth.type);
+    }
+    if (auth.tokenEnv !== undefined) {
+      const val = process.env[auth.tokenEnv];
+      if (val === undefined || val === "") {
+        return { name: "auth", result: "fail", message: `${auth.type}: env var "${auth.tokenEnv}" is not set` };
+      }
+      return { name: "auth", result: "pass", message: `${auth.type} via env ${auth.tokenEnv}` };
+    }
+    if (auth.tokenFile !== undefined) {
+      if (!existsSync(auth.tokenFile)) {
+        return { name: "auth", result: "fail", message: `${auth.type}: token file not found: ${auth.tokenFile}` };
+      }
+      const mode = statSync(auth.tokenFile).mode & 0o777;
+      if (mode & 0o077) {
+        return { name: "auth", result: "warn", message: `${auth.type}: token file has loose permissions (${mode.toString(8)}), recommend chmod 600` };
+      }
+      return { name: "auth", result: "pass", message: `${auth.type} via file ${auth.tokenFile}` };
+    }
+    return { name: "auth", result: "fail", message: `${auth.type}: no tokenEnv, tokenFile, or tokenCommand configured` };
+  }
+
+  return { name: "auth", result: "warn", message: `unknown auth type: ${String(auth.type)}` };
+}
+
+function validateTokenCommand(command: string, authType: string): DiagnosticResult {
+  const parts = command.split(/\s+/).filter((p) => p.length > 0);
+  if (parts.length === 0) {
+    return { name: "auth", result: "fail", message: `${authType}: tokenCommand is empty` };
+  }
+  try {
+    const [cmd, ...args] = parts;
+    const output = execFileSync(cmd!, args, { encoding: "utf-8", timeout: 5000 }).trim();
+    if (output.length === 0) {
+      return { name: "auth", result: "warn", message: `${authType}: tokenCommand "${command}" returned empty output` };
+    }
+    return { name: "auth", result: "pass", message: `${authType} via command "${command}"` };
+  } catch {
+    return { name: "auth", result: "fail", message: `${authType}: tokenCommand "${command}" failed` };
+  }
+}
+
 export function fixWorkspace(): boolean {
   try {
     ensureWorkspace(getProfileName());
@@ -148,6 +238,7 @@ export async function runDoctor(fix: boolean): Promise<boolean> {
   results.push(checkWorkspace());
   results.push(checkConfig());
   results.push(checkZeroPremium());
+  results.push(checkAuth());
 
   // Async checks
   results.push(await checkGateway());

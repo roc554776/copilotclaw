@@ -8,12 +8,85 @@ export const DEFAULT_PORT = 19741;
  * The agent resolves this dynamically from the SDK at runtime via client.rpc.models.list(). */
 export const NON_PREMIUM_MODELS: readonly string[] = ["gpt-4.1-nano", "gpt-4.1-mini"];
 
+export interface AuthConfig {
+  /** Authentication type: "gh-auth" (gh CLI), "pat" (Fine-grained PAT), "oauth" (future). */
+  type: "gh-auth" | "pat" | "oauth";
+  /** GitHub username for gh auth token --user. Only used with type "gh-auth". */
+  user?: string;
+  /** Hostname for gh auth token --hostname. Only used with type "gh-auth". */
+  hostname?: string;
+  /** Environment variable name containing the token. Used with "pat" and "oauth". */
+  tokenEnv?: string;
+  /** File path containing the token. Used with "pat" and "oauth". */
+  tokenFile?: string;
+  /** Custom command to execute to obtain the token. Overrides default gh auth token invocation. */
+  tokenCommand?: string;
+}
+
+export interface AuthContainerConfig {
+  github?: AuthConfig;
+}
+
 export interface CopilotclawConfig {
+  /** Schema version for config migration. Absent in legacy configs (treated as 0). */
+  configVersion?: number;
   upstream?: string;
   port?: number;
   model?: string;
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
+  auth?: AuthContainerConfig;
+}
+
+/** Current schema version. Increment when a breaking config change is introduced. */
+export const LATEST_CONFIG_VERSION = 2;
+
+/** Migration function type: transforms a raw config object from version N to N+1. */
+type MigrationFn = (config: Record<string, unknown>) => Record<string, unknown>;
+
+/**
+ * Registry of migration functions. Each entry migrates from version N to N+1.
+ * Key is the source version (0 → migrates to 1, 1 → migrates to 2, etc.).
+ * All functions must be pure — no side effects (file write happens after the chain).
+ */
+const MIGRATIONS: Record<number, MigrationFn> = {
+  // v0 → v1: Add configVersion field. No schema changes to existing fields.
+  0: (config) => ({ ...config, configVersion: 1 }),
+  // v1 → v2: Move auth.* to auth.github.* (namespace clarification)
+  1: (config) => {
+    const auth = config["auth"] as Record<string, unknown> | undefined;
+    // Guard: only wrap if auth has a "type" field (flat AuthConfig from v1).
+    // If auth already has "github" key (manually written or partial migration), skip wrapping.
+    if (auth !== undefined && auth["type"] !== undefined) {
+      // auth has type field → it's a flat AuthConfig, wrap in { github: ... }
+      const { auth: _, ...rest } = config;
+      return { ...rest, auth: { github: auth }, configVersion: 2 };
+    }
+    return { ...config, configVersion: 2 };
+  },
+};
+
+/**
+ * Apply sequential migrations from the config's current version to LATEST_CONFIG_VERSION.
+ * Returns { config, migrated } where migrated is true if any migration was applied.
+ */
+export function migrateConfig(raw: Record<string, unknown>): { config: Record<string, unknown>; migrated: boolean } {
+  let version = typeof raw["configVersion"] === "number" ? raw["configVersion"] : 0;
+  let config = raw;
+  let migrated = false;
+
+  while (version < LATEST_CONFIG_VERSION) {
+    const fn = MIGRATIONS[version];
+    if (fn === undefined) {
+      // No migration path — stop and return what we have
+      break;
+    }
+    config = fn(config);
+    version = version + 1;
+    migrated = true;
+  }
+
+  return { config, migrated };
 }
 
 export function getProfileName(): string | undefined {
@@ -21,13 +94,16 @@ export function getProfileName(): string | undefined {
 }
 
 /** Resolve the state directory for a given profile.
- *  Shared logic used by both config.ts and workspace.ts to avoid circular imports. */
+ *  Shared logic used by both config.ts and workspace.ts to avoid circular imports.
+ *  COPILOTCLAW_STATE_ROOT overrides the base directory (used by tests to avoid
+ *  polluting the home directory). */
 export function getStateDir(profile?: string): string {
+  const base = process.env["COPILOTCLAW_STATE_ROOT"] ?? homedir();
   const p = profile ?? getProfileName();
   if (p !== undefined) {
-    return join(homedir(), `.copilotclaw-${p}`);
+    return join(base, `.copilotclaw-${p}`);
   }
-  return join(homedir(), ".copilotclaw");
+  return join(base, ".copilotclaw");
 }
 
 export function getConfigFilePath(profile?: string): string {
@@ -50,7 +126,17 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   let fileConfig: CopilotclawConfig = {};
   if (existsSync(filePath)) {
     try {
-      fileConfig = JSON.parse(readFileSync(filePath, "utf-8")) as CopilotclawConfig;
+      const raw = JSON.parse(readFileSync(filePath, "utf-8")) as Record<string, unknown>;
+      const { config: migrated, migrated: didMigrate } = migrateConfig(raw);
+      fileConfig = migrated as CopilotclawConfig;
+      if (didMigrate) {
+        // Write back migrated config to persist the version bump
+        try {
+          writeFileSync(filePath, JSON.stringify(migrated, null, 2) + "\n", "utf-8");
+        } catch {
+          // Write-back failure is non-fatal — config is usable in memory
+        }
+      }
     } catch {
       // Ignore malformed config
     }
@@ -80,15 +166,24 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   const debugMockCopilotUnsafeTools = (envMockTools !== undefined && envMockTools !== "") ? parseBool(envMockTools) : fileConfig.debugMockCopilotUnsafeTools;
   if (debugMockCopilotUnsafeTools !== undefined) result.debugMockCopilotUnsafeTools = debugMockCopilotUnsafeTools;
 
+  // Auth config is file-only (no env var override — secrets are resolved by the agent)
+  if (fileConfig.auth !== undefined) result.auth = fileConfig.auth;
+  // Note: auth is now { github?: AuthConfig } after v1→v2 migration
+
+  // Preserve configVersion from migrated file config
+  if (fileConfig.configVersion !== undefined) result.configVersion = fileConfig.configVersion;
+
   return result;
 }
 
-/** Load config from file only (no env var override). */
+/** Load config from file only (no env var override). Applies migration if needed. */
 export function loadFileConfig(profile?: string): CopilotclawConfig {
   const filePath = getConfigFilePath(profile);
   if (!existsSync(filePath)) return {};
   try {
-    return JSON.parse(readFileSync(filePath, "utf-8")) as CopilotclawConfig;
+    const raw = JSON.parse(readFileSync(filePath, "utf-8")) as Record<string, unknown>;
+    const { config: migrated } = migrateConfig(raw);
+    return migrated as CopilotclawConfig;
   } catch {
     return {};
   }
@@ -106,15 +201,17 @@ export const CONFIG_ENV_VARS: Record<string, string> = {
 export function saveConfig(config: CopilotclawConfig, profile?: string): void {
   const filePath = getConfigFilePath(profile);
   mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  // Always stamp the latest configVersion when saving
+  const toWrite = { ...config, configVersion: LATEST_CONFIG_VERSION };
+  writeFileSync(filePath, JSON.stringify(toWrite, null, 2) + "\n", "utf-8");
 }
 
-/** Ensure config file exists. Creates parent directory and empty config if missing. */
+/** Ensure config file exists. Creates parent directory and versioned empty config if missing. */
 export function ensureConfigFile(profile?: string): void {
   const filePath = getConfigFilePath(profile);
   if (!existsSync(filePath)) {
     mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, "{}\n", "utf-8");
+    writeFileSync(filePath, JSON.stringify({ configVersion: LATEST_CONFIG_VERSION }, null, 2) + "\n", "utf-8");
   }
 }
 

@@ -1,9 +1,10 @@
+import { join } from "node:path";
 import { AgentManager } from "./agent-manager.js";
 import { getProfileName, resolvePort } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
 import { startServer } from "./server.js";
 import { Store } from "./store.js";
-import { ensureWorkspace, getStoreFilePath } from "./workspace.js";
+import { ensureWorkspace, getDataDir, getStoreFilePath } from "./workspace.js";
 
 const AGENT_MONITOR_INTERVAL_MS = 30_000; // 30 seconds
 const AGENT_MONITOR_ERROR_THRESHOLD = 3;
@@ -13,6 +14,7 @@ async function main(): Promise<void> {
 
   ensureWorkspace(getProfileName());
   const logBuffer = new LogBuffer();
+  logBuffer.enableFileOutput(join(getDataDir(getProfileName()), "gateway.log"));
   logBuffer.interceptConsole();
   const store = new Store({ persistPath: getStoreFilePath(getProfileName()) });
   const port = resolvePort(getProfileName());

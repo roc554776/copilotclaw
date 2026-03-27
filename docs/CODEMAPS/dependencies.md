@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Version: 0.21.0 | Token estimate: ~280 -->
+<!-- Generated: 2026-03-27 | Version: 0.26.0 | Token estimate: ~300 -->
 
 # Dependencies
 
@@ -19,6 +19,8 @@
 | `node:http` | gateway | HTTP server (no framework) |
 | `node:net` | agent, gateway | IPC via Unix domain socket |
 | `node:crypto` | agent, gateway | randomUUID for session/message IDs |
+| `node:child_process` | agent | Token resolution (execFileSync for gh CLI and custom commands) |
+| `node:fs` | agent, gateway | Structured log file writes (appendFileSync), agent stderr redirect (openSync) |
 | `node:module` | gateway (agent-manager) | createRequire to resolve @copilotclaw/agent package path |
 
 ## Dev

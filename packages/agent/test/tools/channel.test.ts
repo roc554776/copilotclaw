@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createChannelTools } from "../../src/tools/channel.js";
 
 function createMockFetch(responses: Array<{ status: number; body: unknown }>) {
@@ -46,11 +46,39 @@ describe("channel tools — abort signal", () => {
 
     setTimeout(() => { controller.abort(); }, 50);
 
-    await expect(
-      receiveInput.handler({}, invocation),
-    ).rejects.toThrow("Abort");
+    // receiveInput NEVER throws — even on abort, it returns keepalive response
+    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("copilotclaw_receive_input");
 
     expect(fetchCallCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("never throws on fetch network error — returns keepalive response", async () => {
+    const fetchFn = async () => {
+      throw new Error("network unreachable");
+    };
+
+    const { receiveInput } = createChannelTools({
+      gatewayBaseUrl: "http://localhost:9999",
+      channelId: "ch-err",
+      pollIntervalMs: 10,
+      fetch: fetchFn as typeof globalThis.fetch,
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Must NOT throw — returns keepalive instead
+    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("copilotclaw_receive_input");
+
+    // Error was logged to system log
+    const logged = errSpy.mock.calls.some(
+      (c) => String(c[0]).includes("receive_input internal error"),
+    );
+    expect(logged).toBe(true);
+
+    errSpy.mockRestore();
   });
 });
 

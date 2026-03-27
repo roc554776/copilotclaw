@@ -89,7 +89,7 @@ copilotclaw doctor --fix  # Auto-fix fixable issues
 
 ## Configuration
 
-Config file: `~/.copilotclaw/config.json` (created by `copilotclaw setup`)
+Config file: `~/.copilotclaw/config.json` (created by `copilotclaw setup`). The config file includes a `configVersion` field for schema versioning — old configs are automatically migrated on load.
 
 ```sh
 copilotclaw config get <key>          # Show config value
@@ -119,6 +119,37 @@ copilotclaw --profile staging start
 
 Each profile gets its own state directory (`~/.copilotclaw-staging/`), completely isolated from other profiles. The `COPILOTCLAW_PROFILE` environment variable can also be used; `--profile` takes precedence.
 
+### Profile Authentication
+
+Each profile can use different GitHub Copilot credentials. Configure via `auth` in `config.json`.
+
+**Using gh CLI authentication:**
+
+```sh
+# Use a specific GitHub account
+copilotclaw --profile work config set auth.github.type gh-auth
+copilotclaw --profile work config set auth.github.user my-work-account
+```
+
+**Using a Fine-grained Personal Access Token:**
+
+```sh
+export COPILOTCLAW_WORK_TOKEN="github_pat_xxxx..."
+copilotclaw --profile work config set auth.github.type pat
+copilotclaw --profile work config set auth.github.tokenEnv COPILOTCLAW_WORK_TOKEN
+```
+
+When `auth.github` is not configured, the default Copilot CLI credentials are used. Old configs with `auth.*` are automatically migrated to `auth.github.*`.
+
+| Auth key | Description |
+|:---|:---|
+| `auth.github.type` | `gh-auth` (gh CLI), `pat` (Personal Access Token) |
+| `auth.github.user` | GitHub username for `gh auth token --user` (gh-auth only) |
+| `auth.github.hostname` | GitHub hostname for `gh auth token --hostname` (gh-auth only) |
+| `auth.github.tokenEnv` | Environment variable containing the token (pat) |
+| `auth.github.tokenFile` | File path containing the token (pat) |
+| `auth.github.tokenCommand` | Custom command to obtain the token (any type, no spaces in paths) |
+
 ## Commands
 
 ```
@@ -142,6 +173,8 @@ All persistent data is stored under `~/.copilotclaw/` (or `~/.copilotclaw-{{prof
 | `config.json` | Configuration |
 | `data/store.json` | Channels and message history |
 | `data/agent-bindings.json` | Agent session bindings (survives agent restarts) |
+| `data/gateway.log` | Gateway structured log (JSON Lines) |
+| `data/agent.log` | Agent structured log (JSON Lines) |
 | `SOUL.md` | Agent persona and tone (user-customizable) |
 | `AGENTS.md` | Agent operating guide (user-customizable) |
 | `USER.md` | User information |

@@ -1,7 +1,7 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getConfigFilePath, saveConfig } from "../../src/config.js";
-import { checkConfig, checkWorkspace, checkZeroPremium, runDoctor } from "../../src/doctor.js";
+import { checkAuth, checkConfig, checkWorkspace, checkZeroPremium, runDoctor } from "../../src/doctor.js";
 import { ensureWorkspace, getDataDir } from "../../src/workspace.js";
 
 describe("doctor", () => {
@@ -51,9 +51,28 @@ describe("doctor", () => {
 
     it("returns warn for invalid port in config", () => {
       saveConfig({});
-      writeFileSync(getConfigFilePath(), JSON.stringify({ port: -1 }), "utf-8");
+      writeFileSync(getConfigFilePath(), JSON.stringify({ configVersion: 1, port: -1 }), "utf-8");
       const result = checkConfig();
       expect(result.result).toBe("warn");
+    });
+
+    it("auto-migrates config with missing configVersion and returns pass", () => {
+      saveConfig({});
+      writeFileSync(getConfigFilePath(), JSON.stringify({ port: 19741 }), "utf-8");
+      const result = checkConfig();
+      expect(result.result).toBe("pass");
+      // Verify the file was migrated
+      const onDisk = JSON.parse(readFileSync(getConfigFilePath(), "utf-8")) as Record<string, unknown>;
+      expect(onDisk["configVersion"]).toBe(2);
+    });
+
+    it("auto-migrates config with outdated configVersion and returns pass", () => {
+      saveConfig({});
+      writeFileSync(getConfigFilePath(), JSON.stringify({ configVersion: 0, port: 19741 }), "utf-8");
+      const result = checkConfig();
+      expect(result.result).toBe("pass");
+      const onDisk = JSON.parse(readFileSync(getConfigFilePath(), "utf-8")) as Record<string, unknown>;
+      expect(onDisk["configVersion"]).toBe(2);
     });
 
     it("returns warn for malformed JSON config", () => {
@@ -66,7 +85,7 @@ describe("doctor", () => {
 
     it("returns warn for port above 65535", () => {
       saveConfig({});
-      writeFileSync(getConfigFilePath(), JSON.stringify({ port: 99999 }), "utf-8");
+      writeFileSync(getConfigFilePath(), JSON.stringify({ configVersion: 1, port: 99999 }), "utf-8");
       const result = checkConfig();
       expect(result.result).toBe("warn");
     });
@@ -95,6 +114,52 @@ describe("doctor", () => {
       saveConfig({ zeroPremium: true });
       const result = checkZeroPremium();
       expect(result.result).toBe("pass");
+    });
+  });
+
+  describe("checkAuth", () => {
+    it("returns pass when auth is not configured", () => {
+      saveConfig({});
+      const result = checkAuth();
+      expect(result.result).toBe("pass");
+      expect(result.message).toContain("not configured");
+    });
+
+    it("returns fail when pat tokenEnv is not set", () => {
+      delete process.env["NONEXISTENT_TOKEN_VAR"];
+      saveConfig({ auth: { github: { type: "pat", tokenEnv: "NONEXISTENT_TOKEN_VAR" } } });
+      const result = checkAuth();
+      expect(result.result).toBe("fail");
+      expect(result.message).toContain("NONEXISTENT_TOKEN_VAR");
+    });
+
+    it("returns pass when pat tokenEnv is set", () => {
+      process.env["TEST_AUTH_TOKEN"] = "github_pat_test";
+      saveConfig({ auth: { github: { type: "pat", tokenEnv: "TEST_AUTH_TOKEN" } } });
+      const result = checkAuth();
+      expect(result.result).toBe("pass");
+      delete process.env["TEST_AUTH_TOKEN"];
+    });
+
+    it("returns fail when pat has no token source", () => {
+      saveConfig({ auth: { github: { type: "pat" } } });
+      const result = checkAuth();
+      expect(result.result).toBe("fail");
+      expect(result.message).toContain("no tokenEnv");
+    });
+
+    it("returns pass for gh-auth with valid tokenCommand", () => {
+      saveConfig({ auth: { github: { type: "gh-auth", tokenCommand: "echo test-token" } } });
+      const result = checkAuth();
+      expect(result.result).toBe("pass");
+      expect(result.message).toContain("command");
+    });
+
+    it("returns fail for gh-auth with invalid tokenCommand", () => {
+      saveConfig({ auth: { github: { type: "gh-auth", tokenCommand: "nonexistent-binary-xyz" } } });
+      const result = checkAuth();
+      expect(result.result).toBe("fail");
+      expect(result.message).toContain("failed");
     });
   });
 

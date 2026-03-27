@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
+import { openSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type AgentStatusResponse, getAgentModels, getAgentQuota, getAgentSessionMessages, getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
+import { getDataDir } from "./workspace.js";
 
 export const MIN_AGENT_VERSION = "0.3.0";
 
@@ -103,9 +105,20 @@ export class AgentManager {
   }
 
   private spawnAgent(): void {
+    // Redirect agent stderr to a log file for post-mortem diagnosis.
+    // Agent also writes structured JSON logs internally, but this captures
+    // unhandled crashes and SDK-level output that occur before logger setup.
+    const agentLogPath = join(getDataDir(), "agent.log");
+    let stderrFd: number | "ignore" = "ignore";
+    try {
+      stderrFd = openSync(agentLogPath, "a");
+    } catch {
+      console.error(`[gateway] WARNING: could not open agent log file ${agentLogPath}`);
+    }
+
     const child = spawn(process.execPath, [this.agentScript], {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", stderrFd],
       env: {
         ...process.env,
         COPILOTCLAW_GATEWAY_URL: `http://localhost:${this.gatewayPort}`,

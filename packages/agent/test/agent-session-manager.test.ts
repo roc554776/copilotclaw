@@ -1030,3 +1030,125 @@ describe("AgentSessionManager — subagent completion notification", () => {
     await wait(30);
   });
 });
+
+describe("AgentSessionManager — session failure backoff", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("enters backoff when session fails rapidly (< 30s)", async () => {
+    // createSession rejects immediately — rapid failure
+    installClientMock(vi.fn().mockRejectedValue(new Error("auth failed")));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-backoff" });
+    await wait(50);
+
+    // Channel should be in backoff
+    expect(manager.isChannelInBackoff("ch-backoff")).toBe(true);
+  });
+
+  it("does not backoff for channels without prior failure", () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    expect(manager.isChannelInBackoff("ch-no-failure")).toBe(false);
+  });
+
+  it("backoff expires after the backoff duration", async () => {
+    installClientMock(vi.fn().mockRejectedValue(new Error("auth failed")));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-backoff-expiry" });
+    await wait(50);
+
+    expect(manager.isChannelInBackoff("ch-backoff-expiry")).toBe(true);
+
+    // Fast-forward past the backoff duration
+    const now = Date.now();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(now + 61_000); // 61 seconds later
+      expect(manager.isChannelInBackoff("ch-backoff-expiry")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("AgentSessionManager — error detail in channel notification", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("includes error reason in stopped notification when session throws", async () => {
+    installClientMock(vi.fn().mockRejectedValue(new Error("model resolution failed")));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-error-detail" });
+    await wait(50);
+
+    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
+      ([url]) => (url as string).includes("/messages"),
+    );
+    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(notifyCalls[0]![1].body as string) as { message: string };
+    expect(body.message).toContain("stopped unexpectedly");
+    expect(body.message).toContain("model resolution failed");
+  });
+
+  it("omits error detail when session ends normally (idle)", async () => {
+    installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+    });
+
+    manager.startSession({ boundChannelId: "ch-idle-no-detail" });
+    await wait(50);
+
+    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
+      ([url]) => (url as string).includes("/messages"),
+    );
+    expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(notifyCalls[0]![1].body as string) as { message: string };
+    expect(body.message).toContain("stopped unexpectedly.");
+    // No ": reason" appended for idle exit — message ends with "unexpectedly."
+    expect(body.message).not.toContain("unexpectedly:");
+  });
+});
