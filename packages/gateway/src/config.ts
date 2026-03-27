@@ -66,7 +66,7 @@ export function migrateConfig(raw: Record<string, unknown>): { config: Record<st
       break;
     }
     config = fn(config);
-    version = typeof config["configVersion"] === "number" ? config["configVersion"] : version + 1;
+    version = version + 1;
     migrated = true;
   }
 
@@ -149,6 +149,9 @@ export function loadConfig(profile?: string): CopilotclawConfig {
 
   // Auth config is file-only (no env var override — secrets are resolved by the agent)
   if (fileConfig.auth !== undefined) result.auth = fileConfig.auth;
+
+  // Preserve configVersion from migrated file config
+  if (fileConfig.configVersion !== undefined) result.configVersion = fileConfig.configVersion;
 
   return result;
 }

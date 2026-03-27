@@ -49,15 +49,21 @@ describe("config migration", () => {
       expect(migrated).toBe(true);
       expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
     });
+
+    it("does not migrate when configVersion is above latest (future version)", () => {
+      const { config, migrated } = migrateConfig({ configVersion: 99, port: 19741 });
+      expect(migrated).toBe(false);
+      expect(config["configVersion"]).toBe(99);
+      expect(config["port"]).toBe(19741);
+    });
   });
 
   describe("loadConfig migration write-back", () => {
     it("writes back migrated config to disk on load", () => {
       const profile = `migration-wb-${Date.now()}`;
-      // Create a v0 config (no configVersion) via direct file write
-      saveConfig({ port: 19741 }, profile);
+      // Ensure directory exists, then write a v0 config directly (no configVersion)
+      ensureConfigFile(profile);
       const filePath = getConfigFilePath(profile);
-      // Overwrite with v0 format (no configVersion)
       writeFileSync(filePath, JSON.stringify({ port: 19741 }), "utf-8");
 
       // Load — should trigger migration and write back

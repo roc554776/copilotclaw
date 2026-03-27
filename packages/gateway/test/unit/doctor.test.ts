@@ -51,9 +51,25 @@ describe("doctor", () => {
 
     it("returns warn for invalid port in config", () => {
       saveConfig({});
-      writeFileSync(getConfigFilePath(), JSON.stringify({ port: -1 }), "utf-8");
+      writeFileSync(getConfigFilePath(), JSON.stringify({ configVersion: 1, port: -1 }), "utf-8");
       const result = checkConfig();
       expect(result.result).toBe("warn");
+    });
+
+    it("returns warn for missing configVersion", () => {
+      saveConfig({});
+      writeFileSync(getConfigFilePath(), JSON.stringify({ port: 19741 }), "utf-8");
+      const result = checkConfig();
+      expect(result.result).toBe("warn");
+      expect(result.message).toContain("missing configVersion");
+    });
+
+    it("returns warn for outdated configVersion", () => {
+      saveConfig({});
+      writeFileSync(getConfigFilePath(), JSON.stringify({ configVersion: 0, port: 19741 }), "utf-8");
+      const result = checkConfig();
+      expect(result.result).toBe("warn");
+      expect(result.message).toContain("auto-migrated");
     });
 
     it("returns warn for malformed JSON config", () => {
@@ -66,7 +82,7 @@ describe("doctor", () => {
 
     it("returns warn for port above 65535", () => {
       saveConfig({});
-      writeFileSync(getConfigFilePath(), JSON.stringify({ port: 99999 }), "utf-8");
+      writeFileSync(getConfigFilePath(), JSON.stringify({ configVersion: 1, port: 99999 }), "utf-8");
       const result = checkConfig();
       expect(result.result).toBe("warn");
     });

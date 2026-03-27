@@ -55,6 +55,9 @@ export function checkConfig(): DiagnosticResult {
   if (typeof version !== "number" || version > LATEST_CONFIG_VERSION) {
     return { name: "config", result: "warn", message: `unexpected configVersion: ${String(version)} (latest: ${LATEST_CONFIG_VERSION})` };
   }
+  if (version < LATEST_CONFIG_VERSION) {
+    return { name: "config", result: "warn", message: `config file at v${version} (latest: v${LATEST_CONFIG_VERSION}, will be auto-migrated on next load)` };
+  }
 
   // Validate port if set
   const port = config["port"];
