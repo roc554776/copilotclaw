@@ -92,6 +92,15 @@ describe("SessionEventStore", () => {
       const list = store.listOriginalPrompts();
       expect(list).toHaveLength(2);
     });
+
+    it("excludes session prompts from original prompt listing", () => {
+      store.saveOriginalPrompt({ model: "gpt-4.1", prompt: "original", capturedAt: "2026-03-27T00:00:00Z" });
+      store.saveSessionPrompt("sdk-sess-1", "session prompt", "gpt-4.1");
+
+      const list = store.listOriginalPrompts();
+      expect(list).toHaveLength(1);
+      expect(list[0]!.prompt).toBe("original");
+    });
   });
 
   describe("session system prompt", () => {

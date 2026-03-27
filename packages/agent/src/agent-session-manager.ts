@@ -616,11 +616,8 @@ export class AgentSessionManager {
     // Register transform callbacks to capture original system prompt.
     // The callback receives the original prompt content and returns it unchanged —
     // we use this to capture and forward the original content to gateway.
-    const capturedPromptSections: Record<string, string> = {};
     session.registerTransformCallbacks(new Map([
       ["*", async (content: string) => {
-        // Capture the full system prompt (all sections concatenated by SDK into one callback)
-        capturedPromptSections["system"] = content;
         this.postToGateway("/api/system-prompts/original", {
           model: resolvedModel,
           prompt: content,

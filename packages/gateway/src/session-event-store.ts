@@ -43,6 +43,19 @@ export class SessionEventStore {
   appendEvent(sessionId: string, event: SessionEvent): void {
     const filePath = this.sessionFilePath(sessionId);
     appendFileSync(filePath, JSON.stringify(event) + "\n", "utf-8");
+    this.maybeEnforceStorageCap();
+  }
+
+  /**
+   * Periodically check and enforce the storage cap.
+   * Runs the actual enforcement every ~100 appends to avoid stat overhead on every write.
+   */
+  private appendCount = 0;
+  private maybeEnforceStorageCap(): void {
+    this.appendCount++;
+    if (this.appendCount % 100 === 0) {
+      this.enforceStorageCap();
+    }
   }
 
   /** Get all events for a session. */
@@ -114,7 +127,7 @@ export class SessionEventStore {
   listOriginalPrompts(): SystemPromptSnapshot[] {
     try {
       return readdirSync(this.promptDir)
-        .filter((f) => f.endsWith(".json"))
+        .filter((f) => f.endsWith(".json") && !f.startsWith("session-"))
         .map((f) => {
           try {
             return JSON.parse(readFileSync(join(this.promptDir, f), "utf-8")) as SystemPromptSnapshot;
