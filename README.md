@@ -35,8 +35,8 @@ copilotclaw setup
 This creates `~/.copilotclaw/` with:
 - Config file (`config.json`)
 - Data directory for channels and messages
-- Workspace files: `SOUL.md` (persona), `AGENTS.md` (operating guide), `USER.md`, `TOOLS.md`, `MEMORY.md`, `memory/`
-- Git repository (if git is available)
+- Workspace (`workspace/`): `SOUL.md` (persona), `AGENTS.md` (operating guide), `USER.md`, `TOOLS.md`, `MEMORY.md`, `memory/`
+- Git repository in workspace (if git is available)
 
 ## Usage
 
@@ -172,15 +172,15 @@ All persistent data is stored under `~/.copilotclaw/` (or `~/.copilotclaw-{{prof
 |:---|:---|
 | `config.json` | Configuration |
 | `data/store.json` | Channels and message history |
-| `data/agent-bindings.json` | Agent session bindings (survives agent restarts) |
+| `data/agent-bindings.json` | Agent session bindings and token history (survives agent restarts) |
 | `data/gateway.log` | Gateway structured log (JSON Lines) |
 | `data/agent.log` | Agent structured log (JSON Lines) |
-| `SOUL.md` | Agent persona and tone (user-customizable) |
-| `AGENTS.md` | Agent operating guide (user-customizable) |
-| `USER.md` | User information |
-| `TOOLS.md` | Local tool notes |
-| `MEMORY.md` | Agent long-term memory |
-| `memory/` | Daily memory logs (`YYYY-MM-DD.md`) |
+| `workspace/SOUL.md` | Agent persona and tone (user-customizable) |
+| `workspace/AGENTS.md` | Agent operating guide (user-customizable) |
+| `workspace/USER.md` | User information |
+| `workspace/TOOLS.md` | Local tool notes |
+| `workspace/MEMORY.md` | Agent long-term memory |
+| `workspace/memory/` | Daily memory logs (`YYYY-MM-DD.md`) |
 
 ## Contributing
 

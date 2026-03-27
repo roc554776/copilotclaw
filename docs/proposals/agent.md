@@ -296,6 +296,19 @@ channel binding の永続化:
 - 永続化タイミング: `suspendSession` 時と `stopSession` 時（atomic write: tmp ファイル → rename）
 - agent 起動時に永続化ファイルから suspended session を復元し、channel binding を再構築する
 
+### 抽象セッションへのトークン消費履歴の紐づけ
+
+物理 session が停止・再作成されても、抽象 agent session に紐づく形でトークン消費量等の履歴を追跡する。
+
+**現状の課題:**
+- 物理 session が停止すると、その session のトークン消費履歴が dashboard から参照できなくなる
+- 抽象セッション単位でのトークン消費量（複数の物理 session にまたがる累積値）が把握できない
+
+**目標:**
+- 抽象 agent session に累積のトークン消費量を紐づける
+- 物理 session の停止・再作成をまたいで、同一の抽象 session に帰属するトークン消費を集計できる
+- dashboard から、停止済みの物理 session を含む全履歴を参照できる
+
 ### 物理 Session 停止後の記憶保持
 
 物理 session が停止した後に再開する際、直前のコンテキスト（会話履歴や作業状態）をできる限り保持する。

@@ -2,7 +2,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getConfigFilePath, saveConfig } from "../../src/config.js";
 import { checkAuth, checkConfig, checkWorkspace, checkZeroPremium, runDoctor } from "../../src/doctor.js";
-import { ensureWorkspace, getDataDir } from "../../src/workspace.js";
+import { ensureWorkspaceReady } from "../../src/setup.js";
+import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "../../src/workspace.js";
 
 describe("doctor", () => {
   beforeEach(() => {
@@ -28,8 +29,9 @@ describe("doctor", () => {
       expect(result.fixable).toBe(true);
     });
 
-    it("returns pass when workspace exists", () => {
+    it("returns pass when workspace is fully set up", () => {
       ensureWorkspace();
+      ensureWorkspaceReady(getWorkspaceRoot());
       const result = checkWorkspace();
       expect(result.result).toBe("pass");
     });
@@ -166,6 +168,7 @@ describe("doctor", () => {
   describe("runDoctor", () => {
     it("runs all checks and returns true when no failures", async () => {
       ensureWorkspace();
+      ensureWorkspaceReady(getWorkspaceRoot());
       saveConfig({});
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const ok = await runDoctor(false);
@@ -186,11 +189,13 @@ describe("doctor", () => {
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       await runDoctor(true);
       expect(existsSync(getDataDir())).toBe(true);
+      expect(existsSync(getWorkspaceRoot())).toBe(true);
       errSpy.mockRestore();
     });
 
     it("outputs plain text without color codes", async () => {
       ensureWorkspace();
+      ensureWorkspaceReady(getWorkspaceRoot());
       saveConfig({});
       const calls: string[] = [];
       const errSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {

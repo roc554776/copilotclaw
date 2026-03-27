@@ -1152,3 +1152,118 @@ describe("AgentSessionManager — error detail in channel notification", () => {
     expect(body.message).not.toContain("unexpectedly:");
   });
 });
+
+describe("AgentSessionManager — cumulative token history across physical sessions", () => {
+  let tmpDir: string;
+  let persistPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-test-"));
+    persistPath = join(tmpDir, "agent-bindings.json");
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("accumulates token usage into cumulativeInputTokens/cumulativeOutputTokens on suspend", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    manager.startSession({ boundChannelId: "ch-cumul" });
+    await waitForPhysicalSession(manager);
+
+    // Emit usage before session ends
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 } });
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 200, outputTokens: 75 } });
+
+    // End session → suspended
+    mockSession.emit("session.idle");
+    await wait(50);
+
+    const statuses = manager.getSessionStatuses();
+    const session = Object.values(statuses)[0];
+    expect(session?.status).toBe("suspended");
+    expect(session?.cumulativeInputTokens).toBe(300);
+    expect(session?.cumulativeOutputTokens).toBe(125);
+  });
+
+  it("persists cumulative token usage to bindings file", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    manager.startSession({ boundChannelId: "ch-persist-tokens" });
+    await waitForPhysicalSession(manager);
+
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 500, outputTokens: 200 } });
+    mockSession.emit("session.idle");
+    await wait(50);
+
+    const raw = readFileSync(persistPath, "utf-8");
+    const snapshot = JSON.parse(raw) as { sessions: Array<{ cumulativeInputTokens?: number; cumulativeOutputTokens?: number }> };
+    expect(snapshot.sessions[0]!.cumulativeInputTokens).toBe(500);
+    expect(snapshot.sessions[0]!.cumulativeOutputTokens).toBe(200);
+  });
+
+  it("restores cumulative token usage from bindings file on new manager", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    manager.startSession({ boundChannelId: "ch-restore-tokens" });
+    await waitForPhysicalSession(manager);
+
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 300, outputTokens: 100 } });
+    mockSession.emit("session.idle");
+    await wait(50);
+
+    // Create new manager — simulates agent restart
+    installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+    const manager2 = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    const statuses = manager2.getSessionStatuses();
+    const restored = Object.values(statuses).find((s) => s.boundChannelId === "ch-restore-tokens");
+    expect(restored?.cumulativeInputTokens).toBe(300);
+    expect(restored?.cumulativeOutputTokens).toBe(100);
+  });
+});

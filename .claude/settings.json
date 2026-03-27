@@ -45,7 +45,13 @@
       "Bash(pnpm --filter @copilotclaw/agent run typecheck)",
       "Bash(npm run:*)",
       "Bash(npx vitest:*)",
-      "Bash(pnpm -r run test)"
+      "Bash(pnpm -r run test)",
+      "mcp__serena__list_memories",
+      "mcp__serena__read_memory",
+      "Bash(pnpm --filter agent test)",
+      "Bash(pnpm --filter gateway test)",
+      "Bash(pnpm --filter gateway exec tsc --noEmit)",
+      "Bash(pnpm --filter agent exec tsc --noEmit)"
     ]
   }
 }

@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findAvailablePort, isPortAvailable, seedWorkspaceBootstrapFiles } from "../../src/setup.js";
+import { checkWorkspaceHealth, ensureWorkspaceReady, findAvailablePort, isPortAvailable, migrateWorkspaceFiles, seedWorkspaceBootstrapFiles } from "../../src/setup.js";
 
 function listenOnRandomPort(): Promise<{ server: ReturnType<typeof createServer>; port: number }> {
   return new Promise((resolve) => {
@@ -110,5 +111,138 @@ describe("workspace bootstrap files", () => {
     expect(readFileSync(soulPath, "utf-8")).toBe(customContent);
     // But should still create other files
     expect(existsSync(join(tmpDir, "AGENTS.md"))).toBe(true);
+  });
+});
+
+describe("workspace migration", () => {
+  let stateDir: string;
+  let workspaceDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "copilotclaw-migrate-test-"));
+    workspaceDir = join(stateDir, "workspace");
+  });
+
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("migrates bootstrap files from state dir root to workspace/", () => {
+    writeFileSync(join(stateDir, "SOUL.md"), "my soul", "utf-8");
+    writeFileSync(join(stateDir, "AGENTS.md"), "my agents", "utf-8");
+
+    migrateWorkspaceFiles(stateDir, workspaceDir);
+
+    expect(existsSync(join(stateDir, "SOUL.md"))).toBe(false);
+    expect(existsSync(join(stateDir, "AGENTS.md"))).toBe(false);
+    expect(readFileSync(join(workspaceDir, "SOUL.md"), "utf-8")).toBe("my soul");
+    expect(readFileSync(join(workspaceDir, "AGENTS.md"), "utf-8")).toBe("my agents");
+  });
+
+  it("migrates memory/ directory from state dir root to workspace/", () => {
+    const memDir = join(stateDir, "memory");
+    mkdirSync(memDir);
+    writeFileSync(join(memDir, "2026-03-27.md"), "today's log", "utf-8");
+
+    migrateWorkspaceFiles(stateDir, workspaceDir);
+
+    expect(existsSync(join(stateDir, "memory"))).toBe(false);
+    expect(readFileSync(join(workspaceDir, "memory", "2026-03-27.md"), "utf-8")).toBe("today's log");
+  });
+
+  it("does not overwrite files already in workspace/", () => {
+    mkdirSync(workspaceDir, { recursive: true });
+    writeFileSync(join(stateDir, "SOUL.md"), "old soul", "utf-8");
+    writeFileSync(join(workspaceDir, "SOUL.md"), "new soul", "utf-8");
+
+    migrateWorkspaceFiles(stateDir, workspaceDir);
+
+    // Old file at state dir should remain (not moved because dest exists)
+    expect(existsSync(join(stateDir, "SOUL.md"))).toBe(true);
+    expect(readFileSync(join(workspaceDir, "SOUL.md"), "utf-8")).toBe("new soul");
+  });
+
+  it("is a no-op when stateDir equals workspaceRoot", () => {
+    writeFileSync(join(stateDir, "SOUL.md"), "soul", "utf-8");
+
+    migrateWorkspaceFiles(stateDir, stateDir);
+
+    expect(readFileSync(join(stateDir, "SOUL.md"), "utf-8")).toBe("soul");
+  });
+
+  it("is a no-op when no bootstrap files exist at state dir root", () => {
+    migrateWorkspaceFiles(stateDir, workspaceDir);
+
+    expect(existsSync(workspaceDir)).toBe(false);
+  });
+});
+
+describe("ensureWorkspaceReady", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-ensure-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates workspace dir, bootstrap files, memory/.gitkeep, and git repo", () => {
+    ensureWorkspaceReady(tmpDir);
+
+    expect(existsSync(join(tmpDir, "SOUL.md"))).toBe(true);
+    expect(existsSync(join(tmpDir, "USER.md"))).toBe(true);
+    expect(existsSync(join(tmpDir, "TOOLS.md"))).toBe(true);
+    expect(existsSync(join(tmpDir, "MEMORY.md"))).toBe(true);
+    expect(existsSync(join(tmpDir, "memory", ".gitkeep"))).toBe(true);
+    expect(existsSync(join(tmpDir, ".git"))).toBe(true);
+  });
+
+  it("creates initial git commit with workspace files", () => {
+    ensureWorkspaceReady(tmpDir);
+
+    const log = spawnSync("git", ["log", "--oneline"], { cwd: tmpDir, encoding: "utf-8", stdio: "pipe" });
+    expect(log.status).toBe(0);
+    expect(log.stdout).toContain("Initial workspace setup");
+  });
+
+  it("is idempotent — second call does not create duplicate commits", () => {
+    ensureWorkspaceReady(tmpDir);
+    ensureWorkspaceReady(tmpDir);
+
+    const log = spawnSync("git", ["log", "--oneline"], { cwd: tmpDir, encoding: "utf-8", stdio: "pipe" });
+    expect(log.stdout.trim().split("\n")).toHaveLength(1);
+  });
+});
+
+describe("checkWorkspaceHealth", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-health-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns no issues for a fully set up workspace", () => {
+    ensureWorkspaceReady(tmpDir);
+    const issues = checkWorkspaceHealth(tmpDir);
+    expect(issues).toHaveLength(0);
+  });
+
+  it("reports missing files", () => {
+    mkdirSync(tmpDir, { recursive: true });
+    const issues = checkWorkspaceHealth(tmpDir);
+    expect(issues.some((i) => i.includes("SOUL.md"))).toBe(true);
+    expect(issues.some((i) => i.includes("memory/"))).toBe(true);
+  });
+
+  it("reports missing workspace directory", () => {
+    const nonexistent = join(tmpDir, "nonexistent");
+    const issues = checkWorkspaceHealth(nonexistent);
+    expect(issues).toContain("workspace directory missing");
   });
 });

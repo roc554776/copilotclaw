@@ -74,6 +74,13 @@
 
 - copilotclaw_receive_input のエラー不可侵性（いかなる例外でもエラーを返さず、keepalive と同一のレスポンスを返す。エラーはシステムログのみ）
 
+- State Directory と Workspace の概念的・物理的分離（`{{stateDir}}/workspace/` サブディレクトリ。既存環境の自動マイグレーション。SessionConfig.workingDirectory を workspace に設定）
+- 抽象セッションへのトークン消費履歴の紐づけ（物理 session をまたいだ累積追跡、bindings ファイルへの永続化、dashboard での累積トークン表示）
+
+- Workspace Ensure（git init + bootstrap files + initial commit の一括保証。setup 時 + 物理 session 開始前に実行）
+- Doctor workspace チェック（必須ファイル・git 初期化の検証、--fix による自動修正）
+- Workspace 情報のシステムインストラクション記載（CHANNEL_OPERATOR_PROMPT に workspace 構造・git 管理方針を追加。SOUL.md 等との レイヤー区別を明確化）
+
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
 - OpenTelemetry 導入（構造化ログ基盤は実装済み、OTel ログブリッジへの移行が残）

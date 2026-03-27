@@ -6,16 +6,17 @@ describe("workspace paths", () => {
     delete process.env["COPILOTCLAW_PROFILE"];
   });
 
-  it("getWorkspaceRoot returns default state dir for no profile", () => {
+  it("getWorkspaceRoot returns workspace subdir under state dir for no profile", () => {
     const root = getWorkspaceRoot();
-    expect(root).toMatch(/\.copilotclaw$/);
+    expect(root).toMatch(/\.copilotclaw[/\\]workspace$/);
     expect(root).not.toContain(".copilotclaw-");
   });
 
-  it("getDataDir returns a path under workspace root", () => {
+  it("getDataDir returns data subdir under state dir (not workspace)", () => {
     const dataDir = getDataDir();
     expect(dataDir).toContain(".copilotclaw");
     expect(dataDir).toContain("data");
+    expect(dataDir).not.toContain("workspace");
   });
 
   it("getStoreFilePath returns a JSON file path under data dir", () => {
@@ -24,15 +25,17 @@ describe("workspace paths", () => {
     expect(storePath).toContain("data");
   });
 
-  it("getWorkspaceRoot with profile returns separate state dir (.copilotclaw-{{profile}})", () => {
+  it("getWorkspaceRoot with profile returns workspace under profile state dir", () => {
     const root = getWorkspaceRoot("staging");
     expect(root).toContain(".copilotclaw-staging");
+    expect(root).toMatch(/workspace$/);
   });
 
   it("getWorkspaceRoot reads COPILOTCLAW_PROFILE env var", () => {
     process.env["COPILOTCLAW_PROFILE"] = "dev";
     const root = getWorkspaceRoot();
     expect(root).toContain(".copilotclaw-dev");
+    expect(root).toMatch(/workspace$/);
   });
 
   it("explicit profile parameter overrides env var", () => {

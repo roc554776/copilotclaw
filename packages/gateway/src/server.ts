@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
 import type { ChannelProvider } from "./channel-provider.js";
-import { DEFAULT_PORT, getProfileName, loadConfig } from "./config.js";
+import { DEFAULT_PORT, getProfileName, getStateDir, loadConfig } from "./config.js";
 import { getWorkspaceRoot } from "./workspace.js";
 import { LogBuffer } from "./log-buffer.js";
 import { Store } from "./store.js";
@@ -123,6 +123,7 @@ function createRequestHandler(
           model: config.model ?? null,
           zeroPremium: config.zeroPremium ?? false,
           debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
+          stateDir: getStateDir(getProfileName()),
           workspaceRoot: getWorkspaceRoot(getProfileName()),
           // Full auth config is safe to expose on localhost — values are references
           // to secrets (env var names, file paths, commands), not secrets themselves.

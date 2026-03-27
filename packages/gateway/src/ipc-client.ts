@@ -21,12 +21,14 @@ export interface SubagentInfo {
 }
 
 export interface AgentSessionStatusResponse {
-  status: "starting" | "waiting" | "processing" | "stopped" | "not_running";
+  status: "starting" | "waiting" | "processing" | "suspended" | "stopped" | "not_running";
   startedAt?: string;
   processingStartedAt?: string;
   boundChannelId?: string;
   physicalSession?: PhysicalSessionSummary;
   subagentSessions?: SubagentInfo[];
+  cumulativeInputTokens?: number;
+  cumulativeOutputTokens?: number;
 }
 
 export interface AgentStatusResponse {

@@ -33,6 +33,43 @@ SOUL.md 等の workspace ファイルを agent が読み込むと大量のコン
 - **システムプロンプト**（`CHANNEL_OPERATOR_PROMPT`）に冒頭と末尾で記載 — ユーザーが変更不可の最も信頼性の高い層
 - **workspace ファイル読み込み後のリマインド** — agent が SOUL.md / AGENTS.md 等を読み込んだ直後に、onPostToolUse hook の `<system>` タグ方式でシステム的にリマインドする（既に実装済み: context usage 10% 増加ごと + compaction 後に発火）
 
+### State Directory と Workspace の分離
+
+state directory と workspace を概念的・物理的に明確に区別する。
+
+**現状の問題:** `getWorkspaceRoot()` = `getStateDir()` で、SOUL.md 等のユーザーファイルが config.json や data/ と同じディレクトリに混在している。
+
+**目標の構造:**
+```
+~/.copilotclaw/                       ← state directory
+├── config.json                       ← システム管理データ
+├── data/
+│   ├── store.json
+│   ├── agent-bindings.json
+│   ├── gateway.log
+│   └── agent.log
+└── workspace/                        ← workspace（agent の作業ディレクトリ）
+    ├── SOUL.md
+    ├── AGENTS.md
+    ├── USER.md
+    ├── TOOLS.md
+    ├── MEMORY.md
+    ├── memory/
+    │   └── YYYY-MM-DD.md
+    └── .git/
+```
+
+**変更点:**
+- `getWorkspaceRoot()` を `{{stateDir}}/workspace/` に変更（現状は `getStateDir()` をそのまま返している）
+- `seedWorkspaceBootstrapFiles()` と `initWorkspaceGit()` は workspace サブディレクトリに対して実行する
+- `SessionConfig.workingDirectory` は workspace を指す
+- 既存環境のマイグレーション: state dir 直下のブートストラップファイルを workspace/ に移動する
+
+**Copilot SDK の制約と将来設計:**
+- `SessionConfig.workingDirectory` は session ごとに固定され、subagent ごとに変えることはできない
+- OpenClaw は同一 state dir 内に `workspace-{{agentName}}/` を並列配置して agent ごとの workspace を分離しているが、CopilotClaw では同じ設計は取れない（session 単位で workingDirectory が固定されるため）
+- 将来的に同一 profile 内で複数の役割の agent を分ける機能を実現する際には、OpenClaw とは異なる workspace 設計が必要
+
 ### Workspace Bootstrap Files
 
 `copilotclaw setup` 時に `{{workspaceRoot}}/` に以下のデフォルトテンプレートを生成する:
@@ -86,4 +123,48 @@ workspace ディレクトリを Git リポジトリとして管理する。
 - agent が自主的にコミットすることは、AGENTS.md テンプレートで明示的に誘導する（OpenClaw の delegation パターンに倣う）
 - AGENTS.md テンプレートの proactive work セクションに「Commit and push your own changes」を記載し、agent が許可なしに git add / commit / push を行えることを示す
 - agent はビルトインツール（shell 実行）で git 操作を行う
+
+### Workspace Ensure
+
+workspace が正常な状態であることを一括で保証する ensure 処理。setup 時および物理 session 開始前に実行され、不備があれば自動修正する。
+
+**ensure 処理のステップ:**
+- workspace ディレクトリの作成（`{{stateDir}}/workspace/`）
+- git init（git が利用可能で `.git` が存在しない場合）
+- 初期ファイルの生成（存在しないファイルのみ作成）:
+  - `SOUL.md` — agent の人格テンプレート
+  - `USER.md` — ユーザー情報テンプレート
+  - `TOOLS.md` — ローカルツールメモテンプレート
+  - `MEMORY.md` — 長期記憶テンプレート
+  - `memory/.gitkeep` — 日次ログディレクトリの保持
+- 初期ファイルの git add + commit（「Initial workspace setup」等のメッセージで workspace の初期状態を記録）
+
+**実行タイミング:**
+- `copilotclaw setup` 実行時（現在の `seedWorkspaceBootstrapFiles` + `initWorkspaceGit` を ensure に統合）
+- 物理 session の開始前（agent-session-manager の `runSession()` 冒頭、または agent index.ts のポーリングループで session 起動前）
+
+**doctor チェック:**
+- `copilotclaw doctor` で workspace の以下を検証:
+  - workspace ディレクトリの存在
+  - git リポジトリの初期化状態
+  - 必須ファイル（SOUL.md, USER.md, TOOLS.md, MEMORY.md, memory/）の存在
+- 不備があればエラーを表示
+- `copilotclaw doctor --fix` で ensure 処理を実行して自動修正
+
+### Workspace 情報のシステムインストラクション記載
+
+workspace の構造・使い方・git 管理の方針を `CHANNEL_OPERATOR_PROMPT`（CopilotClaw 共通のシステムインストラクション）に含める。
+
+**レイヤーの区別:**
+
+| レイヤー | 内容 | 変更主体 |
+|---|---|---|
+| **システムインストラクション** (`CHANNEL_OPERATOR_PROMPT`) | `copilotclaw_receive_input` の義務、workspace の構造説明、git 管理の方針、セッション開始手順 | CopilotClaw システムが規定。ユーザーは変更しない |
+| **Workspace ファイル** (SOUL.md, USER.md, TOOLS.md 等) | agent の人格、ユーザー情報、ツール設定、記憶 | ユーザーが変更してもよいし、agent が自分で変更してもよい |
+
+**`CHANNEL_OPERATOR_PROMPT` に追加する内容:**
+- workspace の構造説明（どのファイルが何の役割か）
+- workspace は git 管理されている旨
+- agent が workspace ファイルを編集した場合は git commit すべき旨
+- workspace ファイルの読み取り順序（既存の Session Startup セクションを拡充）
 

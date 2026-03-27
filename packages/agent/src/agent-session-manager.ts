@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
@@ -32,6 +33,15 @@ const CHANNEL_OPERATOR_PROMPT =
   "You are a copilotclaw channel-operator agent bound to a channel. " +
   "Your primary lifecycle is: receive user input → process → send response → receive next input. " +
   "\n\n" +
+  "## Workspace\n" +
+  "Your working directory is a git-managed workspace. It contains:\n" +
+  "- SOUL.md — your persona and tone (you and the user may edit this)\n" +
+  "- USER.md — information about the user (you and the user may edit this)\n" +
+  "- TOOLS.md — local tool notes (you and the user may edit this)\n" +
+  "- MEMORY.md — your curated long-term memory\n" +
+  "- memory/ — daily logs (memory/YYYY-MM-DD.md)\n" +
+  "These files are yours to read, write, and evolve. When you modify workspace files, commit your changes with git.\n" +
+  "\n" +
   "## Session Startup\n" +
   "At the start of each session, read your workspace files in this order:\n" +
   "- Read SOUL.md — this is who you are. Embody its persona and tone.\n" +
@@ -120,6 +130,9 @@ export interface AgentSessionInfo {
   boundChannelId?: string | undefined;
   physicalSession?: PhysicalSessionSummary | undefined;
   subagentSessions?: SubagentInfo[] | undefined;
+  /** Cumulative token usage across all physical sessions (survives suspend/revive). */
+  cumulativeInputTokens?: number | undefined;
+  cumulativeOutputTokens?: number | undefined;
 }
 
 interface AgentSessionEntry {
@@ -153,6 +166,8 @@ interface SessionSnapshot {
   copilotSessionId?: string | undefined;
   boundChannelId?: string | undefined;
   startedAt: string;
+  cumulativeInputTokens?: number | undefined;
+  cumulativeOutputTokens?: number | undefined;
 }
 
 interface BindingSnapshot {
@@ -240,6 +255,8 @@ export class AgentSessionManager {
             status: "suspended",
             startedAt: s["startedAt"],
             boundChannelId: typeof s["boundChannelId"] === "string" ? s["boundChannelId"] : undefined,
+            cumulativeInputTokens: typeof s["cumulativeInputTokens"] === "number" ? s["cumulativeInputTokens"] : undefined,
+            cumulativeOutputTokens: typeof s["cumulativeOutputTokens"] === "number" ? s["cumulativeOutputTokens"] : undefined,
           },
           // Placeholder client — suspended sessions don't use it. Replaced on revive.
           client: this.createClient(),
@@ -273,6 +290,8 @@ export class AgentSessionManager {
           copilotSessionId: entry.copilotSessionId,
           boundChannelId: entry.info.boundChannelId,
           startedAt: entry.info.startedAt,
+          cumulativeInputTokens: entry.info.cumulativeInputTokens,
+          cumulativeOutputTokens: entry.info.cumulativeOutputTokens,
         });
       }
     }
@@ -415,11 +434,57 @@ export class AgentSessionManager {
     return sessionId;
   }
 
+  /** Ensure workspace directory has required files and git init before session start. */
+  private ensureWorkspaceReady(): void {
+    if (this.workingDirectory === undefined) return;
+    const ws = this.workingDirectory;
+    mkdirSync(ws, { recursive: true });
+
+    // Git init if not already initialized and git is available
+    if (!existsSync(join(ws, ".git"))) {
+      const check = spawnSync("git", ["--version"], { encoding: "utf-8", stdio: "pipe" });
+      if (check.status === 0) {
+        spawnSync("git", ["init"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
+      }
+    }
+
+    // Create missing bootstrap files (minimal — templates live in gateway)
+    const defaults: Record<string, string> = {
+      "SOUL.md": "# SOUL.md - Who You Are\n\n_Customize this file to define your agent's persona._\n",
+      "USER.md": "# USER.md - About the User\n\n_Fill in information about yourself._\n",
+      "TOOLS.md": "# TOOLS.md - Tool Notes\n\n_Keep local notes about tools and configurations here._\n",
+      "MEMORY.md": "# MEMORY.md - Long-Term Memory\n\n_Your curated long-term memory._\n",
+    };
+    for (const [file, content] of Object.entries(defaults)) {
+      const p = join(ws, file);
+      if (!existsSync(p)) writeFileSync(p, content, "utf-8");
+    }
+    const memDir = join(ws, "memory");
+    if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
+    const gitkeep = join(memDir, ".gitkeep");
+    if (!existsSync(gitkeep)) writeFileSync(gitkeep, "", "utf-8");
+
+    // Initial commit if no commits yet
+    if (existsSync(join(ws, ".git"))) {
+      const logCheck = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
+      if (logCheck.status !== 0) {
+        spawnSync("git", ["add", "-A"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
+        const diffIndex = spawnSync("git", ["diff", "--cached", "--quiet"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
+        if (diffIndex.status !== 0) {
+          spawnSync("git", ["commit", "-m", "Initial workspace setup"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
+        }
+      }
+    }
+  }
+
   private async runSession(entry: AgentSessionEntry): Promise<void> {
     const channelId = entry.info.boundChannelId;
     if (channelId === undefined) {
       throw new Error("channel-less sessions not yet supported");
     }
+
+    // Ensure workspace is ready before starting the physical session
+    this.ensureWorkspaceReady();
 
     // Queue for subagent completion events, drained by receiveInput and onPostToolUse
     const subagentCompletionQueue: SubagentCompletionInfo[] = [];
@@ -737,8 +802,15 @@ export class AgentSessionManager {
   }
 
   /** Transition an abstract session to suspended state, preserving channel binding.
-   *  The physical session is gone but the abstract session survives for later revival. */
+   *  The physical session is gone but the abstract session survives for later revival.
+   *  Cumulative token usage is accumulated from the physical session before clearing. */
   private suspendSession(entry: AgentSessionEntry): void {
+    // Accumulate token usage from the physical session being suspended
+    const ps = entry.info.physicalSession;
+    if (ps !== undefined) {
+      entry.info.cumulativeInputTokens = (entry.info.cumulativeInputTokens ?? 0) + (ps.totalInputTokens ?? 0);
+      entry.info.cumulativeOutputTokens = (entry.info.cumulativeOutputTokens ?? 0) + (ps.totalOutputTokens ?? 0);
+    }
     entry.info.status = "suspended";
     entry.copilotSession = undefined;
     entry.info.physicalSession = undefined;
