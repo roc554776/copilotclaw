@@ -94,13 +94,16 @@ export function getProfileName(): string | undefined {
 }
 
 /** Resolve the state directory for a given profile.
- *  Shared logic used by both config.ts and workspace.ts to avoid circular imports. */
+ *  Shared logic used by both config.ts and workspace.ts to avoid circular imports.
+ *  COPILOTCLAW_STATE_ROOT overrides the base directory (used by tests to avoid
+ *  polluting the home directory). */
 export function getStateDir(profile?: string): string {
+  const base = process.env["COPILOTCLAW_STATE_ROOT"] ?? homedir();
   const p = profile ?? getProfileName();
   if (p !== undefined) {
-    return join(homedir(), `.copilotclaw-${p}`);
+    return join(base, `.copilotclaw-${p}`);
   }
-  return join(homedir(), ".copilotclaw");
+  return join(base, ".copilotclaw");
 }
 
 export function getConfigFilePath(profile?: string): string {
