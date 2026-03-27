@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.27.0 | Token estimate: ~1700 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.28.0 | Token estimate: ~2000 -->
 
 # Architecture
 
@@ -18,7 +18,7 @@
                                                             (mocked in tests)
 ```
 
-- **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, zeroPremium, debugMockCopilotUnsafeTools, stateDir, workspaceRoot, auth.github) via /api/status; proxies Copilot quota and models from agent via /api/quota and /api/models; serves recent logs via /api/logs (ring buffer)
+- **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, zeroPremium, debugMockCopilotUnsafeTools, stateDir, workspaceRoot, auth.github) via /api/status; proxies Copilot quota and models from agent via /api/quota and /api/models; serves recent logs via /api/logs (ring buffer); hosts observability infrastructure (session event store, system prompt snapshots, status page, events page)
 - **Agent**: single process, manages agent sessions independently of channels
 - **Agent Session**: wraps a Copilot SDK session with its own sessionId, optionally bound to a channel
 - **ChannelProvider**: plugin interface for chat mediums (built-in chat, Discord, Telegram, etc.); providers handle medium-specific routes and receive message notifications
@@ -107,6 +107,15 @@ Environment variables:
 - **savedCopilotSessionIds map**: no longer the primary resume mechanism — copilotSessionId lives on the suspended entry; map kept for potential compatibility
 - **Channel notifications**: session stopped (unexpected end) and session timed out (stale processing) post system messages to bound channel
 
+## Observability (v0.28.0)
+
+- **SessionEventStore**: disk-based JSON Lines event storage per SDK session; stores events in `{{stateDir}}/data/events/{{sessionId}}.jsonl`; stores system prompt snapshots in `{{stateDir}}/data/prompts/`; enforces configurable storage cap (default 50 MB) by deleting oldest event files
+- **Event Forwarding**: agent registers SDK event listeners (session.idle, session.error, tool.execution_start/complete, subagent.started/completed/failed, assistant.message/usage/turn_start/turn_end, session.compaction_start/complete, session.usage_info, session.model_change, session.title_changed) and forwards them to gateway via fire-and-forget POST to /api/session-events
+- **System Prompt Capture**: agent uses registerTransformCallbacks("*") on CopilotSession to intercept the original system prompt from the SDK; captured prompt forwarded to gateway as both original prompt (per-model, /api/system-prompts/original) and session prompt (per-session, /api/system-prompts/session)
+- **Status Page** (`/status`): standalone HTML page showing gateway, agent, sessions, config, and original system prompts; auto-refreshes every 5s; links to session event pages and session prompt viewer
+- **Events Page** (`/sessions/:id/events`): standalone HTML page showing session events with flat/nested toggle and auto-scroll; auto-refreshes every 2s
+- **Dashboard Integration**: status modal includes "Open in new tab" link to /status; physical session details include "View events" link to events page
+
 ## Key Constraints
 
 - Gateway and agent are independent processes (gateway stop does NOT stop agent)
@@ -119,5 +128,5 @@ Environment variables:
 - Channel backoff: AgentSessionManager tracks channelBackoff map; recordBackoffIfRapidFailure() sets backoff when session fails within rapid-failure threshold; isChannelInBackoff() checked in polling loop to skip channels in backoff (prevents retry storms); notifyChannelSessionStopped() includes error reason in system message when available
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (268 tests: 80 agent + 188 gateway), Playwright for browser E2E (8 tests); vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (280 tests: 80 agent + 200 gateway), Playwright for browser E2E (8 tests); vitest excludes test/browser/ directory
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
