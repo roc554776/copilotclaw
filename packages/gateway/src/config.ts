@@ -20,12 +20,18 @@ export function getProfileName(): string | undefined {
   return process.env["COPILOTCLAW_PROFILE"] || undefined;
 }
 
-export function getConfigFilePath(profile?: string): string {
+/** Resolve the state directory for a given profile.
+ *  Shared logic used by both config.ts and workspace.ts to avoid circular imports. */
+export function getStateDir(profile?: string): string {
   const p = profile ?? getProfileName();
-  const root = p !== undefined
-    ? join(homedir(), `.copilotclaw-${p}`)
-    : join(homedir(), ".copilotclaw");
-  return join(root, "config.json");
+  if (p !== undefined) {
+    return join(homedir(), `.copilotclaw-${p}`);
+  }
+  return join(homedir(), ".copilotclaw");
+}
+
+export function getConfigFilePath(profile?: string): string {
+  return join(getStateDir(profile), "config.json");
 }
 
 function parsePort(raw: string): number | undefined {
