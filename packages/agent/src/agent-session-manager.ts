@@ -693,6 +693,10 @@ export class AgentSessionManager {
    * - model set: uses that model (zeroPremium may override if it's premium) */
   private async resolveModel(client: CopilotClient): Promise<string> {
     try {
+      // Ensure the CLI process is started before accessing client.rpc.
+      // createSession calls start() automatically via autoStart, but
+      // resolveModel runs before createSession to determine the model.
+      await client.start();
       const { models } = await client.rpc.models.list();
       if (models.length === 0) {
         console.error("[agent] no models available from SDK, falling back to gpt-4.1");
