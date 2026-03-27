@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -86,6 +86,7 @@ describe("workspace bootstrap files", () => {
     expect(existsSync(join(tmpDir, "TOOLS.md"))).toBe(true);
     expect(existsSync(join(tmpDir, "MEMORY.md"))).toBe(true);
     expect(existsSync(join(tmpDir, "memory"))).toBe(true);
+    expect(statSync(join(tmpDir, "memory")).isDirectory()).toBe(true);
 
     // SOUL.md should contain persona content
     const soul = readFileSync(join(tmpDir, "SOUL.md"), "utf-8");

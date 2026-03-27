@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { DEFAULT_PORT, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, saveConfig } from "./config.js";
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     log(`port ${existingConfig.port} configured`);
   }
 
-  // Bootstrap workspace files (SOUL.md, AGENTS.md, USER.md, TOOLS.md) — write only if missing
+  // Bootstrap workspace files (SOUL.md, AGENTS.md, USER.md, TOOLS.md, MEMORY.md, memory/) — write only if missing
   seedWorkspaceBootstrapFiles(root);
 
   // Initialize git repo in workspace (if git available and no .git yet)
@@ -94,7 +94,7 @@ export function seedWorkspaceBootstrapFiles(workspaceRoot: string): void {
   };
   // Ensure memory directory exists
   const memoryDir = join(workspaceRoot, "memory");
-  if (!existsSync(memoryDir)) {
+  if (!existsSync(memoryDir) || !statSync(memoryDir).isDirectory()) {
     mkdirSync(memoryDir, { recursive: true });
   }
   if (!existsSync(join(workspaceRoot, "MEMORY.md"))) {
@@ -115,10 +115,12 @@ export function seedWorkspaceBootstrapFiles(workspaceRoot: string): void {
 function initWorkspaceGit(workspaceRoot: string): void {
   if (existsSync(join(workspaceRoot, ".git"))) return;
   const check = spawnSync("git", ["--version"], { encoding: "utf-8", stdio: "pipe" });
-  if (check.status !== 0) return; // git not available
+  if (check.status !== 0) return; // git unavailable or broken — skip init
   const init = spawnSync("git", ["init"], { cwd: workspaceRoot, encoding: "utf-8", stdio: "pipe" });
   if (init.status === 0) {
     log("initialized git repo in workspace");
+  } else {
+    log(`WARNING: git init failed (exit ${init.status ?? "null"}) — workspace will not be version-controlled`);
   }
 }
 
