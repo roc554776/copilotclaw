@@ -109,7 +109,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
   <div id="status-modal-overlay" onclick="closeStatusModal()"></div>
   <div id="status-modal" style="display:none">
     <button class="close-btn" onclick="closeStatusModal()">&times;</button>
-    <h3>System Status</h3>
+    <h3>System Status <a href="/status" style="font-size:0.8rem;font-weight:normal;color:#58a6ff;margin-left:0.5rem">Open in new tab &rarr;</a></h3>
     <div id="status-modal-content">Loading...</div>
   </div>
   <div id="tabs">
@@ -263,7 +263,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
                   html += '<div class="row"><span class="label">Tokens used</span><span class="value">in: ' + escHtml(String(inp)) + ' / out: ' + escHtml(String(out)) + ' / total: ' + escHtml(String(inp + out)) + '</span></div>';
                 }
                 html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + ' (' + elapsed(ps.startedAt) + ')</span></div>';
-                html += '<div style="margin-top:0.3rem"><a href="#" style="color:#58a6ff;text-decoration:none" data-session-id="' + psId + '" onclick="showSessionDetail(this.dataset.sessionId);return false;">Show context detail</a></div>';
+                html += '<div style="margin-top:0.3rem"><a href="#" style="color:#58a6ff;text-decoration:none" data-session-id="' + psId + '" onclick="showSessionDetail(this.dataset.sessionId);return false;">Show context detail</a>';
+                html += ' · <a href="/sessions/' + encodeURIComponent(ps.sessionId) + '/events" style="color:#58a6ff;text-decoration:none">View events &rarr;</a></div>';
                 html += '</div>';
                 html += '<div id="session-detail-' + psId + '" style="display:none;margin-left:1rem;margin-top:0.5rem;font-size:0.75rem;max-height:300px;overflow-y:auto;border:1px solid #30363d;padding:0.5rem;border-radius:0.5rem;white-space:pre-wrap;color:#8b949e"></div>';
               }

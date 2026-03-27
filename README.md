@@ -55,6 +55,9 @@ Open the gateway URL shown at startup in your browser.
 - Type a message and press Send (or Enter)
 - Use the "+" button to create additional channels for parallel conversations
 - Click the status bar for detailed status (gateway, agent, Copilot sessions, premium requests, models)
+- Open `/status` for a standalone system status page
+- Click "View events" on a physical session to see real-time SDK session events (flat or nested view)
+- Original and session system prompts are captured and viewable from the status page
 - A typing indicator shows when the agent is processing
 - Sessions survive disconnections and agent restarts — conversations resume automatically
 

@@ -9,3 +9,38 @@ VSCode のように、単一の常駐プロセス（gateway）がシステム全
 - dashboard ページで user message と reply のペアをチャット形式で表示し、ユーザーがメッセージを入力できるインターフェースを提供する
 - 起動コマンドは冪等であること: 既に起動済みなら何もしない、ポートが塞がっているが healthy でなければリトライ後タイムアウト
 - CLI で gateway を起動すると、サーバープロセスはバックグラウンドにデタッチされ、CLI 自体は即座に終了すること
+
+### Req: SystemStatus の別ページ表示
+
+SystemStatus（現在はモーダル表示のみ）を、gateway の独立ページとしても表示できるようにする。
+
+- gateway の別のパスで SystemStatus の全情報をページとして表示する
+- 既存のモーダルからリンクでそのページに遷移できるようにする
+
+### Req: 物理 Session イベントの stream 表示
+
+物理 session ごとの SDK セッションイベントを stream 表示するページを gateway に追加する。
+
+- gateway の別のパスで物理 session ごとのイベントを stream 表示する
+- stream 表示だが強制スクロールはしない（最下部にいる場合のみ追従）
+- SystemStatus（モーダル・別ページ両方）からリンクで遷移できるようにする
+- 表示モードの切り替えで、親子関係によるネスト表示に対応する（parent id による）
+- イベントは SDK の session event を subscribe して取得し、gateway に送って保存する
+  - ストレージ上限を設ける（retention 期間は無制限）
+  - on memory ではなく disk に保存する
+
+### Req: オリジナルのシステムプロンプトの取得・表示
+
+モデルごとの、Copilot SDK が提供するオリジナルのシステムプロンプトを API と dashboard で参照できるようにする。
+
+- `createSession` 時に `registerTransformCallbacks` を使い、改変せずにオリジナルの system prompt を取得して保存する
+- 最新のものが取得されるたびに上書き保存する
+- モデル名、システムプロンプト本文、取得日時を保存する
+- API と dashboard で「オリジナルの」system prompt であることが明確に分かるようにする
+
+### Req: 物理セッションのシステムプロンプトの表示
+
+物理セッションで実際に使用されるシステムプロンプト（将来的にはオリジナルから改変される可能性あり）を API と dashboard で参照できるようにする。
+
+- SystemStatus で表示する
+- 現時点ではオリジナルと同一だが、将来の改変に備えてオリジナルとは別に表示する

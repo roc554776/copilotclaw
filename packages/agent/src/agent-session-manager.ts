@@ -613,9 +613,56 @@ export class AgentSessionManager {
       ? await entry.client.resumeSession(entry.copilotSessionId, baseConfig)
       : await entry.client.createSession(baseConfig);
 
+    // Register transform callbacks to capture original system prompt.
+    // The callback receives the original prompt content and returns it unchanged —
+    // we use this to capture and forward the original content to gateway.
+    const capturedPromptSections: Record<string, string> = {};
+    session.registerTransformCallbacks(new Map([
+      ["*", async (content: string) => {
+        // Capture the full system prompt (all sections concatenated by SDK into one callback)
+        capturedPromptSections["system"] = content;
+        this.postToGateway("/api/system-prompts/original", {
+          model: resolvedModel,
+          prompt: content,
+          capturedAt: new Date().toISOString(),
+        });
+        this.postToGateway("/api/system-prompts/session", {
+          sessionId: session.sessionId,
+          model: resolvedModel,
+          prompt: content,
+        });
+        return content; // Return unchanged
+      }],
+    ]));
+
     entry.copilotSessionId = session.sessionId;
     entry.copilotSession = session;
     entry.info.status = "waiting";
+
+    // Forward all session events to gateway for observability
+    const forwardEvent = (type: string, event?: { timestamp?: string; data?: unknown }) => {
+      const payload: Record<string, unknown> = {
+        sessionId: session.sessionId,
+        type,
+        timestamp: event?.timestamp ?? new Date().toISOString(),
+        data: (typeof event?.data === "object" && event.data !== null) ? event.data : {},
+      };
+      this.postToGateway("/api/session-events", payload);
+    };
+
+    // Subscribe to key SDK events and forward them
+    const forwardedEvents = [
+      "session.idle", "session.error", "session.usage_info", "session.model_change",
+      "session.compaction_start", "session.compaction_complete", "session.title_changed",
+      "tool.execution_start", "tool.execution_complete",
+      "subagent.started", "subagent.completed", "subagent.failed",
+      "assistant.message", "assistant.usage", "assistant.turn_start", "assistant.turn_end",
+    ];
+    for (const eventType of forwardedEvents) {
+      session.on(eventType as "session.idle", (event?: { timestamp?: string; data?: unknown }) => {
+        forwardEvent(eventType, event);
+      });
+    }
 
     // Track physical session state
     entry.info.physicalSession = {
@@ -959,6 +1006,17 @@ export class AgentSessionManager {
     if (channelId === undefined) return;
     const message = "[SYSTEM] Agent session timed out (stuck processing). A new session will start when you send a message.";
     this.postChannelMessage(channelId, message);
+  }
+
+  /** Fire-and-forget POST to a gateway endpoint. */
+  private postToGateway(path: string, body: Record<string, unknown>): void {
+    this.fetchFn(`${this.gatewayBaseUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => {
+      // Non-fatal — event store unavailable or gateway not reachable
+    });
   }
 
   private postChannelMessage(channelId: string, message: string): void {

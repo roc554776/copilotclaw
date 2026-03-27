@@ -25,7 +25,7 @@ import { AgentSessionManager } from "../src/agent-session-manager.js";
 import { CopilotClient } from "@github/copilot-sdk";
 
 /** Builds a fake CopilotSession that fires idle or error after send(). */
-function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit: (event: string, ...args: unknown[]) => void; sessionId: string; getMessages: ReturnType<typeof vi.fn> } {
+function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit: (event: string, ...args: unknown[]) => void; sessionId: string; getMessages: ReturnType<typeof vi.fn>; registerTransformCallbacks: ReturnType<typeof vi.fn> } {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
   const on = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
@@ -49,8 +49,9 @@ function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<ty
 
   const disconnect = vi.fn().mockResolvedValue(undefined);
   const getMessages = vi.fn().mockResolvedValue([]);
+  const registerTransformCallbacks = vi.fn();
 
-  return { on, send, disconnect, emit, sessionId: "mock-sdk-session", getMessages };
+  return { on, send, disconnect, emit, sessionId: "mock-sdk-session", getMessages, registerTransformCallbacks };
 }
 
 function wait(ms: number): Promise<void> {
@@ -73,6 +74,7 @@ function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
     (this as Record<string, unknown>)["createSession"] = createSession;
     (this as Record<string, unknown>)["resumeSession"] = createSession; // reuse same mock for resume
     (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+    (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
     (this as Record<string, unknown>)["rpc"] = {
       models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
       account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
@@ -195,6 +197,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
         }),
         send: vi.fn().mockResolvedValue("msg-id"),
         disconnect: vi.fn().mockResolvedValue(undefined),
+        registerTransformCallbacks: vi.fn(),
       };
     }));
 
@@ -255,6 +258,7 @@ describe("AgentSessionManager — session max age", () => {
         }),
         send: vi.fn().mockResolvedValue("msg-id"),
         disconnect: vi.fn().mockResolvedValue(undefined),
+        registerTransformCallbacks: vi.fn(),
       };
     }));
 
@@ -300,6 +304,7 @@ describe("AgentSessionManager — session max age", () => {
         }),
         send: vi.fn().mockResolvedValue("msg-id"),
         disconnect: vi.fn().mockResolvedValue(undefined),
+        registerTransformCallbacks: vi.fn(),
       };
     }));
 
@@ -501,6 +506,7 @@ describe("AgentSessionManager — stale deferred resume", () => {
       }),
       send: vi.fn().mockResolvedValue("msg-id"),
       disconnect: vi.fn().mockResolvedValue(undefined),
+      registerTransformCallbacks: vi.fn(),
     };
   }
 

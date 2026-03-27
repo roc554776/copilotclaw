@@ -8,6 +8,8 @@ import type { ChannelProvider } from "./channel-provider.js";
 import { DEFAULT_PORT, getProfileName, getStateDir, loadConfig } from "./config.js";
 import { getWorkspaceRoot } from "./workspace.js";
 import { LogBuffer } from "./log-buffer.js";
+import { renderEventsPage, renderStatusPage } from "./observability-pages.js";
+import { SessionEventStore } from "./session-event-store.js";
 import { Store } from "./store.js";
 import { SseBroadcaster } from "./sse-broadcaster.js";
 
@@ -70,6 +72,7 @@ export interface ServerDeps {
   sseBroadcaster?: SseBroadcaster;
   channelProviders?: ChannelProvider[];
   logBuffer?: LogBuffer;
+  sessionEventStore?: SessionEventStore;
 }
 
 function createRequestHandler(
@@ -78,6 +81,7 @@ function createRequestHandler(
   agentManager: AgentManager | null,
   channelProviders: ChannelProvider[],
   logBuffer: LogBuffer,
+  sessionEventStore: SessionEventStore | null,
 ) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
@@ -252,6 +256,117 @@ function createRequestHandler(
       return;
     }
 
+    // SystemStatus standalone page
+    if (fullPathname === "/status" && method === "GET") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(renderStatusPage());
+      return;
+    }
+
+    // Session events stream page
+    const eventsPageMatch = /^\/sessions\/([^/]+)\/events$/.exec(fullPathname);
+    if (eventsPageMatch !== null && method === "GET") {
+      const sessionId = decodeURIComponent(eventsPageMatch[1]!);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(renderEventsPage(sessionId));
+      return;
+    }
+
+    // Session event routes (observability)
+    if (sessionEventStore !== null) {
+      // POST /api/session-events — agent posts events here
+      if (fullPathname === "/api/session-events" && method === "POST") {
+        const body = parseJson(await readBody(req));
+        if (!isRecord(body) || typeof body["sessionId"] !== "string" || typeof body["type"] !== "string") {
+          json(res, 400, { error: "missing sessionId or type" });
+          return;
+        }
+        const event: { type: string; timestamp: string; data: Record<string, unknown>; parentId?: string } = {
+          type: body["type"] as string,
+          timestamp: typeof body["timestamp"] === "string" ? body["timestamp"] as string : new Date().toISOString(),
+          data: isRecord(body["data"]) ? body["data"] as Record<string, unknown> : {},
+        };
+        if (typeof body["parentId"] === "string") event.parentId = body["parentId"];
+        sessionEventStore.appendEvent(body["sessionId"] as string, event);
+        json(res, 201, { ok: true });
+        return;
+      }
+
+      // GET /api/sessions/:id/events — get events for a session
+      const eventsMatch = /^\/api\/sessions\/([^/]+)\/events$/.exec(fullPathname);
+      if (eventsMatch !== null && method === "GET") {
+        const sessionId = decodeURIComponent(eventsMatch[1]!);
+        json(res, 200, sessionEventStore.getEvents(sessionId));
+        return;
+      }
+
+      // GET /api/session-events/sessions — list sessions with events
+      if (fullPathname === "/api/session-events/sessions" && method === "GET") {
+        json(res, 200, sessionEventStore.listSessions());
+        return;
+      }
+
+      // POST /api/system-prompts/original — agent posts captured original prompt
+      if (fullPathname === "/api/system-prompts/original" && method === "POST") {
+        const body = parseJson(await readBody(req));
+        if (!isRecord(body) || typeof body["model"] !== "string" || typeof body["prompt"] !== "string") {
+          json(res, 400, { error: "missing model or prompt" });
+          return;
+        }
+        sessionEventStore.saveOriginalPrompt({
+          model: body["model"] as string,
+          prompt: body["prompt"] as string,
+          capturedAt: typeof body["capturedAt"] === "string" ? body["capturedAt"] as string : new Date().toISOString(),
+        });
+        json(res, 201, { ok: true });
+        return;
+      }
+
+      // GET /api/system-prompts/original — list all original prompts
+      if (fullPathname === "/api/system-prompts/original" && method === "GET") {
+        json(res, 200, sessionEventStore.listOriginalPrompts());
+        return;
+      }
+
+      // GET /api/system-prompts/original/:model — get original prompt for a model
+      const promptMatch = /^\/api\/system-prompts\/original\/(.+)$/.exec(fullPathname);
+      if (promptMatch !== null && method === "GET") {
+        const model = decodeURIComponent(promptMatch[1]!);
+        const snap = sessionEventStore.getOriginalPrompt(model);
+        if (snap !== undefined) {
+          json(res, 200, snap);
+        } else {
+          json(res, 404, { error: "no prompt captured for this model" });
+        }
+        return;
+      }
+
+      // POST /api/system-prompts/session — agent posts session prompt
+      if (fullPathname === "/api/system-prompts/session" && method === "POST") {
+        const body = parseJson(await readBody(req));
+        if (!isRecord(body) || typeof body["sessionId"] !== "string" || typeof body["prompt"] !== "string" || typeof body["model"] !== "string") {
+          json(res, 400, { error: "missing sessionId, model, or prompt" });
+          return;
+        }
+        sessionEventStore.saveSessionPrompt(body["sessionId"] as string, body["prompt"] as string, body["model"] as string);
+        json(res, 201, { ok: true });
+        return;
+      }
+
+      // GET /api/system-prompts/session/:sessionId — get session prompt
+      const sessPromptMatch = /^\/api\/system-prompts\/session\/(.+)$/.exec(fullPathname);
+      if (sessPromptMatch !== null && method === "GET") {
+        const sessionId = decodeURIComponent(sessPromptMatch[1]!);
+        const snap = sessionEventStore.getSessionPrompt(sessionId);
+        if (snap !== undefined) {
+          json(res, 200, snap);
+        } else {
+          json(res, 404, { error: "no prompt captured for this session" });
+        }
+        return;
+      }
+    }
+
     // Delegate to channel providers (provider-specific routes like "/" dashboard, "/api/events" SSE)
     for (const provider of channelProviders) {
       const handled = await provider.handleRequest(req, res, params);
@@ -279,13 +394,14 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
     : options?.agentManager ?? new AgentManager({ gatewayPort: port });
   const sseBroadcaster = options?.sseBroadcaster ?? new SseBroadcaster();
   const logBuffer = options?.logBuffer ?? new LogBuffer();
+  const sessionEventStore = options?.sessionEventStore ?? null;
 
   // Channel providers: use provided list or default to built-in chat
   const channelProviders = options?.channelProviders ?? [
     new BuiltinChatChannel({ store, agentManager, sseBroadcaster }),
   ];
 
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer);
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {

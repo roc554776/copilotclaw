@@ -3,6 +3,7 @@ import { AgentManager } from "./agent-manager.js";
 import { getProfileName, resolvePort } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
 import { startServer } from "./server.js";
+import { SessionEventStore } from "./session-event-store.js";
 import { Store } from "./store.js";
 import { ensureWorkspace, getDataDir, getStoreFilePath } from "./workspace.js";
 
@@ -37,7 +38,8 @@ async function main(): Promise<void> {
     console.error("[gateway] agent ensure failed:", err);
   }
 
-  await startServer({ port, store, agentManager, logBuffer });
+  const sessionEventStore = new SessionEventStore(getDataDir(getProfileName()));
+  await startServer({ port, store, agentManager, logBuffer, sessionEventStore });
 
   // Periodic agent process monitoring
   let consecutiveFailures = 0;
