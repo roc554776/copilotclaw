@@ -191,6 +191,18 @@ Source: `docs/reference/templates/AGENTS.md` lines 196-202, `src/agents/system-p
 
 ---
 
+## Profile ごとの State ディレクトリ分離
+
+OpenClaw は profile ごとに state ディレクトリ自体を分離する:
+- デフォルト: `~/.openclaw/`
+- 名前付き profile: `~/.openclaw-{{profile}}/`（例: `~/.openclaw-dev/`）
+
+config, workspace, sessions の全てが state ディレクトリ内に格納されるため、profile 間の干渉がない。
+
+dev profile には特別なデフォルトポート (19001) がある。
+
+Source: `src/cli/profile.ts` lines 81-88, `src/config/paths.ts` lines 106-115
+
 ## CopilotClaw への適用ポイント
 
 **システムプロンプト vs ユーザーファイルの分離:**

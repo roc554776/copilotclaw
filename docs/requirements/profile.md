@@ -1,5 +1,19 @@
 # 要求定義: Profile 機能の完成
 
+### Req: State ディレクトリの profile 分離
+
+<!-- TODO: 未実装 — 現在は同一ベースディレクトリ内で suffix 分離。OpenClaw 方式の state ディレクトリ分離に変更が必要 -->
+
+OpenClaw に合わせて、profile ごとに state ディレクトリ自体を分離する。
+
+- 現在の方式: `~/.copilotclaw/workspace-{{profile}}`, `~/.copilotclaw/config-{{profile}}.json`
+- 目標の方式（OpenClaw 準拠）: `~/.copilotclaw-{{profile}}/` に全データを格納
+  - デフォルト profile（無印）: `~/.copilotclaw/`
+  - 名前付き profile: `~/.copilotclaw-{{profile}}/`
+- config: `~/.copilotclaw-{{profile}}/config.json`（state ディレクトリ内に固定名で配置）
+- workspace root = state ディレクトリ自体
+- data: `~/.copilotclaw-{{profile}}/data/`
+- 影響範囲: `workspace.ts` の `getWorkspaceRoot()` と `config.ts` の `getConfigFilePath()` の変更が中心
 
 ### Req: Profile による完全な分離
 
