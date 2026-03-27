@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.29.0 | Token estimate: ~2000 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.30.0 | Token estimate: ~2000 -->
 
 # Architecture
 
@@ -104,6 +104,7 @@ Environment variables:
 - **Auto-revival in polling**: startSession auto-detects suspended sessions for a channel via hasActiveSessionForChannel; if suspended, revives with saved copilotSessionId
 - **Binding Persistence (v0.18.0+)**: AgentSessionManager accepts optional `persistPath` option (defaults to {{stateDir}}/data/agent-bindings.json — uses stateDir, not workspaceRoot); suspended sessions with channel bindings persisted to disk via atomic write (tmp → rename); `loadBindings()` called in constructor (line 192) restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries; restores cumulative token data from snapshots; `saveBindings()` called on suspendSession and stopSession; SessionSnapshot and BindingSnapshot types define persist format; SessionSnapshot includes cumulativeInputTokens/cumulativeOutputTokens
 - **Cumulative Token Tracking (v0.27.0)**: AgentSessionInfo tracks cumulativeInputTokens and cumulativeOutputTokens across physical sessions; suspendSession() accumulates token usage from the physical session before clearing it; cumulative totals persisted in SessionSnapshot via saveBindings() and restored via loadBindings(); dashboard shows cumulative tokens; IPC AgentSessionStatusResponse includes cumulative token fields
+- **Stopped Session History (v0.30.0)**: AgentSessionInfo has physicalSessionHistory (PhysicalSessionSummary[]); suspendSession() pushes a copy of the physical session (with currentState set to "stopped") to history before clearing physicalSession; capped at 10 entries (oldest removed); in-memory only (not persisted in SessionSnapshot); IPC AgentSessionStatusResponse includes physicalSessionHistory field
 - **savedCopilotSessionIds map**: no longer the primary resume mechanism — copilotSessionId lives on the suspended entry; map kept for potential compatibility
 - **Channel notifications**: session stopped (unexpected end) and session timed out (stale processing) post system messages to bound channel
 
@@ -112,9 +113,9 @@ Environment variables:
 - **SessionEventStore**: SQLite-based event storage (session-events.db in data dir, WAL mode); table: session_events (sessionId, type, timestamp, data as JSON, parentId; indexed by sessionId, sessionId+timestamp, type); stores system prompt snapshots as JSON files in `{{stateDir}}/data/prompts/`; enforces configurable storage cap by row count (default 100k events) by deleting oldest rows every 500 inserts
 - **Event Forwarding**: agent registers SDK event listeners (session.idle, session.error, tool.execution_start/complete, subagent.started/completed/failed, assistant.message/usage/turn_start/turn_end, session.compaction_start/complete, session.usage_info, session.model_change, session.title_changed) and forwards them to gateway via fire-and-forget POST to /api/session-events
 - **System Prompt Capture**: agent uses registerTransformCallbacks("*") on CopilotSession to intercept the original system prompt from the SDK; captured prompt forwarded to gateway as both original prompt (per-model, /api/system-prompts/original) and session prompt (per-session, /api/system-prompts/session)
-- **Status Page** (`/status`): standalone HTML page showing gateway, agent, sessions, config, and original system prompts; auto-refreshes every 5s; links to session event pages and session prompt viewer
+- **Status Page** (`/status`): standalone HTML page showing gateway, agent, sessions, config, and original system prompts; auto-refreshes every 5s; links to session event pages and session prompt viewer; shows stopped session history per session via `<details>` element (v0.30.0)
 - **Events Page** (`/sessions/:id/events`): standalone HTML page showing session events with flat/nested toggle and auto-scroll; auto-refreshes every 2s
-- **Dashboard Integration**: status modal includes "Open in new tab" link to /status; physical session details include "View events" link to events page
+- **Dashboard Integration**: status modal includes "Open in new tab" link to /status; physical session details include "View events" link to events page; stopped session history shown as collapsed toggle ("Stopped sessions (N) ▸") with model, tokens, started time, and events link per entry (v0.30.0)
 
 ## Key Constraints
 
