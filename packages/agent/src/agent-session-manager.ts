@@ -120,6 +120,9 @@ export interface AgentSessionInfo {
   boundChannelId?: string | undefined;
   physicalSession?: PhysicalSessionSummary | undefined;
   subagentSessions?: SubagentInfo[] | undefined;
+  /** Cumulative token usage across all physical sessions (survives suspend/revive). */
+  cumulativeInputTokens?: number | undefined;
+  cumulativeOutputTokens?: number | undefined;
 }
 
 interface AgentSessionEntry {
@@ -153,6 +156,8 @@ interface SessionSnapshot {
   copilotSessionId?: string | undefined;
   boundChannelId?: string | undefined;
   startedAt: string;
+  cumulativeInputTokens?: number | undefined;
+  cumulativeOutputTokens?: number | undefined;
 }
 
 interface BindingSnapshot {
@@ -240,6 +245,8 @@ export class AgentSessionManager {
             status: "suspended",
             startedAt: s["startedAt"],
             boundChannelId: typeof s["boundChannelId"] === "string" ? s["boundChannelId"] : undefined,
+            cumulativeInputTokens: typeof s["cumulativeInputTokens"] === "number" ? s["cumulativeInputTokens"] : undefined,
+            cumulativeOutputTokens: typeof s["cumulativeOutputTokens"] === "number" ? s["cumulativeOutputTokens"] : undefined,
           },
           // Placeholder client — suspended sessions don't use it. Replaced on revive.
           client: this.createClient(),
@@ -273,6 +280,8 @@ export class AgentSessionManager {
           copilotSessionId: entry.copilotSessionId,
           boundChannelId: entry.info.boundChannelId,
           startedAt: entry.info.startedAt,
+          cumulativeInputTokens: entry.info.cumulativeInputTokens,
+          cumulativeOutputTokens: entry.info.cumulativeOutputTokens,
         });
       }
     }
@@ -737,8 +746,15 @@ export class AgentSessionManager {
   }
 
   /** Transition an abstract session to suspended state, preserving channel binding.
-   *  The physical session is gone but the abstract session survives for later revival. */
+   *  The physical session is gone but the abstract session survives for later revival.
+   *  Cumulative token usage is accumulated from the physical session before clearing. */
   private suspendSession(entry: AgentSessionEntry): void {
+    // Accumulate token usage from the physical session being suspended
+    const ps = entry.info.physicalSession;
+    if (ps !== undefined) {
+      entry.info.cumulativeInputTokens = (entry.info.cumulativeInputTokens ?? 0) + (ps.totalInputTokens ?? 0);
+      entry.info.cumulativeOutputTokens = (entry.info.cumulativeOutputTokens ?? 0) + (ps.totalOutputTokens ?? 0);
+    }
     entry.info.status = "suspended";
     entry.copilotSession = undefined;
     entry.info.physicalSession = undefined;

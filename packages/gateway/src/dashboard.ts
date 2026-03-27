@@ -277,6 +277,19 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
                 }
                 html += '</div>';
               }
+              // Cumulative token usage (across all physical sessions)
+              if (sess.cumulativeInputTokens != null || sess.cumulativeOutputTokens != null) {
+                const cIn = sess.cumulativeInputTokens ?? 0;
+                const cOut = sess.cumulativeOutputTokens ?? 0;
+                // Add current physical session tokens to cumulative for display
+                const curIn = cIn + (sess.physicalSession?.totalInputTokens ?? 0);
+                const curOut = cOut + (sess.physicalSession?.totalOutputTokens ?? 0);
+                if (curIn > 0 || curOut > 0) {
+                  html += '<div style="margin-left:1rem;font-size:0.8rem;color:#8b949e">';
+                  html += '<div class="row"><span class="label">Cumulative tokens</span><span class="value">in: ' + escHtml(String(curIn)) + ' / out: ' + escHtml(String(curOut)) + ' / total: ' + escHtml(String(curIn + curOut)) + '</span></div>';
+                  html += '</div>';
+                }
+              }
             }
             html += '</div>';
           } else {

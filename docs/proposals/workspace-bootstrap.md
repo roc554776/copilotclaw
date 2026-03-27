@@ -33,6 +33,43 @@ SOUL.md 等の workspace ファイルを agent が読み込むと大量のコン
 - **システムプロンプト**（`CHANNEL_OPERATOR_PROMPT`）に冒頭と末尾で記載 — ユーザーが変更不可の最も信頼性の高い層
 - **workspace ファイル読み込み後のリマインド** — agent が SOUL.md / AGENTS.md 等を読み込んだ直後に、onPostToolUse hook の `<system>` タグ方式でシステム的にリマインドする（既に実装済み: context usage 10% 増加ごと + compaction 後に発火）
 
+### State Directory と Workspace の分離
+
+state directory と workspace を概念的・物理的に明確に区別する。
+
+**現状の問題:** `getWorkspaceRoot()` = `getStateDir()` で、SOUL.md 等のユーザーファイルが config.json や data/ と同じディレクトリに混在している。
+
+**目標の構造:**
+```
+~/.copilotclaw/                       ← state directory
+├── config.json                       ← システム管理データ
+├── data/
+│   ├── store.json
+│   ├── agent-bindings.json
+│   ├── gateway.log
+│   └── agent.log
+└── workspace/                        ← workspace（agent の作業ディレクトリ）
+    ├── SOUL.md
+    ├── AGENTS.md
+    ├── USER.md
+    ├── TOOLS.md
+    ├── MEMORY.md
+    ├── memory/
+    │   └── YYYY-MM-DD.md
+    └── .git/
+```
+
+**変更点:**
+- `getWorkspaceRoot()` を `{{stateDir}}/workspace/` に変更（現状は `getStateDir()` をそのまま返している）
+- `seedWorkspaceBootstrapFiles()` と `initWorkspaceGit()` は workspace サブディレクトリに対して実行する
+- `SessionConfig.workingDirectory` は workspace を指す
+- 既存環境のマイグレーション: state dir 直下のブートストラップファイルを workspace/ に移動する
+
+**Copilot SDK の制約と将来設計:**
+- `SessionConfig.workingDirectory` は session ごとに固定され、subagent ごとに変えることはできない
+- OpenClaw は同一 state dir 内に `workspace-{{agentName}}/` を並列配置して agent ごとの workspace を分離しているが、CopilotClaw では同じ設計は取れない（session 単位で workingDirectory が固定されるため）
+- 将来的に同一 profile 内で複数の役割の agent を分ける機能を実現する際には、OpenClaw とは異なる workspace 設計が必要
+
 ### Workspace Bootstrap Files
 
 `copilotclaw setup` 時に `{{workspaceRoot}}/` に以下のデフォルトテンプレートを生成する:

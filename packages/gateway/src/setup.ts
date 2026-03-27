@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_PORT, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, saveConfig } from "./config.js";
+import { DEFAULT_PORT, ensureConfigFile, getConfigFilePath, getProfileName, getStateDir, loadConfig, saveConfig } from "./config.js";
 import { ensureWorkspace, getDataDir, getWorkspaceRoot } from "./workspace.js";
 
 function log(message: string): void {
@@ -136,6 +136,9 @@ async function main(): Promise<void> {
     log(`port ${existingConfig.port} configured`);
   }
 
+  // Migrate workspace files from state dir root to workspace/ subdirectory (v0.26 → v0.27 transition)
+  migrateWorkspaceFiles(getStateDir(getProfileName()), root);
+
   // Bootstrap workspace files (SOUL.md, AGENTS.md, USER.md, TOOLS.md, MEMORY.md, memory/) — write only if missing
   seedWorkspaceBootstrapFiles(root);
 
@@ -143,6 +146,47 @@ async function main(): Promise<void> {
   initWorkspaceGit(root);
 
   log("setup complete");
+}
+
+/** Migrate workspace files from state dir root to workspace/ subdirectory.
+ *  Handles the v0.26 → v0.27 transition where getWorkspaceRoot() changed from
+ *  returning stateDir to stateDir/workspace/. Files at the old location are
+ *  moved to the new location if they don't already exist there. */
+export function migrateWorkspaceFiles(stateDir: string, workspaceRoot: string): void {
+  // Only migrate if workspace is a subdirectory of stateDir (normal case)
+  if (stateDir === workspaceRoot) return;
+
+  const filesToMigrate = ["SOUL.md", "AGENTS.md", "USER.md", "TOOLS.md", "MEMORY.md"];
+  const dirsToMigrate = ["memory"];
+
+  for (const file of filesToMigrate) {
+    const oldPath = join(stateDir, file);
+    const newPath = join(workspaceRoot, file);
+    if (existsSync(oldPath) && !existsSync(newPath)) {
+      mkdirSync(workspaceRoot, { recursive: true });
+      renameSync(oldPath, newPath);
+      log(`migrated ${file} to workspace/`);
+    }
+  }
+
+  for (const dir of dirsToMigrate) {
+    const oldPath = join(stateDir, dir);
+    const newPath = join(workspaceRoot, dir);
+    if (existsSync(oldPath) && statSync(oldPath).isDirectory() && !existsSync(newPath)) {
+      mkdirSync(workspaceRoot, { recursive: true });
+      renameSync(oldPath, newPath);
+      log(`migrated ${dir}/ to workspace/`);
+    }
+  }
+
+  // Migrate .git directory if it exists at state dir root
+  const oldGit = join(stateDir, ".git");
+  const newGit = join(workspaceRoot, ".git");
+  if (existsSync(oldGit) && statSync(oldGit).isDirectory() && !existsSync(newGit)) {
+    mkdirSync(workspaceRoot, { recursive: true });
+    renameSync(oldGit, newGit);
+    log("migrated .git/ to workspace/");
+  }
 }
 
 /** Write default workspace bootstrap files if they don't already exist. */

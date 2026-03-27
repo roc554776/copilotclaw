@@ -38,3 +38,23 @@
 - agent が workspace で作業した内容を Git で追跡できるようにしたい
 - OpenClaw はコード側で自動コミットはしないが、AGENTS.md テンプレートで「Commit and push your own changes」を proactive work として明記し、agent が自主的にコミットすることを誘導している（delegation パターン）
 - setup 時に git init する（git がなければスキップ）
+
+<!-- 2026-03-27 -->
+
+## State Directory と Workspace の概念的分離
+
+- state directory と workspace は概念的に明確に区別してほしい
+- state directory: `~/.copilotclaw` or `~/.copilotclaw-{{profile}}`
+- workspace: `~/.copilotclaw/workspace` or `~/.copilotclaw-{{profile}}/workspace`
+  - Copilot SDK の SessionConfig の workingDirectory は、この workspace を指すようにする
+  - ※ Copilot SDK の仕様により、SessionConfig の workingDirectory は session ごとに固定されてしまい、subagent ごとに変えることはできない
+    - （将来の機能の話）そのため、OpenClaw のような、同じ profile の中で複数の役割の agent を分ける機能を実装するには、OpenClaw と同じ設計ではだめ
+    - 将来的には OpenClaw とは異なる workspace 設計を行い、同じ profile の中で複数の役割の agent を分ける機能を実現する
+
+## 抽象セッションへのトークン消費履歴の紐づけ
+
+- agent session は抽象層と物理層に分かれている
+- 各セッションの消費トークン数等の履歴は、抽象層に紐づけて管理してほしい
+  - 現状の課題:
+    - 停止した物理セッションの履歴が dashboard で見られない
+    - 抽象セッションごとのトークン消費量がわからない

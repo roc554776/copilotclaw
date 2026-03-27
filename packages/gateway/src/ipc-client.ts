@@ -27,6 +27,8 @@ export interface AgentSessionStatusResponse {
   boundChannelId?: string;
   physicalSession?: PhysicalSessionSummary;
   subagentSessions?: SubagentInfo[];
+  cumulativeInputTokens?: number;
+  cumulativeOutputTokens?: number;
 }
 
 export interface AgentStatusResponse {

@@ -1,5 +1,14 @@
 # 要求定義: Workspace Bootstrap Files・Memory・Git 管理
 
+### Req: State Directory と Workspace の概念的分離
+
+state directory と workspace を概念的・物理的に明確に区別する。
+
+- state directory: `~/.copilotclaw` or `~/.copilotclaw-{{profile}}`。config, data, agent-bindings 等のシステム管理データを格納する
+- workspace: `{{stateDir}}/workspace/`。ユーザーがカスタマイズするファイル（SOUL.md 等）、memory、agent の作業ディレクトリを格納する
+- Copilot SDK の `SessionConfig.workingDirectory` は workspace を指す
+- Copilot SDK の制約: `workingDirectory` は session ごとに固定され、subagent ごとに変えることはできない。そのため、将来的に同一 profile 内で複数の役割の agent を分ける機能を実現する際には OpenClaw とは異なる workspace 設計が必要になる
+
 ### Req: Workspace Bootstrap Files（SOUL.md, AGENTS.md, MEMORY.md 等）
 
 OpenClaw の workspace bootstrap files に相当するファイルを workspace に配置し、agent がセッション開始時に自発的に読み取る仕組みを提供する。OpenClaw はシステムプロンプトにファイルを直接埋め込む方式（Project Context 注入）だが、CopilotClaw では agent がビルトインツールで自発的に読む方式とする（Copilot SDK の制約による）。
