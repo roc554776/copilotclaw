@@ -147,7 +147,10 @@ export function createChannelTools(deps: ChannelToolDeps) {
         const combined = combineMessages(inputs);
         return { userMessage: combined + "\n\n" + subagentNotice + RECEIVE_INSTRUCTION };
       } catch (err: unknown) {
-        // Log to system log only — agent must not see this error
+        // Log to system log only — agent must not see this error.
+        // AbortError (from shutdown) is also caught here intentionally —
+        // the session loop's shouldStop() check handles clean shutdown.
+        // Re-throwing any error would kill the physical session (deadlock).
         console.error("[agent] receive_input internal error (suppressed):", err);
         // Return keepalive-equivalent response — indistinguishable from timeout
         return { userMessage: KEEPALIVE_INSTRUCTION };

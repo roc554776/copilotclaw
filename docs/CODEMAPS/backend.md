@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 37 | Version: 0.25.0 | Token estimate: ~2700 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 37 | Version: 0.26.0 | Token estimate: ~2700 -->
 
 # Backend
 
@@ -115,7 +115,7 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 
 ```
 copilotclaw_send_message(message)   — send a message to the channel (non-blocking)
-copilotclaw_receive_input()         — block polling for pending user messages (25 min keepalive timeout); drains subagent completion queue and includes completion info in response
+copilotclaw_receive_input()         — block polling for pending user messages (25 min keepalive timeout); drains subagent completion queue and includes completion info in response; wrapped in try-catch that catches ALL exceptions and returns keepalive response (errors logged to console.error only — agent must not perceive errors)
 copilotclaw_list_messages(limit?)   — list recent channel messages (reverse-chronological)
 ```
 
@@ -142,7 +142,7 @@ src/ipc-paths.ts                — socket path generation (profile-aware)
 src/session-loop.ts             — session idle loop (subscribe/send/disconnect); supports both createSession and resumeSession
 src/copilot-session-adapter.ts  — CopilotSession → SessionLike adapter
 src/stop.ts                     — CLI stop command (IPC stop)
-src/tools/channel.ts            — send_message, receive_input (drains subagent completions), list_messages; exports SubagentCompletionInfo
+src/tools/channel.ts            — send_message, receive_input (drains subagent completions; try-catch swallows ALL exceptions → keepalive response, console.error only), list_messages; exports SubagentCompletionInfo
 ```
 
 ## Testing
@@ -154,10 +154,10 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (258 total: 250 vitest + 8 Playwright)
+### Test Suites (262 total: 254 vitest + 8 Playwright)
 
 ```
-Gateway vitest (174 tests) — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger tests)
-Agent vitest (76 tests)    — unit tests with mock Copilot SDK session (includes structured-logger, token-resolver tests)
+Gateway vitest (177 tests) — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger tests)
+Agent vitest (77 tests)    — unit tests with mock Copilot SDK session (includes structured-logger, token-resolver tests)
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```

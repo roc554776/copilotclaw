@@ -709,8 +709,8 @@ receiveInput handler:
   try {
     ... (既存のポーリングロジック)
   } catch (err) {
-    console.error("[agent] receive_input internal error:", err)  // ログのみ
-    return { result: "No new messages. Call copilotclaw_receive_input again." }  // タイムアウトと同一
+    console.error("[agent] receive_input internal error (suppressed):", err)  // ログのみ
+    return { userMessage: KEEPALIVE_INSTRUCTION }  // タイムアウトと同一
   }
 ```
 
