@@ -21,7 +21,7 @@ export interface SubagentInfo {
 }
 
 export interface AgentSessionStatusResponse {
-  status: "starting" | "waiting" | "processing" | "stopped" | "not_running";
+  status: "starting" | "waiting" | "processing" | "suspended" | "stopped" | "not_running";
   startedAt?: string;
   processingStartedAt?: string;
   boundChannelId?: string;
