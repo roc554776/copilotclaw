@@ -60,6 +60,37 @@ return join(getWorkspaceRoot(p), "config.json");
 **update ディレクトリ:**
 `~/.copilotclaw/source/` は profile 非依存で変更なし（全 profile で共有）。
 
+## CLI --profile オプション
+
+<!-- TODO: 未実装 -->
+
+全コマンドに `--profile` オプションを追加する。現在は `COPILOTCLAW_PROFILE` 環境変数のみで profile を指定する方式だが、CLI オプションがないため使い勝手が悪い。
+
+**実装方針:**
+
+CLI エントリポイント（`packages/cli/bin/copilotclaw.mjs`）で `--profile {{name}}` 引数をパースし、`process.env.COPILOTCLAW_PROFILE` に設定する。これにより、下流の全コマンド（gateway/agent サブプロセス含む）が環境変数経由で profile を受け取る。各コマンド個別の対応は不要。
+
+```javascript
+// copilotclaw.mjs — コマンドパース前に --profile を処理
+const profileIdx = args.indexOf("--profile");
+if (profileIdx !== -1 && args[profileIdx + 1]) {
+  process.env.COPILOTCLAW_PROFILE = args[profileIdx + 1];
+  args.splice(profileIdx, 2); // --profile と値を引数リストから除去
+}
+```
+
+**USAGE 更新:**
+```
+Global options:
+  --profile <name>       Use a named profile (overrides COPILOTCLAW_PROFILE)
+```
+
+**対象コマンド（全コマンド）:**
+- setup, start, stop, restart, update, config get/set, doctor, agent stop
+
+**優先順位:**
+- `--profile` CLI オプション > `COPILOTCLAW_PROFILE` 環境変数
+
 ## 現状の問題（profile パラメータ伝搬）
 
 Profile 機能は `COPILOTCLAW_PROFILE` 環境変数と `getProfileName()` 関数で設計されているが、実際のコマンド実装では profile パラメータの伝搬が広範に欠落している。結果として、異なる profile で同時実行すると以下が発生する:

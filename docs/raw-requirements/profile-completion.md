@@ -13,3 +13,9 @@
   - 現在: `~/.copilotclaw/workspace-{{profile}}`, `~/.copilotclaw/config-{{profile}}.json`（同じベースディレクトリ内で suffix で分離）
   - OpenClaw 方式: `~/.openclaw-{{profile}}/`（state ディレクトリ自体が別）
   - CopilotClaw も state ディレクトリ自体を分離する方式に変更する: `~/.copilotclaw-{{profile}}/`
+
+<!-- 2026-03-27 -->
+
+- CLI の全コマンドに `--profile` オプションを追加する必要がある
+  - 現在は環境変数 `COPILOTCLAW_PROFILE` のみで profile を指定する方式だが、CLI オプションがない
+  - setup, start, stop, restart, update, config, doctor, agent stop の全てに `--profile` オプションが必要
