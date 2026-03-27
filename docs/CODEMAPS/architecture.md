@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.20.0 | Token estimate: ~1600 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Packages: 3 (cli, gateway, agent) | Version: 0.21.0 | Token estimate: ~1600 -->
 
 # Architecture
 
@@ -31,15 +31,18 @@ Thin wrapper package (`copilotclaw`) that depends on `@copilotclaw/gateway` and 
 ### CLI Entrypoint (packages/cli/bin/copilotclaw.mjs)
 
 ```
-copilotclaw setup                → workspace init + auto-port selection if default busy
-copilotclaw start [--force-agent-restart]  → spawn gateway daemon
-copilotclaw stop                 → stop gateway (agent keeps running)
-copilotclaw restart              → stop + start gateway
-copilotclaw update               → fetch upstream to ~/.copilotclaw/source/, pnpm (via npx) build, rewrite workspace:* deps to file: paths, npm install -g from packages/cli/
-copilotclaw config get <key>     → show resolved config value (env var override noted)
-copilotclaw config set <key> <v> → set config value in file (env var precedence warning)
-copilotclaw doctor [--fix]       → diagnose environment (workspace, config, gateway, agent); --fix auto-repairs fixable issues
-copilotclaw agent stop           → stop agent process only
+copilotclaw setup                            → workspace init + auto-port selection if default busy
+copilotclaw start [--force-agent-restart]   → spawn gateway daemon
+copilotclaw stop                             → stop gateway (agent keeps running)
+copilotclaw restart                          → stop + start gateway
+copilotclaw update                           → fetch upstream to ~/.copilotclaw/source/, pnpm (via npx) build, rewrite workspace:* deps to file: paths, npm install -g from packages/cli/
+copilotclaw config get <key>                 → show resolved config value (env var override noted)
+copilotclaw config set <key> <v>             → set config value in file (env var precedence warning)
+copilotclaw doctor [--fix]                   → diagnose environment (workspace, config, gateway, agent); --fix auto-repairs fixable issues
+copilotclaw agent stop                       → stop agent process only
+
+Global option (applies to all commands):
+  --profile <name>               → set COPILOTCLAW_PROFILE env var (isolates workspace, config, IPC socket, port)
 ```
 
 Environment variables:
