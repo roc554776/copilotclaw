@@ -60,11 +60,12 @@ describe("SessionEventStore", () => {
     it("enforces storage cap by deleting oldest events", () => {
       const smallStore = new SessionEventStore(tmpDir, 10); // 10 events max
       for (let i = 0; i < 600; i++) {
-        smallStore.appendEvent(`sess-cap`, { type: "test", timestamp: `2026-03-27T00:00:${String(i).padStart(2, "0")}Z`, data: { i } });
+        smallStore.appendEvent(`sess-cap`, { type: "test", timestamp: new Date(1743033600000 + i * 1000).toISOString(), data: { i } });
       }
-      // After 500 inserts, enforcement runs (every 500)
+      // Enforcement runs at insert 500 (every 500): deletes down to 10, then 100 more inserts → 110
       const events = smallStore.getEvents("sess-cap");
-      expect(events.length).toBeLessThanOrEqual(510); // allow some slack before next enforcement
+      expect(events.length).toBeLessThanOrEqual(110);
+      expect(events.length).toBeGreaterThan(10); // some inserts after last enforcement
       smallStore.close();
     });
   });

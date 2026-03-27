@@ -155,12 +155,15 @@ export class Store {
   }
 
   drainPending(channelId: string): Message[] {
-    const rows = this.db.prepare(
-      "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC",
-    ).all(channelId) as Message[];
-    if (rows.length > 0) {
-      this.db.prepare("DELETE FROM pending_queue WHERE channelId = ?").run(channelId);
-    }
+    let rows: Message[] = [];
+    this.db.transaction(() => {
+      rows = this.db.prepare(
+        "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC",
+      ).all(channelId) as Message[];
+      if (rows.length > 0) {
+        this.db.prepare("DELETE FROM pending_queue WHERE channelId = ?").run(channelId);
+      }
+    })();
     return rows;
   }
 
