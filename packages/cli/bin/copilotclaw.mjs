@@ -95,9 +95,13 @@ async function run() {
       await import(join(gatewayDist, "config-cli.js"));
       break;
 
-    case "doctor":
-      await import(join(gatewayDist, "doctor.js"));
+    case "doctor": {
+      const { runDoctor } = await import(join(gatewayDist, "doctor.js"));
+      const fix = args.includes("--fix");
+      const ok = await runDoctor(fix);
+      if (!ok) process.exit(1);
       break;
+    }
 
     case "agent":
       if (args[1] === "stop") {
