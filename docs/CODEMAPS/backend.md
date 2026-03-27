@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 37 | Version: 0.24.0 | Token estimate: ~2700 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 37 | Version: 0.25.0 | Token estimate: ~2700 -->
 
 # Backend
 
@@ -9,7 +9,7 @@
 ```
 GET  /healthz                              → 200 { status: "ok" }
 POST /api/stop                             → 200 { status: "stopping" } → gateway exit only (localhost only, agent NOT stopped)
-GET  /api/status                           → 200 { gateway: {status, version, profile}, agent: AgentStatusResponse|null, agentCompatibility: …|null, config: {model, zeroPremium, debugMockCopilotUnsafeTools, workspaceRoot, auth: {type, user}} }
+GET  /api/status                           → 200 { gateway: {status, version, profile}, agent: AgentStatusResponse|null, agentCompatibility: …|null, config: {model, zeroPremium, debugMockCopilotUnsafeTools, workspaceRoot, auth: {type, user}} }  (auth extracted from config.auth?.github)
 GET  /api/quota                            → 200 quota object | 503 (no active agent session); proxied from agent via IPC
 GET  /api/models                           → 200 models object | 503 (no active agent session); proxied from agent via IPC
 GET  /api/logs                             → 200 { logs: string[] } (recent log lines from ring buffer)
@@ -29,7 +29,7 @@ GET  /                                     → 200 HTML dashboard (status bar + 
 
 ```
 src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents; /api/quota, /api/models, and /api/sessions/:sessionId/messages proxy to agent via agentManager
-src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, CONFIG_ENV_VARS, parseBool helper; profile-aware ({{stateDir}}/config.json where {{stateDir}}=~/.copilotclaw/ or ~/.copilotclaw-{{profile}}/); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS) take precedence over file values; CopilotclawConfig includes configVersion, model, zeroPremium, debugMockCopilotUnsafeTools, auth fields; AuthConfig interface defines auth configuration (type: "gh-cli"|"pat"|"command", plus type-specific fields); loadConfig applies migrateConfig and writes back if migrated, passes through auth from file config; saveConfig stamps LATEST_CONFIG_VERSION; ensureConfigFile includes configVersion; LATEST_CONFIG_VERSION constant and MIGRATIONS registry for sequential schema migration; migrateConfig(raw) applies migrations from current version to LATEST_CONFIG_VERSION, returns { config, migrated }
+src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, CONFIG_ENV_VARS, parseBool helper; profile-aware ({{stateDir}}/config.json where {{stateDir}}=~/.copilotclaw/ or ~/.copilotclaw-{{profile}}/); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS) take precedence over file values; CopilotclawConfig includes configVersion, model, zeroPremium, debugMockCopilotUnsafeTools, auth fields; AuthContainerConfig wraps AuthConfig as `github` field (v0.25.0); AuthConfig interface defines auth configuration (type: "gh-cli"|"pat"|"command", plus type-specific fields); CopilotclawConfig.auth is AuthContainerConfig (not AuthConfig); loadConfig applies migrateConfig and writes back if migrated, passes through auth from file config; saveConfig stamps LATEST_CONFIG_VERSION; ensureConfigFile includes configVersion; LATEST_CONFIG_VERSION = 2; MIGRATIONS registry for sequential schema migration (v1→v2: moves auth.* into auth.github.*); migrateConfig(raw) applies migrations from current version to LATEST_CONFIG_VERSION, returns { config, migrated }
 src/config-cli.ts          — `copilotclaw config` CLI: configGet (resolve + display, notes env var override), configSet (validate + save, warns if env var shadows); valid keys: upstream, port, model, zeroPremium, debugMockCopilotUnsafeTools; BOOLEAN_KEYS handling for zeroPremium/debugMockCopilotUnsafeTools
 src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + LogBuffer creation + enableFileOutput to {{stateDir}}/data/gateway.log + console intercept + startServer on resolvePort() + periodic agent monitor every 30s, max 3 retries)
 src/index.ts               — CLI entry point (health check on resolvePort() → detached spawn → exit); reads GATEWAY_VERSION from package.json, shows version in all CLI log messages; parses --profile before command routing (sets COPILOTCLAW_PROFILE env var); after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible; checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart)
@@ -45,7 +45,7 @@ src/channel-provider.ts    — ChannelProvider interface (plugin contract for ch
 src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, SSE broadcast via SseBroadcaster); passes compatibility info to dashboard
 src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening); status modal shows physical session details (with elapsed time, accumulated tokens in/out/total), subagent sessions, premium requests, available models; quota display uses /api/quota with fallback to latestQuotaSnapshots from session data; showSessionDetail() fetches and displays copilot session context detail via /api/sessions/:sessionId/messages
 src/sse-broadcaster.ts                  — SseBroadcaster: SSE event broadcasting to connected clients
-src/doctor.ts              — `copilotclaw doctor` CLI: checkWorkspace, checkConfig, checkGateway, checkAgent, checkZeroPremium, checkAuth diagnostics; checkConfig validates configVersion (warns if missing or unexpected); runDoctor orchestrates checks and optional --fix (fixWorkspace, fixConfig, fixStaleSocket); exits 1 on failures
+src/doctor.ts              — `copilotclaw doctor` CLI: checkWorkspace, checkConfig, checkGateway, checkAgent, checkZeroPremium, checkAuth diagnostics; checkConfig validates configVersion (warns if missing or unexpected); checkAuth reads config.auth?.github (v0.25.0); runDoctor orchestrates checks and optional --fix (fixWorkspace, fixConfig, fixStaleSocket); exits 1 on failures
 src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); uses createRequire to resolve @copilotclaw/agent package path; ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods; getQuota(), getModels(), and getSessionMessages() proxy to agent IPC; MIN_AGENT_VERSION exported; semverSatisfies exported (used by doctor); agent stderr redirected to {{stateDir}}/data/agent.log on spawn (openSync append mode)
 src/ipc-client.ts          — IPC client (status/stop/quota/models/session_messages to agent process); AgentStatusResponse includes bootId field; PhysicalSessionSummary type (includes totalInputTokens, totalOutputTokens, latestQuotaSnapshots); SubagentInfo type; getAgentQuota(), getAgentModels(), and getAgentSessionMessages() functions
 src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.sock or copilotclaw-agent-{{profile}}.sock in tmpdir)
@@ -154,10 +154,10 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (253 total: 245 vitest + 8 Playwright)
+### Test Suites (258 total: 250 vitest + 8 Playwright)
 
 ```
-Gateway vitest (169 tests) — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger tests)
+Gateway vitest (174 tests) — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger tests)
 Agent vitest (76 tests)    — unit tests with mock Copilot SDK session (includes structured-logger, token-resolver tests)
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```
