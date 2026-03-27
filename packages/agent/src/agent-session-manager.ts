@@ -857,6 +857,9 @@ export class AgentSessionManager {
     }
   }
 
+  /** Notify the channel that the session stopped. The "unexpectedly" wording is intentional
+   *  even for idle exits — a session ending via session.idle (without explicit abort) is
+   *  unexpected because the agent should keep calling copilotclaw_receive_input indefinitely. */
   private notifyChannelSessionStopped(channelId: string | undefined, reason?: string): void {
     if (channelId === undefined) return;
     const detail = reason !== undefined ? `: ${reason}` : "";

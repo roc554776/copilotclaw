@@ -1086,14 +1086,11 @@ describe("AgentSessionManager — session failure backoff", () => {
 
     expect(manager.isChannelInBackoff("ch-backoff-expiry")).toBe(true);
 
-    // Fast-forward past the backoff duration by manipulating Date.now
-    const originalNow = Date.now;
-    Date.now = () => originalNow() + 61_000; // 61 seconds later
-    try {
-      expect(manager.isChannelInBackoff("ch-backoff-expiry")).toBe(false);
-    } finally {
-      Date.now = originalNow;
-    }
+    // Fast-forward past the backoff duration
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 61_000); // 61 seconds later
+    expect(manager.isChannelInBackoff("ch-backoff-expiry")).toBe(false);
+    vi.useRealTimers();
   });
 });
 
