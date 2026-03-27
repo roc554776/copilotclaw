@@ -117,30 +117,41 @@ export function createChannelTools(deps: ChannelToolDeps) {
       required: [],
     },
     handler: async () => {
-      deps.onStatusChange?.("waiting");
-      const inputs = await pollNextInputs(deps);
+      // CRITICAL: This handler must NEVER throw. Any exception is caught and
+      // returns the same response as a keepalive timeout. If this tool returns
+      // an error, the agent's physical session stops, causing an irrecoverable
+      // deadlock. The agent must not perceive that an error occurred.
+      try {
+        deps.onStatusChange?.("waiting");
+        const inputs = await pollNextInputs(deps);
 
-      // Drain subagent completions that occurred while waiting
-      const subagentCompletions = deps.drainSubagentCompletions?.() ?? [];
-      const subagentNotice = subagentCompletions.length > 0
-        ? "[SUBAGENT COMPLETED] " + subagentCompletions.map((c) =>
-            `${c.agentName} ${c.status}${c.error ? ` (error: ${c.error})` : ""}` +
-            `${c.totalTokens !== undefined ? ` [tokens: ${c.totalTokens}]` : ""}` +
-            `${c.durationMs !== undefined ? ` [${c.durationMs}ms]` : ""}`
-          ).join("; ")
-        : "";
+        // Drain subagent completions that occurred while waiting
+        const subagentCompletions = deps.drainSubagentCompletions?.() ?? [];
+        const subagentNotice = subagentCompletions.length > 0
+          ? "[SUBAGENT COMPLETED] " + subagentCompletions.map((c) =>
+              `${c.agentName} ${c.status}${c.error ? ` (error: ${c.error})` : ""}` +
+              `${c.totalTokens !== undefined ? ` [tokens: ${c.totalTokens}]` : ""}` +
+              `${c.durationMs !== undefined ? ` [${c.durationMs}ms]` : ""}`
+            ).join("; ")
+          : "";
 
-      if (inputs.length === 0) {
-        if (subagentCompletions.length > 0) {
-          // Subagent finished while no user message — return subagent info
-          deps.onStatusChange?.("processing");
-          return { userMessage: subagentNotice + RECEIVE_INSTRUCTION };
+        if (inputs.length === 0) {
+          if (subagentCompletions.length > 0) {
+            // Subagent finished while no user message — return subagent info
+            deps.onStatusChange?.("processing");
+            return { userMessage: subagentNotice + RECEIVE_INSTRUCTION };
+          }
+          return { userMessage: KEEPALIVE_INSTRUCTION };
         }
+        deps.onStatusChange?.("processing");
+        const combined = combineMessages(inputs);
+        return { userMessage: combined + "\n\n" + subagentNotice + RECEIVE_INSTRUCTION };
+      } catch (err: unknown) {
+        // Log to system log only — agent must not see this error
+        console.error("[agent] receive_input internal error (suppressed):", err);
+        // Return keepalive-equivalent response — indistinguishable from timeout
         return { userMessage: KEEPALIVE_INSTRUCTION };
       }
-      deps.onStatusChange?.("processing");
-      const combined = combineMessages(inputs);
-      return { userMessage: combined + "\n\n" + subagentNotice + RECEIVE_INSTRUCTION };
     },
     skipPermission: true,
   });
