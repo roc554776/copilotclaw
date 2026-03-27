@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { MIN_AGENT_VERSION, semverSatisfies } from "./agent-manager.js";
 import { type AuthConfig, NON_PREMIUM_MODELS, ensureConfigFile, getConfigFilePath, getProfileName, loadConfig, resolvePort } from "./config.js";
 import { getAgentStatus } from "./ipc-client.js";
@@ -122,9 +122,8 @@ export function checkAuth(): DiagnosticResult {
   const auth: AuthConfig = config.auth;
 
   if (auth.type === "gh-auth") {
-    // Check tokenCommand or gh CLI availability
     if (auth.tokenCommand !== undefined) {
-      return { name: "auth", result: "pass", message: `gh-auth via custom command` };
+      return validateTokenCommand(auth.tokenCommand, "gh-auth");
     }
     try {
       const args = ["auth", "token"];
@@ -141,7 +140,7 @@ export function checkAuth(): DiagnosticResult {
 
   if (auth.type === "pat" || auth.type === "oauth") {
     if (auth.tokenCommand !== undefined) {
-      return { name: "auth", result: "pass", message: `${auth.type} via custom command` };
+      return validateTokenCommand(auth.tokenCommand, auth.type);
     }
     if (auth.tokenEnv !== undefined) {
       const val = process.env[auth.tokenEnv];
@@ -154,12 +153,33 @@ export function checkAuth(): DiagnosticResult {
       if (!existsSync(auth.tokenFile)) {
         return { name: "auth", result: "fail", message: `${auth.type}: token file not found: ${auth.tokenFile}` };
       }
+      const mode = statSync(auth.tokenFile).mode & 0o777;
+      if (mode & 0o077) {
+        return { name: "auth", result: "warn", message: `${auth.type}: token file has loose permissions (${mode.toString(8)}), recommend chmod 600` };
+      }
       return { name: "auth", result: "pass", message: `${auth.type} via file ${auth.tokenFile}` };
     }
     return { name: "auth", result: "fail", message: `${auth.type}: no tokenEnv, tokenFile, or tokenCommand configured` };
   }
 
   return { name: "auth", result: "warn", message: `unknown auth type: ${String(auth.type)}` };
+}
+
+function validateTokenCommand(command: string, authType: string): DiagnosticResult {
+  const parts = command.split(/\s+/).filter((p) => p.length > 0);
+  if (parts.length === 0) {
+    return { name: "auth", result: "fail", message: `${authType}: tokenCommand is empty` };
+  }
+  try {
+    const [cmd, ...args] = parts;
+    const output = execFileSync(cmd!, args, { encoding: "utf-8", timeout: 5000 }).trim();
+    if (output.length === 0) {
+      return { name: "auth", result: "warn", message: `${authType}: tokenCommand "${command}" returned empty output` };
+    }
+    return { name: "auth", result: "pass", message: `${authType} via command "${command}"` };
+  } catch {
+    return { name: "auth", result: "fail", message: `${authType}: tokenCommand "${command}" failed` };
+  }
 }
 
 export function fixWorkspace(): boolean {

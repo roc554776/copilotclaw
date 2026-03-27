@@ -129,11 +129,18 @@ describe("doctor", () => {
       expect(result.message).toContain("no tokenEnv");
     });
 
-    it("returns pass for gh-auth with tokenCommand", () => {
-      saveConfig({ auth: { type: "gh-auth", tokenCommand: "echo test" } });
+    it("returns pass for gh-auth with valid tokenCommand", () => {
+      saveConfig({ auth: { type: "gh-auth", tokenCommand: "echo test-token" } });
       const result = checkAuth();
       expect(result.result).toBe("pass");
-      expect(result.message).toContain("custom command");
+      expect(result.message).toContain("command");
+    });
+
+    it("returns fail for gh-auth with invalid tokenCommand", () => {
+      saveConfig({ auth: { type: "gh-auth", tokenCommand: "nonexistent-binary-xyz" } });
+      const result = checkAuth();
+      expect(result.result).toBe("fail");
+      expect(result.message).toContain("failed");
     });
   });
 

@@ -124,7 +124,9 @@ function createRequestHandler(
           zeroPremium: config.zeroPremium ?? false,
           debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
           workspaceRoot: getWorkspaceRoot(getProfileName()),
-          auth: config.auth !== undefined ? { type: config.auth.type, user: config.auth.user } : null,
+          // Full auth config is safe to expose on localhost — values are references
+          // to secrets (env var names, file paths, commands), not secrets themselves.
+          auth: config.auth ?? null,
         },
       });
       return;

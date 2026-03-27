@@ -1,6 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
+/** Auth config for profile-specific Copilot credentials.
+ *  Intentionally duplicated from @copilotclaw/gateway's AuthConfig
+ *  to keep the two process packages self-contained. If you change
+ *  this interface, apply the same change to gateway/src/config.ts. */
 export interface AuthConfig {
   type: "gh-auth" | "pat" | "oauth";
   user?: string;
@@ -82,8 +86,8 @@ function resolveIndirectToken(auth: AuthConfig): string {
 }
 
 function executeTokenCommand(command: string): string {
-  // Use execFileSync with shell splitting to avoid shell injection.
-  // Simple space-based splitting is sufficient for commands like "gh auth token --user foo".
+  // Use execFileSync with simple space-based splitting to avoid shell injection.
+  // Limitation: paths with spaces are not supported (e.g., "/path with spaces/cmd").
   const parts = command.split(/\s+/).filter((p) => p.length > 0);
   if (parts.length === 0) {
     throw new Error("auth.tokenCommand is empty");

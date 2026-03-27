@@ -13,7 +13,7 @@ interface GatewayConfig {
   zeroPremium: boolean;
   debugMockCopilotUnsafeTools: boolean;
   workspaceRoot: string | null;
-  auth: { type: string; user?: string } | null;
+  auth: AuthConfig | null;
 }
 
 let structuredLogger: StructuredLogger | undefined;
@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   let githubToken: string | undefined;
   if (config.auth !== null) {
     try {
-      githubToken = resolveToken(config.auth as AuthConfig);
+      githubToken = resolveToken(config.auth);
       log(`auth: resolved token via ${config.auth.type}${config.auth.user !== undefined ? ` (user: ${config.auth.user})` : ""}`);
     } catch (err: unknown) {
       logError(`auth: failed to resolve token: ${err instanceof Error ? err.message : String(err)}`);

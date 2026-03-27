@@ -148,7 +148,7 @@ When `auth` is not configured, the default Copilot CLI credentials are used.
 | `auth.hostname` | GitHub hostname for `gh auth token --hostname` (gh-auth only) |
 | `auth.tokenEnv` | Environment variable containing the token (pat) |
 | `auth.tokenFile` | File path containing the token (pat) |
-| `auth.tokenCommand` | Custom command to obtain the token (any type) |
+| `auth.tokenCommand` | Custom command to obtain the token (any type, no spaces in paths) |
 
 ## Commands
 
