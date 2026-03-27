@@ -11,10 +11,20 @@ if (nodeVersion[0] < 20) {
 
 const args = process.argv.slice(2);
 
-// Parse --profile before command routing (applies to all commands)
+// Parse --profile before command routing (applies to all commands).
+// --profile overrides COPILOTCLAW_PROFILE env var. First occurrence wins.
 const profileIdx = args.indexOf("--profile");
-if (profileIdx !== -1 && args[profileIdx + 1]) {
-  process.env.COPILOTCLAW_PROFILE = args[profileIdx + 1];
+if (profileIdx !== -1) {
+  const profileValue = args[profileIdx + 1];
+  if (!profileValue || profileValue.startsWith("-")) {
+    console.error("Error: --profile requires a <name> argument");
+    process.exit(1);
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(profileValue)) {
+    console.error(`Error: invalid profile name "${profileValue}" (must be alphanumeric, underscore, or dash)`);
+    process.exit(1);
+  }
+  process.env.COPILOTCLAW_PROFILE = profileValue;
   args.splice(profileIdx, 2);
 }
 
