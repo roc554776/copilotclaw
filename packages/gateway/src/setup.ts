@@ -56,15 +56,31 @@ async function main(): Promise<void> {
 
   log(`config: ${getConfigFilePath(getProfileName())}`);
 
-  // Port selection: if config already has a port, skip. Otherwise check default.
+  // Port selection: if config already has a port, skip. Otherwise find an available port.
+  // Named profiles must never default to DEFAULT_PORT — it's likely already used by the default profile.
   const existingConfig = loadConfig(getProfileName());
   if (existingConfig.port === undefined) {
-    const defaultAvailable = await isPortAvailable(DEFAULT_PORT);
-    if (!defaultAvailable) {
-      log(`default port ${DEFAULT_PORT} is in use, searching for available port...`);
+    const profile = getProfileName();
+    if (profile === undefined) {
+      // Default profile: try the default port first
+      const defaultAvailable = await isPortAvailable(DEFAULT_PORT);
+      if (!defaultAvailable) {
+        log(`default port ${DEFAULT_PORT} is in use, searching for available port...`);
+        const available = await findAvailablePort(PORT_CANDIDATES.filter((p) => p !== DEFAULT_PORT));
+        if (available !== undefined) {
+          saveConfig({ ...existingConfig, port: available }, profile);
+          log(`port ${available} selected and saved to config`);
+        } else {
+          log(`ERROR: no available port found — set port manually in config`);
+          process.exit(1);
+        }
+      }
+    } else {
+      // Named profile: always find a unique available port (never use DEFAULT_PORT)
+      log(`searching for available port for profile "${profile}"...`);
       const available = await findAvailablePort(PORT_CANDIDATES.filter((p) => p !== DEFAULT_PORT));
       if (available !== undefined) {
-        saveConfig({ ...existingConfig, port: available }, getProfileName());
+        saveConfig({ ...existingConfig, port: available }, profile);
         log(`port ${available} selected and saved to config`);
       } else {
         log(`ERROR: no available port found — set port manually in config`);
