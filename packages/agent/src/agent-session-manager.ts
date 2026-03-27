@@ -170,6 +170,7 @@ interface SessionSnapshot {
   startedAt: string;
   cumulativeInputTokens?: number | undefined;
   cumulativeOutputTokens?: number | undefined;
+  physicalSessionHistory?: PhysicalSessionSummary[] | undefined;
 }
 
 interface BindingSnapshot {
@@ -259,6 +260,7 @@ export class AgentSessionManager {
             boundChannelId: typeof s["boundChannelId"] === "string" ? s["boundChannelId"] : undefined,
             cumulativeInputTokens: typeof s["cumulativeInputTokens"] === "number" ? s["cumulativeInputTokens"] : undefined,
             cumulativeOutputTokens: typeof s["cumulativeOutputTokens"] === "number" ? s["cumulativeOutputTokens"] : undefined,
+            physicalSessionHistory: Array.isArray(s["physicalSessionHistory"]) ? s["physicalSessionHistory"] as PhysicalSessionSummary[] : undefined,
           },
           // Placeholder client — suspended sessions don't use it. Replaced on revive.
           client: this.createClient(),
@@ -294,6 +296,7 @@ export class AgentSessionManager {
           startedAt: entry.info.startedAt,
           cumulativeInputTokens: entry.info.cumulativeInputTokens,
           cumulativeOutputTokens: entry.info.cumulativeOutputTokens,
+          physicalSessionHistory: entry.info.physicalSessionHistory,
         });
       }
     }

@@ -1275,8 +1275,17 @@ describe("AgentSessionManager — cumulative token history across physical sessi
 });
 
 describe("AgentSessionManager — physicalSessionHistory preservation", () => {
+  let tmpDir: string;
+  let persistPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-test-"));
+    persistPath = join(tmpDir, "agent-bindings.json");
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("preserves stopped physical session in physicalSessionHistory on suspend", async () => {
@@ -1340,5 +1349,49 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
     // The stopped session's sessionId is preserved for linking to events page
     expect(session?.physicalSessionHistory?.[0]?.sessionId).toBeDefined();
     expect(typeof session?.physicalSessionHistory?.[0]?.sessionId).toBe("string");
+  });
+
+  it("persists physicalSessionHistory to bindings file and restores on new manager", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    manager.startSession({ boundChannelId: "ch-hist-persist" });
+    await waitForPhysicalSession(manager);
+
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 400, outputTokens: 150 } });
+    mockSession.emit("session.idle");
+    await wait(50);
+
+    // Verify bindings file contains physicalSessionHistory
+    const raw = readFileSync(persistPath, "utf-8");
+    const snapshot = JSON.parse(raw) as { sessions: Array<{ physicalSessionHistory?: Array<{ sessionId: string; currentState: string }> }> };
+    expect(snapshot.sessions[0]!.physicalSessionHistory).toHaveLength(1);
+    expect(snapshot.sessions[0]!.physicalSessionHistory![0]!.currentState).toBe("stopped");
+
+    // Create new manager — simulates agent restart
+    installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+    const manager2 = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:9999",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    const statuses = manager2.getSessionStatuses();
+    const restored = Object.values(statuses).find((s) => s.boundChannelId === "ch-hist-persist");
+    expect(restored?.physicalSessionHistory).toHaveLength(1);
+    expect(restored?.physicalSessionHistory?.[0]?.sessionId).toBe("mock-sdk-session");
+    expect(restored?.physicalSessionHistory?.[0]?.currentState).toBe("stopped");
   });
 });

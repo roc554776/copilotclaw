@@ -50,8 +50,14 @@
       "mcp__serena__read_memory",
       "Bash(pnpm --filter agent test)",
       "Bash(pnpm --filter gateway test)",
+      "Bash(grep)",
+      "Bash(head)",
+      "Bash(git checkout -b)",
       "Bash(pnpm --filter gateway exec tsc --noEmit)",
-      "Bash(pnpm --filter agent exec tsc --noEmit)"
+      "Bash(pnpm --filter agent exec tsc --noEmit)",
+      "Bash(pnpm --filter @copilotclaw/gateway run typecheck)",
+      "Bash(pnpm --filter @copilotclaw/gateway run test)",
+      "Bash(pnpm vitest:*)"
     ]
   }
 }
