@@ -12,6 +12,7 @@ interface GatewayConfig {
   model: string | null;
   zeroPremium: boolean;
   debugMockCopilotUnsafeTools: boolean;
+  stateDir: string | null;
   workspaceRoot: string | null;
   auth: AuthConfig | null;
 }
@@ -38,7 +39,7 @@ async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
   } catch (err: unknown) {
     log(`failed to fetch gateway config: ${String(err)}`);
   }
-  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, workspaceRoot: null, auth: null };
+  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null };
 }
 
 async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, number>> {
@@ -74,11 +75,11 @@ async function main(): Promise<void> {
   const config = await fetchGatewayConfig(GATEWAY_URL);
   log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, debugMockCopilotUnsafeTools=${config.debugMockCopilotUnsafeTools}`);
 
-  // Initialize structured logger if workspace is available.
-  // When workspaceRoot is null (gateway unreachable at startup), structured
+  // Initialize structured logger if state dir is available.
+  // When stateDir is null (gateway unreachable at startup), structured
   // file logging is unavailable — stderr redirect from gateway is the fallback.
-  if (config.workspaceRoot !== null) {
-    const dataDir = join(config.workspaceRoot, "data");
+  if (config.stateDir !== null) {
+    const dataDir = join(config.stateDir, "data");
     const agentLogPath = join(dataDir, "agent.log");
     structuredLogger = new StructuredLogger(agentLogPath, "agent");
     log("structured logger initialized");
@@ -104,7 +105,9 @@ async function main(): Promise<void> {
   if (config.model !== null) managerOpts.model = config.model;
   if (config.workspaceRoot !== null) {
     managerOpts.workingDirectory = config.workspaceRoot;
-    managerOpts.persistPath = join(config.workspaceRoot, "data", "agent-bindings.json");
+  }
+  if (config.stateDir !== null) {
+    managerOpts.persistPath = join(config.stateDir, "data", "agent-bindings.json");
   }
   const sessionManager = new AgentSessionManager(managerOpts);
 
