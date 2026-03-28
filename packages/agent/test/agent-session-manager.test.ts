@@ -796,13 +796,13 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     // 30% usage (≥ lastReminderPercent 0% + 10% threshold)
     mockSession.emit("session.usage_info", { data: { currentTokens: 30000, tokenLimit: 100000 } });
 
-    // Only copilotclaw_receive_input triggers reminder (parent-exclusive tool)
-    const result = await hook({ toolName: "copilotclaw_receive_input" });
+    // Only copilotclaw_wait triggers reminder (parent-exclusive tool)
+    const result = await hook({ toolName: "copilotclaw_wait" });
     expect(result?.additionalContext).toContain("<system>");
-    expect(result?.additionalContext).toContain("copilotclaw_receive_input");
+    expect(result?.additionalContext).toContain("copilotclaw_wait");
 
     // Second call at same usage should NOT contain reminder (already fired)
-    const result2 = await hook({ toolName: "copilotclaw_receive_input" });
+    const result2 = await hook({ toolName: "copilotclaw_wait" });
     expect(result2?.additionalContext ?? "").not.toContain("<system>");
 
     mockSession.emit("session.idle");
@@ -852,8 +852,8 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     expect(await hook({ toolName: "Bash" })).toBeUndefined();
     expect(await hook({ toolName: "copilotclaw_debug_mock_read_file" })).toBeUndefined();
 
-    // But copilotclaw_receive_input does fire
-    const result = await hook({ toolName: "copilotclaw_receive_input" });
+    // But copilotclaw_wait does fire
+    const result = await hook({ toolName: "copilotclaw_wait" });
     expect(result?.additionalContext).toContain("<system>");
 
     mockSession.emit("session.idle");
@@ -868,7 +868,7 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
 
     mockSession.emit("session.compaction_complete", { data: { success: true } });
 
-    const result = await hook({ toolName: "copilotclaw_receive_input" });
+    const result = await hook({ toolName: "copilotclaw_wait" });
     expect(result?.additionalContext).toContain("<system>");
     expect(result?.additionalContext).toContain("CRITICAL REMINDER");
 
@@ -885,7 +885,7 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     // 5% usage — below the 10% threshold
     mockSession.emit("session.usage_info", { data: { currentTokens: 5000, tokenLimit: 100000 } });
 
-    const result = await hook({ toolName: "copilotclaw_receive_input" });
+    const result = await hook({ toolName: "copilotclaw_wait" });
     expect(result?.additionalContext ?? "").not.toContain("<system>");
 
     mockSession.emit("session.idle");
@@ -897,7 +897,7 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
 
     expect(mockSession.send).toHaveBeenCalled();
     const sendArg = mockSession.send.mock.calls[0]?.[0] as { prompt?: string } | undefined;
-    expect(sendArg?.prompt).toContain("copilotclaw_receive_input");
+    expect(sendArg?.prompt).toContain("copilotclaw_wait");
 
     mockSession.emit("session.idle");
     await wait(30);
@@ -941,7 +941,7 @@ describe("AgentSessionManager — custom agents configuration", () => {
     expect(operator).toBeDefined();
     expect(operator!.infer).toBe(false);
     expect(operator!.prompt).toContain("DEADLOCK");
-    expect(operator!.prompt).toContain("copilotclaw_receive_input");
+    expect(operator!.prompt).toContain("copilotclaw_wait");
 
     // worker: infer true, empty or minimal prompt
     const worker = config.customAgents.find((a) => a.name === "worker");
@@ -989,12 +989,12 @@ describe("AgentSessionManager — subagent completion notification", () => {
     });
 
     // Next onPostToolUse (parent tool) should include subagent peek notification
-    const result = await hook({ toolName: "copilotclaw_receive_input" });
+    const result = await hook({ toolName: "copilotclaw_wait" });
     expect(result?.additionalContext).toContain("[SUBAGENT UPDATE]");
     expect(result?.additionalContext).toContain("worker completed");
-    // onPostToolUse peeks the queue (does not drain) — receiveInput is the sole drain point.
+    // onPostToolUse peeks the queue (does not drain) — wait is the sole drain point.
     // So the second call still sees the same completion info.
-    const result2 = await hook({ toolName: "copilotclaw_receive_input" });
+    const result2 = await hook({ toolName: "copilotclaw_wait" });
     expect(result2?.additionalContext).toContain("[SUBAGENT UPDATE]");
 
     mockSession.emit("session.idle");
@@ -1027,7 +1027,7 @@ describe("AgentSessionManager — subagent completion notification", () => {
       data: { toolCallId: "tc-2", agentName: "worker", agentDisplayName: "Worker", error: "timeout" },
     });
 
-    const result = await hook({ toolName: "copilotclaw_receive_input" });
+    const result = await hook({ toolName: "copilotclaw_wait" });
     expect(result?.additionalContext).toContain("[SUBAGENT UPDATE]");
     expect(result?.additionalContext).toContain("worker failed");
     expect(result?.additionalContext).toContain("timeout");

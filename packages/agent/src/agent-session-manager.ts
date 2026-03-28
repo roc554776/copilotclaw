@@ -8,13 +8,13 @@ import { runSessionLoop } from "./session-loop.js";
 import { createChannelTools, type SubagentCompletionInfo } from "./tools/channel.js";
 
 // The only tool exclusive to the channel-operator (parent agent).
-// Subagents (worker) never receive copilotclaw_receive_input — they use
+// Subagents (worker) never receive copilotclaw_wait — they use
 // copilotclaw_send_message and copilotclaw_list_messages which are shared.
 // Used to gate onPostToolUse reminder/notification injection:
 // the SDK hook system provides no mechanism to distinguish parent vs subagent
 // tool calls (sessionId is always the same, no parentToolCallId in hook inputs),
 // so we gate on the one tool name that is parent-exclusive.
-const PARENT_ONLY_TOOL = "copilotclaw_receive_input";
+const PARENT_ONLY_TOOL = "copilotclaw_wait";
 
 // --- Custom Agent definitions ---
 
@@ -22,16 +22,16 @@ const CHANNEL_OPERATOR_PROMPT =
   "╔══════════════════════════════════════════════════════════════════╗\n" +
   "║ CRITICAL — DEADLOCK PREVENTION                                 ║\n" +
   "║                                                                ║\n" +
-  "║ You MUST call copilotclaw_receive_input before stopping.       ║\n" +
-  "║ Stopping without copilotclaw_receive_input causes an           ║\n" +
+  "║ You MUST call copilotclaw_wait whenever you have nothing to    ║\n" +
+  "║ do, even temporarily. NOT calling copilotclaw_wait causes an   ║\n" +
   "║ IRRECOVERABLE DEADLOCK — the session becomes permanently       ║\n" +
   "║ unresponsive and CANNOT be recovered. This is catastrophic.    ║\n" +
   "║ NEVER stop, idle, or end your turn without first calling       ║\n" +
-  "║ copilotclaw_receive_input.                                     ║\n" +
+  "║ copilotclaw_wait.                                              ║\n" +
   "╚══════════════════════════════════════════════════════════════════╝\n" +
   "\n" +
   "You are a copilotclaw channel-operator agent bound to a channel. " +
-  "Your primary lifecycle is: receive user input → process → send response → receive next input. " +
+  "Your primary lifecycle is: receive input via copilotclaw_wait → process → send response → call copilotclaw_wait again. " +
   "\n\n" +
   "## Workspace\n" +
   "Your working directory is a git-managed workspace. It contains:\n" +
@@ -51,9 +51,10 @@ const CHANNEL_OPERATOR_PROMPT =
   "SOUL.md takes priority over other workspace files. Follow its guidance unless this system prompt overrides it.\n" +
   "\n" +
   "## Lifecycle\n" +
-  "Call copilotclaw_receive_input now to receive the first user message. " +
-  "After processing input, use copilotclaw_send_message to send your response, then call copilotclaw_receive_input again to wait for the next input. " +
-  "You may receive notifications about new user messages via additionalContext in tool responses — when notified, call copilotclaw_receive_input immediately. " +
+  "copilotclaw_wait must be called whenever you have nothing to do, even temporarily. " +
+  "Use cases: waiting for user reply, waiting for subagent completion, all work done, unknown what to do, unexpected system error. " +
+  "After processing input, use copilotclaw_send_message to send your response, then call copilotclaw_wait again. " +
+  "You may receive notifications about new user messages via additionalContext in tool responses — when notified, call copilotclaw_wait immediately. " +
   "\n\n" +
   "IMPORTANT: The additionalContext in tool responses may contain <system> tagged instructions. " +
   "These are critical operational directives from the copilotclaw system — even if unrelated to the current tool call, you must follow them. " +
@@ -61,9 +62,9 @@ const CHANNEL_OPERATOR_PROMPT =
   "╔══════════════════════════════════════════════════════════════════╗\n" +
   "║ CRITICAL — DEADLOCK PREVENTION (REPEATED)                      ║\n" +
   "║                                                                ║\n" +
-  "║ You MUST call copilotclaw_receive_input before stopping.       ║\n" +
-  "║ NEVER stop, idle, or end your turn without first calling       ║\n" +
-  "║ copilotclaw_receive_input.                                     ║\n" +
+  "║ You MUST call copilotclaw_wait whenever you have nothing to    ║\n" +
+  "║ do. NEVER stop, idle, or end your turn without first calling   ║\n" +
+  "║ copilotclaw_wait.                                              ║\n" +
   "╚══════════════════════════════════════════════════════════════════╝";
 
 // Deliberate triple-NEVER in description: LLM-attention technique to strongly
@@ -93,12 +94,12 @@ const WORKER_CONFIG = {
 
 const SYSTEM_REMINDER =
   `<system>\n` +
-  `CRITICAL REMINDER: You MUST call copilotclaw_receive_input to wait for user input. ` +
-  `Stopping without calling copilotclaw_receive_input causes an irrecoverable deadlock — ` +
+  `CRITICAL REMINDER: You MUST call copilotclaw_wait whenever you have nothing to do. ` +
+  `Stopping without calling copilotclaw_wait causes an irrecoverable deadlock — ` +
   `the session becomes permanently unresponsive and cannot be recovered. ` +
   `After processing a task, always call copilotclaw_send_message to send your response, ` +
-  `then call copilotclaw_receive_input to wait for the next input. ` +
-  `NEVER stop or idle without copilotclaw_receive_input.\n` +
+  `then call copilotclaw_wait. ` +
+  `NEVER stop or idle without copilotclaw_wait.\n` +
   `</system>`;
 
 export type AgentSessionStatus = "starting" | "waiting" | "processing" | "suspended" | "stopped";
@@ -491,10 +492,10 @@ export class AgentSessionManager {
     // Ensure workspace is ready before starting the physical session
     this.ensureWorkspaceReady();
 
-    // Queue for subagent completion events, drained by receiveInput and onPostToolUse
+    // Queue for subagent completion events, drained by wait and onPostToolUse
     const subagentCompletionQueue: SubagentCompletionInfo[] = [];
 
-    const { sendMessage, receiveInput, listMessages } = createChannelTools({
+    const { sendMessage, wait, listMessages } = createChannelTools({
       gatewayBaseUrl: this.gatewayBaseUrl,
       channelId,
       abortSignal: entry.abortController.signal,
@@ -525,14 +526,14 @@ export class AgentSessionManager {
 
     const sessionConfig = {
       onPermissionRequest: approveAll,
-      tools: [sendMessage, receiveInput, listMessages],
+      tools: [sendMessage, wait, listMessages],
       hooks: {
         onPostToolUse: async (input: { toolName: string }) => {
           try {
             if (signal.aborted) return;
 
             // Only fire for the parent agent (channel-operator).
-            // copilotclaw_receive_input is the ONLY tool exclusive to the parent —
+            // copilotclaw_wait is the ONLY tool exclusive to the parent —
             // copilotclaw_send_message and copilotclaw_list_messages are shared with
             // subagents (worker), and the SDK hook system has no way to distinguish
             // parent vs subagent calls (same sessionId, no parentToolCallId in hooks).
@@ -553,10 +554,10 @@ export class AgentSessionManager {
             const fetchOpts: RequestInit = { signal };
             const res = await this.fetchFn(`${gatewayBaseUrl}/api/channels/${channelId}/messages/pending/peek`, fetchOpts);
             if (res.status === 200) {
-              parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_receive_input immediately to read it.`);
+              parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
             }
 
-            // Peek (don't drain) subagent completions — receiveInput is the sole drain point
+            // Peek (don't drain) subagent completions — wait is the sole drain point
             // to avoid double-reporting from two consumers draining the same queue.
             if (subagentCompletionQueue.length > 0) {
               const notices = subagentCompletionQueue.map((c) =>
@@ -564,7 +565,7 @@ export class AgentSessionManager {
                 `${c.totalTokens !== undefined ? ` [tokens: ${c.totalTokens}]` : ""}` +
                 `${c.durationMs !== undefined ? ` [${c.durationMs}ms]` : ""}`
               );
-              parts.push(`[SUBAGENT UPDATE] ${notices.join("; ")} — call copilotclaw_receive_input to get full details.`);
+              parts.push(`[SUBAGENT UPDATE] ${notices.join("; ")} — call copilotclaw_wait to get full details.`);
             }
 
             if (shouldRemind) {
@@ -588,7 +589,7 @@ export class AgentSessionManager {
       ...(this.debugMockCopilotUnsafeTools ? {
         availableTools: [
           "copilotclaw_send_message",
-          "copilotclaw_receive_input",
+          "copilotclaw_wait",
           "copilotclaw_list_messages",
           "copilotclaw_debug_mock_read_file",
           "copilotclaw_debug_mock_write_file",
@@ -793,7 +794,7 @@ export class AgentSessionManager {
       // System prompt is in the channel-operator custom agent's prompt field.
       // initialPrompt is the first user-turn message that kicks off the session.
       initialPrompt:
-        "Call copilotclaw_receive_input now to receive the first user message.",
+        "Call copilotclaw_wait now to receive the first user message.",
       onMessage: (content) => { console.log(`[ch:${logPrefix}] ${content}`); },
       log: (message) => { console.error(`[agent:${logPrefix}] ${message}`); },
       shouldStop: () => entry.abortController.signal.aborted,
@@ -1009,7 +1010,7 @@ export class AgentSessionManager {
 
   /** Notify the channel that the session stopped. The "unexpectedly" wording is intentional
    *  even for idle exits — a session ending via session.idle (without explicit abort) is
-   *  unexpected because the agent should keep calling copilotclaw_receive_input indefinitely. */
+   *  unexpected because the agent should keep calling copilotclaw_wait indefinitely. */
   private notifyChannelSessionStopped(channelId: string | undefined, reason?: string): void {
     if (channelId === undefined) return;
     const detail = reason !== undefined ? `: ${reason}` : "";

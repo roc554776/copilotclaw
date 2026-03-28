@@ -10,13 +10,13 @@
 - pnpm monorepo 構造（tsconfig strictest 相当の設定）
 - Gateway サーバー（インメモリ Store、API、チャット UI dashboard、冪等起動）
 - Channel 機能（gateway 経由の agent-user 対話、`copilotclaw_` プレフィクスのカスタムツール）
-- Channel ツール統廃合（`copilotclaw_send_message` / `copilotclaw_receive_input` / `copilotclaw_list_messages`）
+- Channel ツール統廃合（`copilotclaw_send_message` / `copilotclaw_wait` / `copilotclaw_list_messages`）
 - `assistant.message` イベントの channel タイムライン自動反映（`copilotclaw_send_message` のフォールバック）
 - 抽象 Agent Session と物理 Copilot Session の分離（suspended 状態、channel binding 維持、reviveSession による自動復帰、`agent-bindings.json` 永続化）
 - 物理 Session 停止後の記憶保持（copilotSessionId を suspended entry に保持、resumeSession で復元）
 - Custom Agent 構成（channel-operator + worker の 2 agent 体制、`infer` フラグによる subagent 推論制御）
-- Subagent 完了通知（`copilotclaw_receive_input` での通知 + `onPostToolUse` hook での通知）
-- `onPostToolUse` hook によるシステムプロンプト補強（`copilotclaw_receive_input` 呼び出し義務の定期リマインド、compaction 直後リマインド、`<system>` タグ方式）
+- Subagent 完了通知（`copilotclaw_wait` での通知 + `onPostToolUse` hook での通知）
+- `onPostToolUse` hook によるシステムプロンプト補強（`copilotclaw_wait` 呼び出し義務の定期リマインド、compaction 直後リマインド、`<system>` タグ方式）
 - `onPostToolUse` hook による新着 user message 通知
 - `session.send()` 排除（session 開始時のみに限定）
 - Gateway の Messages API（`GET/POST /api/channels/{{channelId}}/messages`）
@@ -72,7 +72,7 @@
 
 - 認証設定の名前空間移行（`auth.*` → `auth.github.*`、config migration v1→v2 で自動移行）
 
-- copilotclaw_receive_input のエラー不可侵性（いかなる例外でもエラーを返さず、keepalive と同一のレスポンスを返す。エラーはシステムログのみ）
+- copilotclaw_wait のエラー不可侵性（いかなる例外でもエラーを返さず、keepalive と同一のレスポンスを返す。エラーはシステムログのみ）
 
 - State Directory と Workspace の概念的・物理的分離（`{{stateDir}}/workspace/` サブディレクトリ。既存環境の自動マイグレーション。SessionConfig.workingDirectory を workspace に設定）
 - 抽象セッションへのトークン消費履歴の紐づけ（物理 session をまたいだ累積追跡、bindings ファイルへの永続化、dashboard での累積トークン表示）

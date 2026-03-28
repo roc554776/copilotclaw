@@ -27,10 +27,10 @@ human → dashboard tab (POST /api/channels/{{channelId}}/messages) → pending 
                                                                        ↓
                                               gateway: agent を ensure（IPC で生存確認、なければ起動）
                                                                        ↓
-agent ← copilotclaw_receive_input ← (POST /api/channels/{{channelId}}/messages/pending)
+agent ← copilotclaw_wait ← (POST /api/channels/{{channelId}}/messages/pending)
 agent → [LLM 処理] → copilotclaw_send_message で途中報告（即時 return）
                          ↓
     POST /api/channels/{{channelId}}/messages → dashboard に表示
-agent → copilotclaw_send_message で最終回答 → copilotclaw_receive_input で次の入力を待機
+agent → copilotclaw_send_message で最終回答 → copilotclaw_wait で次の入力を待機
 ```
 

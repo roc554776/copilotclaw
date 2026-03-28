@@ -398,7 +398,7 @@ _Keep local notes about tools and configurations here._
 Your copilotclaw agent has access to standard Copilot built-in tools (file operations, shell, search, etc.) plus:
 
 - copilotclaw_send_message — Send a message to the chat channel
-- copilotclaw_receive_input — Wait for user input from the chat channel
+- copilotclaw_wait — Wait for user input, subagent completion, or other events
 - copilotclaw_list_messages — List recent messages in the channel
 
 ## Local Notes

@@ -20,7 +20,7 @@ function createMockFetch(responses: Array<{ status: number; body: unknown }>) {
   return { fetchFn, calls };
 }
 
-const RECEIVE_INSTRUCTION = "copilotclaw_receive_input";
+const WAIT_INSTRUCTION = "copilotclaw_wait";
 const KEEPALIVE_MARKER = "keepalive cycle";
 
 describe("channel tools — abort signal", () => {
@@ -34,7 +34,7 @@ describe("channel tools — abort signal", () => {
       return { status: 204, ok: true, json: async () => null, text: async () => "null" } as Response;
     };
 
-    const { receiveInput } = createChannelTools({
+    const { wait } = createChannelTools({
       gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
       pollIntervalMs: 10,
@@ -46,9 +46,9 @@ describe("channel tools — abort signal", () => {
 
     setTimeout(() => { controller.abort(); }, 50);
 
-    // receiveInput NEVER throws — even on abort, it returns keepalive response
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
-    expect(result.userMessage).toContain("copilotclaw_receive_input");
+    // wait NEVER throws — even on abort, it returns keepalive response
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("copilotclaw_wait");
 
     expect(fetchCallCount).toBeGreaterThanOrEqual(1);
   });
@@ -58,7 +58,7 @@ describe("channel tools — abort signal", () => {
       throw new Error("network unreachable");
     };
 
-    const { receiveInput } = createChannelTools({
+    const { wait } = createChannelTools({
       gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-err",
       pollIntervalMs: 10,
@@ -69,12 +69,12 @@ describe("channel tools — abort signal", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     // Must NOT throw — returns keepalive instead
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
-    expect(result.userMessage).toContain("copilotclaw_receive_input");
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("copilotclaw_wait");
 
     // Error was logged to system log
     const logged = errSpy.mock.calls.some(
-      (c) => String(c[0]).includes("receive_input internal error"),
+      (c) => String(c[0]).includes("wait internal error"),
     );
     expect(logged).toBe(true);
 
@@ -113,7 +113,7 @@ describe("copilotclaw_send_message", () => {
   });
 });
 
-describe("copilotclaw_receive_input", () => {
+describe("copilotclaw_wait", () => {
   it("polls until 200 and returns combined messages", async () => {
     const { fetchFn, calls } = createMockFetch([
       { status: 204, body: null },
@@ -123,7 +123,7 @@ describe("copilotclaw_receive_input", () => {
       ] },
     ]);
 
-    const { receiveInput } = createChannelTools({
+    const { wait } = createChannelTools({
       gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
       pollIntervalMs: 1,
@@ -131,12 +131,12 @@ describe("copilotclaw_receive_input", () => {
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
 
     expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages/pending");
     expect(result.userMessage).toContain("hello");
     expect(result.userMessage).toContain("how are you");
-    expect(result.userMessage).toContain(RECEIVE_INSTRUCTION);
+    expect(result.userMessage).toContain(WAIT_INSTRUCTION);
   });
 
   it("returns keepalive instruction on timeout", async () => {
@@ -144,7 +144,7 @@ describe("copilotclaw_receive_input", () => {
       Array.from({ length: 100 }, () => ({ status: 204, body: null })),
     );
 
-    const { receiveInput } = createChannelTools({
+    const { wait } = createChannelTools({
       gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
       pollIntervalMs: 1,
@@ -153,10 +153,10 @@ describe("copilotclaw_receive_input", () => {
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
 
     expect(result.userMessage).toContain(KEEPALIVE_MARKER);
-    expect(result.userMessage).toContain(RECEIVE_INSTRUCTION);
+    expect(result.userMessage).toContain(WAIT_INSTRUCTION);
   });
 
   it("does not trigger keepalive when input arrives within timeout", async () => {
@@ -165,7 +165,7 @@ describe("copilotclaw_receive_input", () => {
       { status: 200, body: [{ id: "input-1", message: "arrived in time" }] },
     ]);
 
-    const { receiveInput } = createChannelTools({
+    const { wait } = createChannelTools({
       gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
       pollIntervalMs: 1,
@@ -174,7 +174,7 @@ describe("copilotclaw_receive_input", () => {
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
 
     expect(result.userMessage).toContain("arrived in time");
     expect(result.userMessage).not.toContain(KEEPALIVE_MARKER);
