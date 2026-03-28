@@ -8,7 +8,7 @@
 |---------|------|---------|
 | `copilotclaw-monorepo` | `/` (root) | Monorepo root (private, no bin/files); pnpm.onlyBuiltDependencies: [better-sqlite3] |
 | `copilotclaw` | `packages/cli` | CLI wrapper — depends on `@copilotclaw/gateway` and `@copilotclaw/agent` via `workspace:*`; contains only `bin/copilotclaw.mjs` |
-| `@copilotclaw/gateway` | `packages/gateway` | Gateway daemon |
+| `@copilotclaw/gateway` | `packages/gateway` | Gateway daemon; `build` runs tsc + vite build (React SPA); `files` includes `frontend-dist/` for npm packaging |
 | `@copilotclaw/agent` | `packages/agent` | Agent process |
 
 ## Runtime
