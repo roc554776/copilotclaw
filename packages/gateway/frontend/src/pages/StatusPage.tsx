@@ -481,12 +481,16 @@ export function StatusPage() {
         </>
       )}
 
-      {originalPrompts.length > 0 && (
-        <div style={sectionStyle}>
-          <div style={titleStyle}>
-            Original System Prompts (from Copilot SDK)
+      <div style={sectionStyle}>
+        <div style={titleStyle}>
+          Original System Prompts (from Copilot SDK)
+        </div>
+        {originalPrompts.length === 0 ? (
+          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
+            No prompts captured yet. Prompts are captured when a physical session starts.
           </div>
-          {originalPrompts.map((p) => (
+        ) : (
+          originalPrompts.map((p) => (
             <div
               key={`${p.model}-${p.capturedAt}`}
               style={{ marginTop: "0.5rem" }}
@@ -502,9 +506,9 @@ export function StatusPage() {
               </div>
               <pre style={preStyle}>{p.prompt}</pre>
             </div>
-          ))}
-        </div>
-      )}
+          ))
+        )}
+      </div>
 
       {sessionPrompts.map((sp) => (
         <div key={sp.sessionId} style={sectionStyle}>

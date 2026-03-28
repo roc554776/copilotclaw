@@ -622,21 +622,25 @@ export class AgentSessionManager {
     // Register transform callbacks to capture original system prompt.
     // The callback receives the original prompt content and returns it unchanged —
     // we use this to capture and forward the original content to gateway.
-    session.registerTransformCallbacks(new Map([
-      ["*", async (content: string) => {
-        this.postToGateway("/api/system-prompts/original", {
-          model: resolvedModel,
-          prompt: content,
-          capturedAt: new Date().toISOString(),
-        });
-        this.postToGateway("/api/system-prompts/session", {
-          sessionId: session.sessionId,
-          model: resolvedModel,
-          prompt: content,
-        });
-        return content; // Return unchanged
-      }],
-    ]));
+    // SDK looks up callbacks by exact sectionId via Map.get(sectionId).
+    // To capture ALL sections regardless of their ID, we use a Map subclass
+    // that overrides get() to return the capture callback for any key.
+    const captureCallback = async (content: string) => {
+      this.postToGateway("/api/system-prompts/original", {
+        model: resolvedModel,
+        prompt: content,
+        capturedAt: new Date().toISOString(),
+      });
+      this.postToGateway("/api/system-prompts/session", {
+        sessionId: session.sessionId,
+        model: resolvedModel,
+        prompt: content,
+      });
+      return content; // Return unchanged
+    };
+    const catchAllMap = new Map<string, typeof captureCallback>();
+    catchAllMap.get = (_key: string) => captureCallback;
+    session.registerTransformCallbacks(catchAllMap);
 
     entry.copilotSessionId = session.sessionId;
     entry.copilotSession = session;
