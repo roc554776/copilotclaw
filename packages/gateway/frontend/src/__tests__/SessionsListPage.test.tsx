@@ -125,7 +125,7 @@ describe("SessionsListPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getAllByText("Other sessions").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("Other physical sessions").length).toBeGreaterThanOrEqual(1);
     });
 
     // orphan-session-zzz sliced to 12 chars: "orphan-sessi"

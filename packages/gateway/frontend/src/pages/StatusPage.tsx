@@ -369,7 +369,7 @@ export function StatusPage() {
                                   marginBottom: "0.3rem",
                                 }}
                               >
-                                Session history (
+                                Physical sessions (
                                 {sess.physicalSessionHistory.length})
                               </div>
                               {sess.physicalSessionHistory.map(
