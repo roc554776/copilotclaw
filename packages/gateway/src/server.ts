@@ -329,7 +329,7 @@ function createRequestHandler(
       return;
     }
 
-    // Sessions list page (all physical sessions from event store)
+    // Sessions list page (all sessions from event store)
     if (fullPathname === "/sessions" && method === "GET") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(renderSessionsListPage());

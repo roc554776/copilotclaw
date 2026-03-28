@@ -101,6 +101,7 @@
 
 **v0.36.0 で修正・確認:**
 - sessions リンク表記を全ページで `All physical sessions →` から `All sessions →` に修正（StatusPage、DashboardPage、dashboard モーダル、フォールバック HTML）
+- UI ラベルからの「physical sessions」表現の一掃: フォールバック `/sessions` ページのタイトル/見出しを「Sessions」に変更、セッション履歴ラベルを「Session history (N)」に変更（observability-pages.ts、dashboard.ts、DashboardPage.tsx）、SessionsListPage の「Other physical sessions」を「Other sessions」に変更
 - `/sessions` の抽象セッション主体の階層表示を再調査し、バックエンド・フロントエンド共に正しく動作することを確認（以前の `stopAll()` バグ修正により解決済み）
 
 **今後の課題:**

@@ -101,7 +101,7 @@ async function refresh() {
           const history = sess.physicalSessionHistory || [];
           if (history.length > 0) {
             html += '<div style="margin-left:1rem;font-size:0.8rem;margin-top:0.3rem">';
-            html += '<div style="color:#8b949e;margin-bottom:0.3rem">Physical sessions (' + history.length + ')</div>';
+            html += '<div style="color:#8b949e;margin-bottom:0.3rem">Session history (' + history.length + ')</div>';
             for (const hps of history) {
               html += '<div style="margin:0.3rem 0;padding:0.3rem;border:1px solid #21262d;border-radius:0.3rem;color:#8b949e">';
               html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(hps.sessionId.slice(0,12)) + '</span></div>';
@@ -174,14 +174,14 @@ setInterval(refresh, 5000);
 </html>`;
 }
 
-/** Render the sessions list page showing all physical sessions from the event store. */
+/** Render the sessions list page showing all sessions from the event store. */
 export function renderSessionsListPage(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CopilotClaw — Physical Sessions</title>
+<title>CopilotClaw — Sessions</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #0d1117; color: #c9d1d9; margin: 0; padding: 1rem; }
   h1 { font-size: 1.2rem; color: #58a6ff; margin-bottom: 1rem; }
@@ -203,7 +203,7 @@ export function renderSessionsListPage(): string {
 <body>
 <div id="content">
   <a href="/status" class="back-link">&larr; Back to System Status</a>
-  <h1>Physical Sessions</h1>
+  <h1>Sessions</h1>
   <div id="sessions-content">Loading...</div>
 </div>
 <script>
@@ -215,7 +215,7 @@ async function loadSessions() {
     if (!res.ok) { document.getElementById('sessions-content').textContent = 'Failed to load sessions'; return; }
     const sessionIds = await res.json();
     if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
-      document.getElementById('sessions-content').innerHTML = '<div class="empty">No physical sessions recorded.</div>';
+      document.getElementById('sessions-content').innerHTML = '<div class="empty">No sessions recorded.</div>';
       return;
     }
 

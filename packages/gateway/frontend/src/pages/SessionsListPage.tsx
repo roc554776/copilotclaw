@@ -306,7 +306,7 @@ export function SessionsListPage() {
               marginBottom: "0.7rem",
             }}
           >
-            Other physical sessions
+            Other sessions
           </h2>
           {orphans.map((o) => (
             <a

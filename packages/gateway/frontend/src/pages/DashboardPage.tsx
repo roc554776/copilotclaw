@@ -920,7 +920,7 @@ function StatusModalContent({
                             marginBottom: "0.3rem",
                           }}
                         >
-                          Physical sessions (
+                          Session history (
                           {sess.physicalSessionHistory.length})
                         </div>
                         {sess.physicalSessionHistory.map((hps) => (

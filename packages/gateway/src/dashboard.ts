@@ -299,7 +299,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
               const history = sess.physicalSessionHistory || [];
               if (history.length > 0) {
                 html += '<div style="margin-left:1rem;font-size:0.8rem;margin-top:0.3rem">';
-                html += '<div style="color:#8b949e;margin-bottom:0.3rem">Physical sessions (' + escHtml(String(history.length)) + ')</div>';
+                html += '<div style="color:#8b949e;margin-bottom:0.3rem">Session history (' + escHtml(String(history.length)) + ')</div>';
                 for (const hps of history) {
                   html += '<div style="margin-bottom:0.5rem;padding:0.3rem;border:1px solid #21262d;border-radius:0.3rem;color:#8b949e">';
                   html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(hps.sessionId.slice(0,12)) + '</span></div>';
