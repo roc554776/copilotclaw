@@ -744,3 +744,31 @@ receiveInput handler:
 影響範囲:
 - `packages/agent/src/tools/channel.ts` — `receiveInput` ハンドラに最外層 try-catch 追加
 
+### copilotclaw_receive_input → copilotclaw_wait への rename（未実現）
+
+`copilotclaw_receive_input` を `copilotclaw_wait` に rename する。ツールの本質はユーザー入力の受信だけでなく、「自分のやることがなくなった全ての状況で呼び出す」汎用的な待機メカニズムであるため。
+
+**rename 対象:**
+- ツール名: `copilotclaw_receive_input` → `copilotclaw_wait`
+- `PARENT_ONLY_TOOL` 定数
+- 変数名 `receiveInput` → `wait`（channel.ts 内）
+- テスト内のツール名参照
+- ドキュメント内の全参照（raw-requirements, requirements, proposals 内。ただし raw-requirements は human 原文のため追記で対応し、既存テキストは改変しない）
+
+**channel-operator システムプロンプトの更新方針:**
+
+既存の DEADLOCK PREVENTION 警告を、より広い利用シーンをカバーする形に更新する:
+
+- `copilotclaw_wait` は、直近一時的にでも自分のやることがなくなったときに必ず呼ぶ
+- `copilotclaw_wait` を使わずにターンを終了するとデッドロック（セッション停止、回復不能）
+- 利用シーン:
+  - 会話のターンをユーザーに渡すとき、ユーザーの回答を待つとき
+  - subagent を呼び出したあと、自分自身がやることがなくなって、それを待つ状態になったとき
+  - 全ての作業を完遂したとき
+  - 何をすればいいか分からないとき
+  - 想定しないシステム的な異常事態に陥ったとき
+
+**互換性への影響:**
+- agent 側のツール名が変わるため、gateway-agent の IPC プロトコル自体には影響しない（ツール名は Copilot SDK 内部の概念であり、IPC プロトコルの一部ではない）
+- ただし、`onPostToolUse` hook のゲート判定で `PARENT_ONLY_TOOL` を参照しているため、rename 後も一貫性を保つ必要がある
+
