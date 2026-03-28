@@ -94,6 +94,15 @@ export class AgentManager {
     });
   }
 
+  /** Force-reconnect the stream (e.g. after spawning a new agent). */
+  private reconnectStream(): void {
+    if (this.stream !== null) {
+      this.stream.close();
+      this.stream = null;
+    }
+    this.connectStream();
+  }
+
   /** Handle an incoming message from the agent on the stream. */
   private handleAgentMessage(msg: Record<string, unknown>): void {
     const type = msg["type"] as string | undefined;
@@ -190,6 +199,7 @@ export class AgentManager {
             console.error(`[gateway] agent version ${status.version ?? "unknown"} is below minimum ${MIN_AGENT_VERSION}, force-restarting`);
             await stopAgent(socketPath);
             this.spawnAgent();
+            this.reconnectStream();
             return oldBootId;
           }
           throw new Error(
@@ -201,6 +211,7 @@ export class AgentManager {
         return undefined;
       }
       this.spawnAgent();
+      this.reconnectStream();
       return undefined;
     } finally {
       if (this.spawningTimer !== undefined) clearTimeout(this.spawningTimer);
