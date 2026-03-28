@@ -257,12 +257,14 @@ describe("GET /api/logs", () => {
   });
 });
 
-describe("GET / (dashboard status bar)", () => {
-  it("shows status bar in dashboard HTML", async () => {
+describe("GET / (dashboard)", () => {
+  it("returns HTML for dashboard (SPA or server-rendered)", async () => {
     const res = await fetch(`${baseUrl}/`);
     const html = await res.text();
-    expect(html).toContain("status-bar");
-    expect(html).toContain("gateway: v");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    // SPA serves index.html with <div id="root">, legacy serves status-bar inline
+    expect(html.includes("root") || html.includes("status-bar")).toBe(true);
   });
 });
 

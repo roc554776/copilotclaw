@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import type { SseBroadcaster } from "./sse-broadcaster.js";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const GATEWAY_VERSION = (JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string }).version;
+const HAS_FRONTEND_DIST = existsSync(join(thisDir, "..", "frontend-dist", "index.html"));
 
 export interface BuiltinChatChannelDeps {
   store: Store;
@@ -40,7 +41,10 @@ export class BuiltinChatChannel implements ChannelProvider {
     const { method, url } = req;
     const pathname = url?.split("?")[0] ?? "/";
 
-    // Dashboard route
+    // Dashboard route — skip if React SPA frontend is available (served by server.ts)
+    if (pathname === "/" && method === "GET" && HAS_FRONTEND_DIST) {
+      return false;
+    }
     if (pathname === "/" && method === "GET") {
       const channels = this.store.listChannels();
       const selectedChannelId = params.get("channel") ?? channels[0]?.id;

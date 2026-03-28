@@ -1,0 +1,118 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionEventsPage } from "../pages/SessionEventsPage";
+
+const mockEvents = [
+  {
+    type: "session.start",
+    timestamp: "2026-03-28T10:00:00Z",
+    data: { sessionId: "sess-abc" },
+  },
+  {
+    type: "assistant.usage",
+    timestamp: "2026-03-28T10:01:00Z",
+    data: { model: "gpt-4o", tokens: 100 },
+  },
+  {
+    type: "tool.execution",
+    timestamp: "2026-03-28T10:02:00Z",
+    data: { toolName: "read_file" },
+    parentId: "parent-1234567890",
+  },
+];
+
+function renderPage(sessionId = "test-session-id") {
+  return render(
+    <MemoryRouter initialEntries={[`/sessions/${sessionId}/events`]}>
+      <Routes>
+        <Route path="/sessions/:sessionId/events" element={<SessionEventsPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe("SessionEventsPage", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockEvents),
+    } as Response);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("renders events after fetch", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("session.start").length).toBeGreaterThanOrEqual(1);
+    });
+
+    expect(screen.getAllByText("assistant.usage").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("tool.execution").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("shows event count", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("(3 events)").length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("shows parent ID for events that have one", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      // parentId "parent-1234567890" is sliced to first 8 chars: "parent-1"
+      expect(screen.getAllByText("[parent: parent-1]").length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("toggles nested view", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("session.start").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const checkboxes = screen.getAllByRole("checkbox", { name: /nested view/i });
+    await user.click(checkboxes[0]!);
+    expect(checkboxes[0]).toBeChecked();
+  });
+
+  it("has a refresh button", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("session.start").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const refreshBtns = screen.getAllByRole("button", { name: /refresh/i });
+    expect(refreshBtns.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("polls for new events", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalled();
+    });
+
+    const initialCount = vi.mocked(fetch).mock.calls.length;
+
+    // Advance timer by 2 seconds for next poll
+    vi.advanceTimersByTime(2000);
+
+    await waitFor(() => {
+      expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(initialCount);
+    });
+  });
+});

@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
@@ -18,6 +18,57 @@ export { DEFAULT_PORT };
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string };
 const GATEWAY_VERSION = pkgJson.version;
+
+const FRONTEND_DIST_DIR = join(thisDir, "..", "frontend-dist");
+const FRONTEND_INDEX_PATH = join(FRONTEND_DIST_DIR, "index.html");
+const HAS_FRONTEND = existsSync(FRONTEND_INDEX_PATH);
+
+const MIME_TYPES: Record<string, string> = {
+  ".js": "application/javascript",
+  ".css": "text/css",
+  ".svg": "image/svg+xml",
+  ".html": "text/html",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
+
+/** Serve SPA HTML page routes or static assets from frontend-dist. Returns true if handled. */
+function serveFrontend(pathname: string, res: ServerResponse): boolean {
+  if (!HAS_FRONTEND) return false;
+
+  // Serve static assets from frontend-dist/assets/
+  if (pathname.startsWith("/assets/")) {
+    const filePath = join(FRONTEND_DIST_DIR, pathname);
+    try {
+      const stat = statSync(filePath);
+      if (stat.isFile()) {
+        const ext = extname(filePath);
+        const mime = MIME_TYPES[ext] ?? "application/octet-stream";
+        const content = readFileSync(filePath);
+        res.writeHead(200, { "Content-Type": mime, "Cache-Control": "public, max-age=31536000, immutable" });
+        res.end(content);
+        return true;
+      }
+    } catch {
+      // File not found, fall through
+    }
+  }
+
+  // SPA HTML routes — serve index.html for known page routes
+  const spaRoutes = ["/", "/status", "/sessions"];
+  const isSessionEventsRoute = /^\/sessions\/[^/]+\/events$/.test(pathname);
+  if (spaRoutes.includes(pathname) || isSessionEventsRoute) {
+    const html = readFileSync(FRONTEND_INDEX_PATH, "utf-8");
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(html);
+    return true;
+  }
+
+  return false;
+}
 
 const MAX_BODY_SIZE = 1_048_576; // 1 MB
 
@@ -256,7 +307,12 @@ function createRequestHandler(
       return;
     }
 
-    // SystemStatus standalone page
+    // Serve React SPA frontend (if built) for page routes and static assets
+    if (method === "GET" && serveFrontend(fullPathname, res)) {
+      return;
+    }
+
+    // SystemStatus standalone page (fallback when frontend-dist not built)
     if (fullPathname === "/status" && method === "GET") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(renderStatusPage());

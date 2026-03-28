@@ -82,19 +82,20 @@
 - Workspace 情報のシステムインストラクション記載（CHANNEL_OPERATOR_PROMPT に workspace 構造・git 管理方針を追加。SOUL.md 等との レイヤー区別を明確化）
 
 - SystemStatus 別ページ表示（`/status` パス。モーダルからリンク遷移）
-- 物理 Session イベント stream 表示（`/sessions/{{sessionId}}/events` パス。disk 保存、ストレージ上限、フラット/ネスト切替。スクロール追従と内部スクロール保持は未実現）
+- 物理 Session イベント stream 表示（`/sessions/{{sessionId}}/events` パス。disk 保存、ストレージ上限、フラット/ネスト切替。位置ベースのスクロール追従、差分更新による内部スクロール保持）
 - オリジナルシステムプロンプトの取得・表示（`registerTransformCallbacks` によるキャプチャ、API `/api/system-prompts/original`、dashboard 表示）
 - 物理セッションシステムプロンプトの表示（API `/api/system-prompts/session/{{sessionId}}`、SystemStatus で表示、オリジナルとの区別）
 - Session イベント store（disk ベース JSON Lines、セッション別ファイル、ストレージ上限）
 
 - 永続化戦略のハイブリッド移行（Store: JSON → SQLite、SessionEventStore: JSONL → SQLite。better-sqlite3 + WAL モード。legacy JSON からの自動マイグレーション）
 
-- 停止した物理セッションの Dashboard 継続表示（physicalSessionHistory への退避、折りたたみ表示、イベントリンク維持）
+- 停止した物理セッションの Dashboard 継続表示（physicalSessionHistory への退避、展開表示、イベントリンク維持、`/sessions` 一覧ページ）
+
+- Dashboard フロントエンドの vite + React 移行（server-side HTML テンプレート + inline JS → Vite + React SPA。型安全な JSX、React Testing Library によるコンポーネントテスト、SSE/fetch の hooks による状態管理。旧レンダリングはフォールバックとして残存）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
 - OpenTelemetry 導入（構造化ログ基盤は実装済み、OTel ログブリッジへの移行が残）
-- Dashboard フロントエンドの vite + React 移行（server-side HTML テンプレート + inline JS → 型安全な JSX + コンポーネントテスト）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）
 - コーディング支援ツール群（ファイル操作・シェル実行・検索・Git）の実装
 - Observability スタックの独立リポジトリへの分離（`.example` パターンの導入を含む）
