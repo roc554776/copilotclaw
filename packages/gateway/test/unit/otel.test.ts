@@ -35,9 +35,15 @@ describe("otel", () => {
     expect(() => initOtel({ endpoints: [] })).not.toThrow();
   });
 
-  it("initializes with endpoints (exporters configured)", () => {
+  it("initializes with a single endpoint (exporters configured)", () => {
     // This won't actually connect but should not throw
     expect(() => initOtel({ endpoints: ["http://localhost:4318"] })).not.toThrow();
+  });
+
+  it("initializes with multiple endpoints", () => {
+    expect(() => initOtel({
+      endpoints: ["http://localhost:4318", "http://localhost:4319"],
+    })).not.toThrow();
   });
 
   it("handles shutdown without prior initialization", async () => {

@@ -100,6 +100,31 @@ describe("StructuredLogger", () => {
     expect(emitted[1]!.body).toBe("test error");
   });
 
+  it("warn method writes with level warn and correct OTel severity", () => {
+    const logPath = join(tempDir, "warn-test.log");
+    const emitted: Array<Record<string, unknown>> = [];
+    const mockOtelLogger = {
+      emit(record: Record<string, unknown>) {
+        emitted.push(record);
+      },
+    };
+
+    const logger = new StructuredLogger(logPath, "agent", mockOtelLogger);
+    logger.warn("connection slow", { latencyMs: 500 });
+
+    const lines = readFileSync(logPath, "utf-8").trim().split("\n");
+    const entry = JSON.parse(lines[0]!) as StructuredLogEntry;
+    expect(entry.level).toBe("warn");
+    expect(entry.msg).toBe("connection slow");
+    expect(entry.data).toEqual({ latencyMs: 500 });
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]!.severityNumber).toBe(13); // WARN
+    expect(emitted[0]!.severityText).toBe("WARN");
+    expect(emitted[0]!.body).toBe("connection slow");
+    expect(emitted[0]!.attributes).toEqual({ component: "agent", latencyMs: 500 });
+  });
+
   it("does not crash when OTel bridge throws", () => {
     const logPath = join(tempDir, "otel-error-test.log");
     const failingBridge = {

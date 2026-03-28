@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 
 export interface StructuredLogEntry {
   ts: string;
-  level: "info" | "error";
+  level: "info" | "warn" | "error";
   component: string;
   msg: string;
   data?: Record<string, unknown>;
@@ -22,6 +22,7 @@ export interface OtelLoggerBridge {
 
 /** OTel SeverityNumber constants (avoid importing @opentelemetry/api-logs here). */
 const SEVERITY_INFO = 9;
+const SEVERITY_WARN = 13;
 const SEVERITY_ERROR = 17;
 
 /**
@@ -54,11 +55,15 @@ export class StructuredLogger {
     this.write("info", msg, data);
   }
 
+  warn(msg: string, data?: Record<string, unknown>): void {
+    this.write("warn", msg, data);
+  }
+
   error(msg: string, data?: Record<string, unknown>): void {
     this.write("error", msg, data);
   }
 
-  private write(level: "info" | "error", msg: string, data?: Record<string, unknown>): void {
+  private write(level: "info" | "warn" | "error", msg: string, data?: Record<string, unknown>): void {
     const entry: StructuredLogEntry = {
       ts: new Date().toISOString(),
       level,
@@ -76,7 +81,7 @@ export class StructuredLogger {
     if (this.otelLogger !== undefined) {
       try {
         this.otelLogger.emit({
-          severityNumber: level === "error" ? SEVERITY_ERROR : SEVERITY_INFO,
+          severityNumber: level === "error" ? SEVERITY_ERROR : level === "warn" ? SEVERITY_WARN : SEVERITY_INFO,
           severityText: level.toUpperCase(),
           body: msg,
           attributes: data !== undefined ? { component: this.component, ...data } : { component: this.component },

@@ -13,6 +13,7 @@ let sessionsActiveGauge: ObservableGauge | undefined;
 let sessionsSuspendedGauge: ObservableGauge | undefined;
 let tokensInputCounter: Counter | undefined;
 let tokensOutputCounter: Counter | undefined;
+let metricsInitialized = false;
 
 /** Current values for observable gauges (set externally). */
 let activeSessionCount = 0;
@@ -20,6 +21,9 @@ let suspendedSessionCount = 0;
 
 /** Initialize metrics instruments. Call once after initOtel(). */
 export function initMetrics(): void {
+  if (metricsInitialized) return;
+  metricsInitialized = true;
+
   const meter = getMeter("copilotclaw");
 
   sessionsActiveGauge = meter.createObservableGauge("copilotclaw.sessions.active", {
@@ -55,4 +59,15 @@ export function updateSessionCounts(active: number, suspended: number): void {
 export function recordTokens(input: number, output: number): void {
   tokensInputCounter?.add(input);
   tokensOutputCounter?.add(output);
+}
+
+/** Reset metrics state so initMetrics() can be called again after OTel re-init. */
+export function resetMetrics(): void {
+  sessionsActiveGauge = undefined;
+  sessionsSuspendedGauge = undefined;
+  tokensInputCounter = undefined;
+  tokensOutputCounter = undefined;
+  activeSessionCount = 0;
+  suspendedSessionCount = 0;
+  metricsInitialized = false;
 }

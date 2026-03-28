@@ -74,8 +74,8 @@ async function main(): Promise<void> {
     await shutdownOtel();
     process.exit(0);
   };
-  process.once("SIGTERM", () => { gracefulShutdown(); });
-  process.once("SIGINT", () => { gracefulShutdown(); });
+  process.once("SIGTERM", () => { gracefulShutdown().catch(console.error); });
+  process.once("SIGINT", () => { gracefulShutdown().catch(console.error); });
 }
 
 main().catch((err: unknown) => {

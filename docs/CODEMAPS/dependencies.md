@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Version: 0.31.0 | Token estimate: ~400 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Version: 0.33.0 | Token estimate: ~500 -->
 
 # Dependencies
 
@@ -22,6 +22,14 @@
 | `node:child_process` | agent | Token resolution (execFileSync for gh CLI and custom commands) |
 | `node:fs` | agent, gateway | Structured log file writes (appendFileSync), agent stderr redirect (openSync) |
 | `better-sqlite3` ^12.8.0 | gateway | SQLite database for store and session events (WAL mode) |
+| `@opentelemetry/api` ^1.9.0 | gateway, agent | OTel API (metrics, global providers) |
+| `@opentelemetry/api-logs` ^0.57.0 | gateway, agent | OTel Logs API (LoggerProvider, SeverityNumber) |
+| `@opentelemetry/sdk-logs` ^0.57.0 | gateway, agent | OTel Logs SDK (LoggerProvider, SimpleLogRecordProcessor) |
+| `@opentelemetry/sdk-metrics` ^1.30.0 | gateway, agent | OTel Metrics SDK (MeterProvider, PeriodicExportingMetricReader) |
+| `@opentelemetry/exporter-logs-otlp-http` ^0.57.0 | gateway, agent | OTLP HTTP log exporter |
+| `@opentelemetry/exporter-metrics-otlp-http` ^0.57.0 | gateway, agent | OTLP HTTP metric exporter |
+| `@opentelemetry/resources` ^1.30.0 | gateway, agent | OTel Resource (service.name, service.version) |
+| `@opentelemetry/semantic-conventions` ^1.28.0 | gateway, agent | Semantic convention attribute constants |
 | `node:module` | gateway (agent-manager) | createRequire to resolve @copilotclaw/agent package path |
 
 ## Frontend (packages/gateway/frontend, v0.31.0)

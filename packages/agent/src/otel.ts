@@ -9,9 +9,10 @@
 
 import { logs } from "@opentelemetry/api-logs";
 import { metrics } from "@opentelemetry/api";
+import type { Meter } from "@opentelemetry/api";
 import { Resource } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
-import { LoggerProvider, SimpleLogRecordProcessor } from "@opentelemetry/sdk-logs";
+import { LoggerProvider, BatchLogRecordProcessor } from "@opentelemetry/sdk-logs";
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
@@ -45,7 +46,7 @@ export function initOtel(options: {
     const logExporter = new OTLPLogExporter({
       url: `${endpoint.replace(/\/$/, "")}/v1/logs`,
     });
-    loggerProvider.addLogRecordProcessor(new SimpleLogRecordProcessor(logExporter));
+    loggerProvider.addLogRecordProcessor(new BatchLogRecordProcessor(logExporter));
   }
 
   logs.setGlobalLoggerProvider(loggerProvider);
@@ -72,6 +73,11 @@ export function initOtel(options: {
 /** Get an OTel logger for a specific component. */
 export function getLogger(component: string): OtelLoggerApi {
   return logs.getLoggerProvider().getLogger(component);
+}
+
+/** Get an OTel meter for a specific component. Currently unused by the agent. */
+export function getMeter(component: string): Meter {
+  return metrics.getMeterProvider().getMeter(component);
 }
 
 /** Graceful shutdown of OTel providers. */
