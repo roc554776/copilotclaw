@@ -634,17 +634,9 @@ export class AgentSessionManager {
       ],
       agent: CHANNEL_OPERATOR_CONFIG.name,
     };
-    let session: CopilotSession;
-    if (entry.copilotSessionId !== undefined) {
-      try {
-        session = await entry.client.resumeSession(entry.copilotSessionId, baseConfig);
-      } catch {
-        console.error(`[agent] resumeSession failed for ${entry.copilotSessionId.slice(0, 12)}, falling back to createSession`);
-        session = await entry.client.createSession(baseConfig);
-      }
-    } else {
-      session = await entry.client.createSession(baseConfig);
-    }
+    const session = entry.copilotSessionId !== undefined
+      ? await entry.client.resumeSession(entry.copilotSessionId, baseConfig)
+      : await entry.client.createSession(baseConfig);
 
     // After session creation, the CLI will call systemMessage.transform RPC for each
     // section that has action: "transform". The callbacks above capture each section's
@@ -1101,6 +1093,9 @@ export class AgentSessionManager {
     // Abort first to prevent the promise handler from double-suspending
     entry.abortController.abort();
     this.suspendSession(entry);
+    // Clear copilotSessionId so the next revival creates a new physical session
+    entry.copilotSessionId = undefined;
+    this.saveBindings();
 
     return true;
   }
