@@ -1,16 +1,16 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentManager } from "./agent-manager.js";
 import type { ChannelProvider } from "./channel-provider.js";
 import { renderDashboard, type DashboardAgentStatus } from "./dashboard.js";
+import { hasFrontendDist } from "./frontend-dist.js";
 import type { Store } from "./store.js";
 import type { SseBroadcaster } from "./sse-broadcaster.js";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const GATEWAY_VERSION = (JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string }).version;
-const HAS_FRONTEND_DIST = existsSync(join(thisDir, "..", "frontend-dist", "index.html"));
 
 export interface BuiltinChatChannelDeps {
   store: Store;
@@ -42,7 +42,7 @@ export class BuiltinChatChannel implements ChannelProvider {
     const pathname = url?.split("?")[0] ?? "/";
 
     // Dashboard route — skip if React SPA frontend is available (served by server.ts)
-    if (pathname === "/" && method === "GET" && HAS_FRONTEND_DIST) {
+    if (pathname === "/" && method === "GET" && hasFrontendDist()) {
       return false;
     }
     if (pathname === "/" && method === "GET") {

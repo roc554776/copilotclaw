@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { dirname, extname, join } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
@@ -12,16 +12,13 @@ import { renderEventsPage, renderSessionsListPage, renderStatusPage } from "./ob
 import { SessionEventStore } from "./session-event-store.js";
 import { Store } from "./store.js";
 import { SseBroadcaster } from "./sse-broadcaster.js";
+import { FRONTEND_DIST_DIR, FRONTEND_INDEX_HTML, hasFrontendDist, isWithinFrontendDist } from "./frontend-dist.js";
 
 export { DEFAULT_PORT };
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string };
 const GATEWAY_VERSION = pkgJson.version;
-
-const FRONTEND_DIST_DIR = join(thisDir, "..", "frontend-dist");
-const FRONTEND_INDEX_PATH = join(FRONTEND_DIST_DIR, "index.html");
-const HAS_FRONTEND = existsSync(FRONTEND_INDEX_PATH);
 
 const MIME_TYPES: Record<string, string> = {
   ".js": "application/javascript",
@@ -37,11 +34,13 @@ const MIME_TYPES: Record<string, string> = {
 
 /** Serve SPA HTML page routes or static assets from frontend-dist. Returns true if handled. */
 function serveFrontend(pathname: string, res: ServerResponse): boolean {
-  if (!HAS_FRONTEND) return false;
+  if (!hasFrontendDist()) return false;
 
   // Serve static assets from frontend-dist/assets/
   if (pathname.startsWith("/assets/")) {
-    const filePath = join(FRONTEND_DIST_DIR, pathname);
+    const filePath = resolve(FRONTEND_DIST_DIR, "." + pathname);
+    // Path traversal guard: resolved path must stay within FRONTEND_DIST_DIR
+    if (!isWithinFrontendDist(filePath)) return false;
     try {
       const stat = statSync(filePath);
       if (stat.isFile()) {
@@ -61,9 +60,8 @@ function serveFrontend(pathname: string, res: ServerResponse): boolean {
   const spaRoutes = ["/", "/status", "/sessions"];
   const isSessionEventsRoute = /^\/sessions\/[^/]+\/events$/.test(pathname);
   if (spaRoutes.includes(pathname) || isSessionEventsRoute) {
-    const html = readFileSync(FRONTEND_INDEX_PATH, "utf-8");
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(html);
+    res.end(FRONTEND_INDEX_HTML);
     return true;
   }
 
