@@ -104,6 +104,11 @@
 - `/sessions` の抽象セッション主体の階層表示を再調査し、バックエンド・フロントエンド共に正しく動作することを確認（以前の `stopAll()` バグ修正により解決済み）
 - IPC server の sessionManager null 参照バグを修正（`listenIpc` 呼び出し時に `null` でクローズオーバされ、後から作成した sessionManager が IPC に反映されなかった。ミュータブル ref + `setSessionManager()` で解決）
 - Sessions セクションを空でも常に表示するように修正（セッション 0 件時に枠ごと消える問題を修正。"No active sessions." の空状態表示を追加）
+- IPC stream の新規 agent spawn 後の再接続（`reconnectStream()` で古い agent への接続を切断し、新 agent に再接続）
+- 物理セッション履歴の resume 時重複を修正（同じ SDK session ID の場合は更新、異なる場合のみ追加）
+- 累積トークンの resume 時二重加算を修正（同じ物理セッションの場合は差分のみ加算）
+- max-age replace 時に `copilotSessionId` をクリアし、次回 revival で新しい物理セッションを作成（1:N の正しい実現）
+- agent の全ログを構造化 JSON に統一（`console.error` の非構造化出力を排除、`log`/`logError` コンストラクタオプション導入）
 - MIN_AGENT_VERSION を 0.36.0 に引き上げ
 
 **今後の課題:**
