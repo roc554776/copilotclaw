@@ -63,7 +63,7 @@ async function refresh() {
       // Sessions
       const entries = Object.entries(data.agent.sessions || {});
       if (entries.length > 0) {
-        html += '<div class="section"><div class="section-title">Sessions · <a href="/sessions" style="font-weight:normal;text-transform:none">All physical sessions &rarr;</a></div>';
+        html += '<div class="section"><div class="section-title">Sessions · <a href="/sessions" style="font-weight:normal;text-transform:none">All sessions &rarr;</a></div>';
         for (const [id, sess] of entries) {
           const chLabel = sess.boundChannelId ? ' → ch:' + escHtml(sess.boundChannelId.slice(0,8)) : '';
           html += '<div class="row"><span class="label">' + escHtml(id.slice(0,8)) + chLabel + '</span><span class="value">' + escHtml(sess.status) + '</span></div>';

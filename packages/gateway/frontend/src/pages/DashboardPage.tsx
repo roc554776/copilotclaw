@@ -798,7 +798,7 @@ function StatusModalContent({
                   rel="noreferrer"
                   style={{ fontWeight: "normal" }}
                 >
-                  All physical sessions &rarr;
+                  All sessions &rarr;
                 </a>
               </div>
               {Object.entries(status.agent.sessions).map(([id, sess]) => (

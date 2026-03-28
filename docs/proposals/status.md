@@ -100,7 +100,7 @@
 - Gateway-Agent 間通信の IPC 統一（agent → gateway の全 HTTP 通信を IPC stream に移行。`COPILOTCLAW_GATEWAY_URL` / `gatewayBaseUrl` / agent 内 HTTP fetch を除去。IPC stream プロトコルによる双方向メッセージング。MIN_AGENT_VERSION を 0.35.0 に引き上げ）
 
 **v0.36.0 で修正・確認:**
-- `/status` の sessions リンク表記を `All physical sessions →` から `All sessions →` に修正
+- sessions リンク表記を全ページで `All physical sessions →` から `All sessions →` に修正（StatusPage、DashboardPage、dashboard モーダル、フォールバック HTML）
 - `/sessions` の抽象セッション主体の階層表示を再調査し、バックエンド・フロントエンド共に正しく動作することを確認（以前の `stopAll()` バグ修正により解決済み）
 
 **今後の課題:**
