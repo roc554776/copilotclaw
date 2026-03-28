@@ -14,3 +14,12 @@
 ## OpenTelemetry
 
 - （少なくとも将来的には）OpenTelemetry を導入する
+
+<!-- 2026-03-28 -->
+## OpenTelemetry の本格導入
+
+- OpenTelemetry を導入する
+- ログやメトリクスを OpenTelemetry を介して出力するようにする
+- 構造化ログでないログを採用している部分は全て構造化ログにする
+- config.json に、追加の出力先 URL リストを指定することで、任意の Collector に送れるようにする
+- また、これまで通りの出力も残す（既存の Collector も引き続き使う）

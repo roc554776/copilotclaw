@@ -97,7 +97,7 @@
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
-- OpenTelemetry 導入（構造化ログ基盤は実装済み、OTel ログブリッジへの移行が残）
+- OpenTelemetry 本格導入（全ログ・メトリクスの OTel シグナル出力、config.json での OTLP エンドポイント設定、非構造化ログの完全移行）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）
 - コーディング支援ツール群（ファイル操作・シェル実行・検索・Git）の実装
 - Observability スタックの独立リポジトリへの分離（`.example` パターンの導入を含む）
