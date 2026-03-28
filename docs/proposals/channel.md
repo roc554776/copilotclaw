@@ -34,3 +34,25 @@ agent → [LLM 処理] → copilotclaw_send_message で途中報告（即時 ret
 agent → copilotclaw_send_message で最終回答 → copilotclaw_wait で次の入力を待機
 ```
 
+### チャンネルのアーカイブ（未実現）
+
+不要になったチャンネルを dashboard の通常表示から除外する機能。
+
+**データモデル:**
+- channels テーブルに `archivedAt` カラム（TEXT, nullable）を追加する
+- `archivedAt` が NULL でないチャンネルはアーカイブ済みとする
+- メッセージや pending queue はそのまま保持する（データ削除ではない）
+
+**API:**
+- `PATCH /api/channels/{{channelId}}` で `{ "archived": true }` / `{ "archived": false }` を受け付ける
+- `GET /api/channels` はデフォルトでアーカイブ済みを除外し、`?includeArchived=true` で全件返す
+
+**Dashboard UI:**
+- チャンネルタブ一覧はデフォルトで非アーカイブのチャンネルのみ表示する
+- アーカイブ済みチャンネルも含めて表示するトグルまたはモードを設ける
+- 各チャンネルタブにアーカイブ操作の UI を設ける
+
+**セッションとの関係:**
+- チャンネルをアーカイブしても、紐づく抽象セッションや物理セッション履歴は影響を受けない
+- アーカイブされたチャンネルに紐づくセッションは suspended 状態のまま維持される
+

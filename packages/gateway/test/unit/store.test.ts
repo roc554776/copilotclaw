@@ -174,4 +174,66 @@ describe("Store", () => {
       expect(counts[ch2]).toBe(1);
     });
   });
+
+  describe("channel archiving", () => {
+    it("archiveChannel sets archivedAt", () => {
+      const ok = store.archiveChannel(channelId);
+      expect(ok).toBe(true);
+      const ch = store.getChannel(channelId);
+      expect(ch?.archivedAt).toBeTruthy();
+    });
+
+    it("archiveChannel returns false for already archived channel", () => {
+      store.archiveChannel(channelId);
+      const ok = store.archiveChannel(channelId);
+      expect(ok).toBe(false);
+    });
+
+    it("archiveChannel returns false for nonexistent channel", () => {
+      const ok = store.archiveChannel("nonexistent");
+      expect(ok).toBe(false);
+    });
+
+    it("unarchiveChannel clears archivedAt", () => {
+      store.archiveChannel(channelId);
+      const ok = store.unarchiveChannel(channelId);
+      expect(ok).toBe(true);
+      const ch = store.getChannel(channelId);
+      expect(ch?.archivedAt).toBeNull();
+    });
+
+    it("unarchiveChannel returns false for non-archived channel", () => {
+      const ok = store.unarchiveChannel(channelId);
+      expect(ok).toBe(false);
+    });
+
+    it("listChannels excludes archived by default", () => {
+      const ch2 = store.createChannel().id;
+      store.archiveChannel(channelId);
+      const list = store.listChannels();
+      expect(list.map((c) => c.id)).toEqual([ch2]);
+    });
+
+    it("listChannels with includeArchived returns all", () => {
+      const ch2 = store.createChannel().id;
+      store.archiveChannel(channelId);
+      const list = store.listChannels({ includeArchived: true });
+      expect(list.map((c) => c.id)).toEqual([channelId, ch2]);
+    });
+
+    it("archived channels still accessible via getChannel", () => {
+      store.archiveChannel(channelId);
+      const ch = store.getChannel(channelId);
+      expect(ch).toBeDefined();
+      expect(ch?.id).toBe(channelId);
+    });
+
+    it("messages on archived channels are preserved", () => {
+      store.addMessage(channelId, "user", "hello");
+      store.archiveChannel(channelId);
+      const msgs = store.listMessages(channelId);
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0]!.message).toBe("hello");
+    });
+  });
 });

@@ -15,6 +15,7 @@ export interface Message {
 export interface Channel {
   id: string;
   createdAt: string;
+  archivedAt?: string | null;
 }
 
 export interface StoreOptions {
@@ -67,6 +68,11 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_pending_channel ON pending_queue(channelId);
     `);
+    // Migration: add archivedAt column if missing
+    const columns = this.db.pragma("table_info(channels)") as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === "archivedAt")) {
+      this.db.exec("ALTER TABLE channels ADD COLUMN archivedAt TEXT");
+    }
   }
 
   /** Migrate data from legacy store.json if it exists and the DB is empty. */
@@ -120,11 +126,24 @@ export class Store {
   }
 
   getChannel(channelId: string): Channel | undefined {
-    return this.db.prepare("SELECT id, createdAt FROM channels WHERE id = ?").get(channelId) as Channel | undefined;
+    return this.db.prepare("SELECT id, createdAt, archivedAt FROM channels WHERE id = ?").get(channelId) as Channel | undefined;
   }
 
-  listChannels(): Channel[] {
-    return this.db.prepare("SELECT id, createdAt FROM channels ORDER BY createdAt ASC").all() as Channel[];
+  listChannels(options?: { includeArchived?: boolean }): Channel[] {
+    if (options?.includeArchived) {
+      return this.db.prepare("SELECT id, createdAt, archivedAt FROM channels ORDER BY createdAt ASC").all() as Channel[];
+    }
+    return this.db.prepare("SELECT id, createdAt, archivedAt FROM channels WHERE archivedAt IS NULL ORDER BY createdAt ASC").all() as Channel[];
+  }
+
+  archiveChannel(channelId: string): boolean {
+    const result = this.db.prepare("UPDATE channels SET archivedAt = ? WHERE id = ? AND archivedAt IS NULL").run(new Date().toISOString(), channelId);
+    return result.changes > 0;
+  }
+
+  unarchiveChannel(channelId: string): boolean {
+    const result = this.db.prepare("UPDATE channels SET archivedAt = NULL WHERE id = ? AND archivedAt IS NOT NULL").run(channelId);
+    return result.changes > 0;
   }
 
   addMessage(channelId: string, sender: "user" | "agent", message: string): Message | undefined {

@@ -3,6 +3,7 @@
 export interface Channel {
   id: string;
   createdAt: string;
+  archivedAt?: string | null;
 }
 
 export interface Message {
@@ -104,10 +105,31 @@ export async function fetchStatus(signal?: AbortSignal): Promise<StatusResponse>
   return res.json() as Promise<StatusResponse>;
 }
 
-export async function fetchChannels(): Promise<Channel[]> {
-  const res = await fetch("/api/channels");
+export async function fetchChannels(options?: { includeArchived?: boolean }): Promise<Channel[]> {
+  const query = options?.includeArchived ? "?includeArchived=true" : "";
+  const res = await fetch(`/api/channels${query}`);
   if (!res.ok) throw new Error(`channels ${res.status}`);
   return res.json() as Promise<Channel[]>;
+}
+
+export async function archiveChannel(channelId: string): Promise<Channel> {
+  const res = await fetch(`/api/channels/${channelId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived: true }),
+  });
+  if (!res.ok) throw new Error(`archive ${res.status}`);
+  return res.json() as Promise<Channel>;
+}
+
+export async function unarchiveChannel(channelId: string): Promise<Channel> {
+  const res = await fetch(`/api/channels/${channelId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived: false }),
+  });
+  if (!res.ok) throw new Error(`unarchive ${res.status}`);
+  return res.json() as Promise<Channel>;
 }
 
 export async function fetchMessages(channelId: string, limit = 500): Promise<Message[]> {

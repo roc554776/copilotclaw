@@ -111,6 +111,9 @@
 - agent の全ログを構造化 JSON に統一（`console.error` の非構造化出力を排除、`log`/`logError` コンストラクタオプション導入）
 - MIN_AGENT_VERSION を 0.36.0 に引き上げ
 
+**未実現:**
+- チャンネルのアーカイブ（channels テーブルに `archivedAt` 追加、API フィルタリング、dashboard での表示切替）
+
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）

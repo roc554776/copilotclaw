@@ -299,6 +299,85 @@ describe("GET /api/sessions/:sessionId/messages", () => {
   });
 });
 
+describe("PATCH /api/channels/:id (archive/unarchive)", () => {
+  it("archives a channel", async () => {
+    const create = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
+    const ch = await create.json() as { id: string };
+    const res = await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    expect(res.status).toBe(200);
+    const updated = await res.json() as { id: string; archivedAt: string };
+    expect(updated.archivedAt).toBeTruthy();
+  });
+
+  it("unarchives a channel", async () => {
+    const create = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
+    const ch = await create.json() as { id: string };
+    await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    const res = await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: false }),
+    });
+    expect(res.status).toBe(200);
+    const updated = await res.json() as { id: string; archivedAt: string | null };
+    expect(updated.archivedAt).toBeNull();
+  });
+
+  it("returns 404 for nonexistent channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/nonexistent`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 without archived field", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/channels?includeArchived", () => {
+  it("excludes archived channels by default", async () => {
+    const create = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
+    const ch = await create.json() as { id: string };
+    await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    const res = await fetch(`${baseUrl}/api/channels`);
+    const channels = await res.json() as Array<{ id: string }>;
+    expect(channels.find((c) => c.id === ch.id)).toBeUndefined();
+  });
+
+  it("includes archived channels when includeArchived=true", async () => {
+    const create = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
+    const ch = await create.json() as { id: string };
+    await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    const res = await fetch(`${baseUrl}/api/channels?includeArchived=true`);
+    const channels = await res.json() as Array<{ id: string }>;
+    expect(channels.find((c) => c.id === ch.id)).toBeDefined();
+  });
+});
+
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);

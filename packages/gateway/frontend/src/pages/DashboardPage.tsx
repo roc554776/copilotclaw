@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
+  archiveChannel,
   createChannel,
   fetchChannels,
   fetchLogs,
@@ -9,6 +10,7 @@ import {
   fetchQuota,
   fetchStatus,
   sendMessage,
+  unarchiveChannel,
   type Channel,
   type LogEntry,
   type Message,
@@ -53,6 +55,7 @@ export function DashboardPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const evtSourceRef = useRef<EventSource | null>(null);
@@ -65,10 +68,10 @@ export function DashboardPage() {
   const { containerRef: chatRef, handleScroll: handleChatScroll } =
     useAutoScroll<HTMLDivElement>([messages.length]);
 
-  // Load channels on mount (M-8: loading/error state)
+  // Load channels on mount and when showArchived changes
   useEffect(() => {
     setLoading(true);
-    fetchChannels()
+    fetchChannels({ includeArchived: showArchived })
       .then((chs) => {
         setChannels(chs);
         setLoadError(null);
@@ -77,7 +80,7 @@ export function DashboardPage() {
         setLoadError(String(e));
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [showArchived]);
 
   // H-1: capture activeChannelId in closure
   const refreshMessages = useCallback(async () => {
@@ -236,6 +239,27 @@ export function DashboardPage() {
     return () => {
       modalAbortRef.current?.abort();
     };
+  }, []);
+
+  const handleArchiveChannel = useCallback(async (channelId: string) => {
+    try {
+      const updated = await archiveChannel(channelId);
+      setChannels((prev) =>
+        showArchived
+          ? prev.map((ch) => (ch.id === channelId ? updated : ch))
+          : prev.filter((ch) => ch.id !== channelId),
+      );
+      if (activeChannelId === channelId) {
+        setSearchParams({});
+      }
+    } catch { /* ignore */ }
+  }, [showArchived, activeChannelId, setSearchParams]);
+
+  const handleUnarchiveChannel = useCallback(async (channelId: string) => {
+    try {
+      const updated = await unarchiveChannel(channelId);
+      setChannels((prev) => prev.map((ch) => (ch.id === channelId ? updated : ch)));
+    } catch { /* ignore */ }
   }, []);
 
   // Create new channel
@@ -443,28 +467,53 @@ export function DashboardPage() {
       >
         {channels.map((ch) => {
           const isActive = ch.id === activeChannelId;
+          const isArchived = ch.archivedAt != null;
           return (
-            <a
+            <div
               key={ch.id}
-              href={`/?channel=${ch.id}`}
-              onClick={(e) => {
-                e.preventDefault();
-                setSearchParams({ channel: ch.id });
-              }}
               style={{
-                padding: "0.4rem 0.75rem",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.2rem",
+                padding: "0.4rem 0.5rem",
                 borderRadius: "0.4rem 0.4rem 0 0",
                 background: "#0d1117",
-                color: isActive ? "#58a6ff" : "#8b949e",
-                textDecoration: "none",
-                fontSize: "0.85rem",
                 border: isActive ? "1px solid #30363d" : "none",
                 borderBottom: isActive ? "1px solid #0d1117" : "none",
                 marginBottom: isActive ? -1 : 0,
               }}
             >
-              {ch.id.slice(0, SESSION_ID_SHORT)}
-            </a>
+              <a
+                href={`/?channel=${ch.id}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setSearchParams({ channel: ch.id });
+                }}
+                style={{
+                  color: isArchived ? "#484f58" : isActive ? "#58a6ff" : "#8b949e",
+                  textDecoration: "none",
+                  fontSize: "0.85rem",
+                  fontStyle: isArchived ? "italic" : "normal",
+                }}
+              >
+                {ch.id.slice(0, SESSION_ID_SHORT)}
+              </a>
+              <button
+                onClick={() => isArchived ? handleUnarchiveChannel(ch.id) : handleArchiveChannel(ch.id)}
+                title={isArchived ? "Unarchive" : "Archive"}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "#484f58",
+                  cursor: "pointer",
+                  fontSize: "0.7rem",
+                  padding: "0 0.2rem",
+                  lineHeight: 1,
+                }}
+              >
+                {isArchived ? "\u21A9" : "\u2716"}
+              </button>
+            </div>
           );
         })}
         <button
@@ -481,6 +530,21 @@ export function DashboardPage() {
           }}
         >
           +
+        </button>
+        <button
+          onClick={() => setShowArchived((v) => !v)}
+          title={showArchived ? "Hide archived" : "Show archived"}
+          style={{
+            padding: "0.4rem 0.6rem",
+            background: showArchived ? "#161b22" : "none",
+            border: "1px solid #30363d",
+            borderRadius: "0.4rem",
+            color: showArchived ? "#58a6ff" : "#8b949e",
+            cursor: "pointer",
+            fontSize: "0.75rem",
+          }}
+        >
+          {showArchived ? "All" : "Archived"}
         </button>
       </div>
 

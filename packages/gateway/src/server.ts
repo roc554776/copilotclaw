@@ -230,7 +230,8 @@ function createRequestHandler(
 
     // Channel management (core — provider-agnostic)
     if (fullPathname === "/api/channels" && method === "GET") {
-      json(res, 200, store.listChannels());
+      const includeArchived = params.get("includeArchived") === "true";
+      json(res, 200, store.listChannels({ includeArchived }));
       return;
     }
 
@@ -242,6 +243,26 @@ function createRequestHandler(
 
     if (fullPathname === "/api/channels/pending" && method === "GET") {
       json(res, 200, store.pendingCounts());
+      return;
+    }
+
+    // Channel archive/unarchive
+    const channelPatchMatch = /^\/api\/channels\/([^/]+)$/.exec(fullPathname);
+    if (channelPatchMatch !== null && method === "PATCH") {
+      const channelId = decodeURIComponent(channelPatchMatch[1]!);
+      const body = parseJson(await readBody(req));
+      if (!isRecord(body) || typeof body["archived"] !== "boolean") {
+        json(res, 400, { error: "missing 'archived' boolean field" });
+        return;
+      }
+      const ok = body["archived"]
+        ? store.archiveChannel(channelId)
+        : store.unarchiveChannel(channelId);
+      if (!ok) {
+        json(res, 404, { error: "channel not found or already in requested state" });
+        return;
+      }
+      json(res, 200, store.getChannel(channelId));
       return;
     }
 
