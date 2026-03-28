@@ -82,7 +82,7 @@
 - Workspace 情報のシステムインストラクション記載（CHANNEL_OPERATOR_PROMPT に workspace 構造・git 管理方針を追加。SOUL.md 等との レイヤー区別を明確化）
 
 - SystemStatus 別ページ表示（`/status` パス。モーダルからリンク遷移）
-- 物理 Session イベント stream 表示（`/sessions/{{sessionId}}/events` パス。disk 保存、ストレージ上限、フラット/ネスト切替、自動追従スクロール）
+- 物理 Session イベント stream 表示（`/sessions/{{sessionId}}/events` パス。disk 保存、ストレージ上限、フラット/ネスト切替。スクロール追従と内部スクロール保持は未実現）
 - オリジナルシステムプロンプトの取得・表示（`registerTransformCallbacks` によるキャプチャ、API `/api/system-prompts/original`、dashboard 表示）
 - 物理セッションシステムプロンプトの表示（API `/api/system-prompts/session/{{sessionId}}`、SystemStatus で表示、オリジナルとの区別）
 - Session イベント store（disk ベース JSON Lines、セッション別ファイル、ストレージ上限）
