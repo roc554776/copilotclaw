@@ -890,13 +890,25 @@ export class AgentSessionManager {
     // Accumulate token usage from the physical session being suspended
     const ps = entry.info.physicalSession;
     if (ps !== undefined) {
-      entry.info.cumulativeInputTokens = (entry.info.cumulativeInputTokens ?? 0) + (ps.totalInputTokens ?? 0);
-      entry.info.cumulativeOutputTokens = (entry.info.cumulativeOutputTokens ?? 0) + (ps.totalOutputTokens ?? 0);
       // Preserve stopped physical session in history for dashboard visibility
+      // If the last entry has the same sessionId (resumed session), update it instead of duplicating
       const history = entry.info.physicalSessionHistory ?? [];
-      history.push({ ...ps, currentState: "stopped" });
-      // Keep only the last 10 physical sessions to prevent unbounded growth
-      if (history.length > 10) history.splice(0, history.length - 10);
+      const lastEntry = history.length > 0 ? history[history.length - 1] : undefined;
+      if (lastEntry !== undefined && lastEntry.sessionId === ps.sessionId) {
+        // Same physical session resumed — compute token delta since last suspend
+        const deltaIn = (ps.totalInputTokens ?? 0) - (lastEntry.totalInputTokens ?? 0);
+        const deltaOut = (ps.totalOutputTokens ?? 0) - (lastEntry.totalOutputTokens ?? 0);
+        entry.info.cumulativeInputTokens = (entry.info.cumulativeInputTokens ?? 0) + Math.max(0, deltaIn);
+        entry.info.cumulativeOutputTokens = (entry.info.cumulativeOutputTokens ?? 0) + Math.max(0, deltaOut);
+        history[history.length - 1] = { ...ps, currentState: "stopped" };
+      } else {
+        // New physical session — accumulate full token count
+        entry.info.cumulativeInputTokens = (entry.info.cumulativeInputTokens ?? 0) + (ps.totalInputTokens ?? 0);
+        entry.info.cumulativeOutputTokens = (entry.info.cumulativeOutputTokens ?? 0) + (ps.totalOutputTokens ?? 0);
+        history.push({ ...ps, currentState: "stopped" });
+        // Keep only the last 10 physical sessions to prevent unbounded growth
+        if (history.length > 10) history.splice(0, history.length - 10);
+      }
       entry.info.physicalSessionHistory = history;
     }
     entry.info.status = "suspended";
