@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Files scanned: 41 | Version: 0.31.0 | Token estimate: ~3800 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Files scanned: 41 | Version: 0.32.0 | Token estimate: ~3800 -->
 
 # Backend
 
@@ -58,7 +58,7 @@ src/session-event-store.ts — SessionEventStore: SQLite-based event storage (se
 src/observability-pages.ts — renderStatusPage() and renderEventsPage(): standalone HTML pages for system status and session events stream (flat/nested toggle, auto-scroll); status page shows stopped session history per session via <details> element (v0.30.0)
 src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening); status modal shows physical session details (with elapsed time, accumulated tokens in/out/total), cumulative tokens across physical sessions (v0.27.0), subagent sessions, premium requests, available models; quota display uses /api/quota with fallback to latestQuotaSnapshots from session data; showSessionDetail() fetches and displays copilot session context detail via /api/sessions/:sessionId/messages; modal includes "Open in new tab" link to /status page; physical sessions have "View events" link to /sessions/:id/events; stopped session history shown as collapsed toggle ("Stopped sessions (N) ▸") with model, tokens, started time, and events link per entry (v0.30.0)
 src/sse-broadcaster.ts                  — SseBroadcaster: SSE event broadcasting to connected clients
-frontend/                  — Vite + React + TypeScript SPA (v0.31.0); see Frontend section below
+frontend/                  — Vite + React + TypeScript SPA (v0.32.0); see Frontend section below
 src/doctor.ts              — `copilotclaw doctor` CLI: checkWorkspace, checkConfig, checkGateway, checkAgent, checkZeroPremium, checkAuth diagnostics; checkWorkspace uses checkWorkspaceHealth from setup.ts to verify workspace files and git init; checkConfig validates configVersion (warns if missing or unexpected); checkAuth reads config.auth?.github (v0.25.0); runDoctor orchestrates checks and optional --fix (fixWorkspace calls ensureWorkspaceReady, fixConfig, fixStaleSocket); exits 1 on failures
 src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); uses createRequire to resolve @copilotclaw/agent package path; ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods; getQuota(), getModels(), and getSessionMessages() proxy to agent IPC; MIN_AGENT_VERSION exported; semverSatisfies exported (used by doctor); agent stderr redirected to {{stateDir}}/data/agent.log on spawn (openSync append mode)
 src/ipc-client.ts          — IPC client (status/stop/quota/models/session_messages to agent process); AgentStatusResponse includes bootId field; AgentSessionStatusResponse status includes "suspended" (v0.27.0 fix), cumulativeInputTokens, cumulativeOutputTokens (v0.27.0), physicalSessionHistory (PhysicalSessionSummary[], v0.30.0); PhysicalSessionSummary type (includes totalInputTokens, totalOutputTokens, latestQuotaSnapshots); SubagentInfo type; getAgentQuota(), getAgentModels(), and getAgentSessionMessages() functions
@@ -162,7 +162,7 @@ src/stop.ts                     — CLI stop command (IPC stop)
 src/tools/channel.ts            — send_message, receive_input (drains subagent completions; try-catch swallows ALL exceptions → keepalive response, console.error only), list_messages; exports SubagentCompletionInfo
 ```
 
-## Frontend SPA (packages/gateway/frontend, v0.31.0)
+## Frontend SPA (packages/gateway/frontend, v0.32.0)
 
 Vite + React + TypeScript single-page application. Built to `frontend-dist/` and served by gateway server with fallback to old server-rendered pages.
 
@@ -171,8 +171,8 @@ Vite + React + TypeScript single-page application. Built to `frontend-dist/` and
 ```
 /                              → DashboardPage (chat UI with channels, SSE, status bar, logs panel)
 /status                        → StatusPage (gateway, agent, sessions, config, system prompts; elapsed time helper; 5s auto-refresh)
-/sessions                      → SessionsListPage (all physical sessions with event counts, model, time range)
-/sessions/:sessionId/events    → SessionEventsPage (session events with event count in heading, flat/nested toggle, auto-scroll; 2s auto-refresh)
+/sessions                      → SessionsListPage (abstract sessions from /api/status with physical sessions as children; ?focus= URL param for scroll-to; orphaned physical sessions listed separately)
+/sessions/:sessionId/events    → SessionEventsPage (flat event list with event count in heading, auto-scroll; 2s auto-refresh; "Back to Sessions" link with ?focus= param targeting parent abstract session)
 ```
 
 ### Key Files
@@ -189,8 +189,8 @@ src/hooks/useAutoScroll.ts     — Position-based auto-scroll hook (follows bott
 src/hooks/usePolling.ts        — Generic polling hook (immediate call + setInterval, cleanup on unmount)
 src/pages/DashboardPage.tsx    — Chat dashboard (channel management, message list, input form, SSE events, status bar, logs panel)
 src/pages/StatusPage.tsx       — System status page (gateway/agent/sessions/config display, elapsed time helper, session prompt loading, cumulative tokens, physical session history)
-src/pages/SessionsListPage.tsx — Physical sessions list (fetches all session IDs, loads events per session for summary, sorted by last event time)
-src/pages/SessionEventsPage.tsx — Session event viewer (flat/nested toggle, event count display, auto-scroll via useAutoScroll, 2s polling via usePolling)
+src/pages/SessionsListPage.tsx — Sessions list: fetches abstract sessions from /api/status, renders each with physical sessions (current + history) as children; orphaned physical sessions (not in any abstract session) listed separately with event counts and model; supports ?focus= URL param to highlight and scroll-to an abstract session
+src/pages/SessionEventsPage.tsx — Session event viewer (flat event list, event count display, auto-scroll via useAutoScroll, 2s polling via usePolling; "Back to Sessions" link with ?focus= param targeting parent abstract session; resolves parent abstract session from /api/status)
 src/__tests__/setup.ts         — Test setup (jsdom + @testing-library/jest-dom matchers)
 src/__tests__/*.test.tsx       — Component tests (SessionEventsPage, StatusPage, DashboardPage, useAutoScroll)
 ```

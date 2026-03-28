@@ -150,14 +150,14 @@ export async function fetchLogs(limit = 100): Promise<LogEntry[]> {
   return res.json() as Promise<LogEntry[]>;
 }
 
-export async function fetchSessionEvents(sessionId: string): Promise<SessionEvent[]> {
-  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/events`);
+export async function fetchSessionEvents(sessionId: string, signal?: AbortSignal): Promise<SessionEvent[]> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/events`, signal ? { signal } : undefined);
   if (!res.ok) throw new Error(`session events ${res.status}`);
   return res.json() as Promise<SessionEvent[]>;
 }
 
-export async function fetchSessionIds(): Promise<string[]> {
-  const res = await fetch("/api/session-events/sessions");
+export async function fetchSessionIds(signal?: AbortSignal): Promise<string[]> {
+  const res = await fetch("/api/session-events/sessions", signal ? { signal } : undefined);
   if (!res.ok) throw new Error(`session ids ${res.status}`);
   return res.json() as Promise<string[]>;
 }

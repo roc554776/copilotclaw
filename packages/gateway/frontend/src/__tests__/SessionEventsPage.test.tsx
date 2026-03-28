@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionEventsPage } from "../pages/SessionEventsPage";
@@ -127,6 +127,43 @@ describe("SessionEventsPage", () => {
     await waitFor(() => {
       const backLinks = screen.getAllByText(/Back to Sessions/);
       expect(backLinks[0]!.getAttribute("href")).toBe("/sessions?focus=abstract-session-1");
+    });
+  });
+
+  it("Back to Sessions link has no focus param when abstract session not found", async () => {
+    // This test needs isolated mocks — the status endpoint returns empty sessions
+    cleanup();
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url === "/api/status" || url.startsWith("/api/status?")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            gateway: { status: "ok", version: "1.0.0" },
+            agent: { sessions: {} },
+            agentCompatibility: "ok",
+            config: {},
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockEvents),
+      } as Response);
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/sessions/unknown-xyz/events"]}>
+        <Routes>
+          <Route path="/sessions/:sessionId/events" element={<SessionEventsPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const backLinks = screen.getAllByText(/Back to Sessions/);
+      expect(backLinks[0]!.getAttribute("href")).toBe("/sessions");
     });
   });
 

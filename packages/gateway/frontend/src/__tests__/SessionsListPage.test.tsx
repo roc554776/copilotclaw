@@ -56,20 +56,20 @@ describe("SessionsListPage", () => {
   beforeEach(() => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
-      if (url.includes("/api/status")) {
+      // Strict URL matching (anchored patterns)
+      if (url === "/api/status") {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(mockStatusResponse),
         } as Response);
       }
-      if (url.includes("/api/session-events/sessions")) {
+      if (url === "/api/session-events/sessions") {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve([...knownPhysicalIds, orphanedId]),
         } as Response);
       }
-      // For orphaned session event enrichment
-      if (url.includes(`/api/sessions/${orphanedId}/events`)) {
+      if (url === `/api/sessions/${orphanedId}/events`) {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -138,8 +138,8 @@ describe("SessionsListPage", () => {
     await waitFor(() => {
       const cards = screen.getAllByTestId("abstract-session-abstract-id-alpha-1234");
       expect(cards.length).toBeGreaterThanOrEqual(1);
-      // border is set as shorthand "2px solid #58a6ff" — jsdom normalizes to rgb
-      expect(cards[0]!.style.border).toContain("rgb(88, 166, 255)");
+      // Check borderColor directly (more stable than shorthand border across jsdom versions)
+      expect(cards[0]!.style.borderColor).toBe("rgb(88, 166, 255)");
     });
   });
 

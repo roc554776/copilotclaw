@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   fetchSessionEvents,
@@ -112,7 +112,7 @@ export function SessionsListPage() {
     try {
       const [statusData, physicalIds] = await Promise.all([
         fetchStatus(signal),
-        fetchSessionIds(),
+        fetchSessionIds(signal),
       ]);
       if (signal.aborted) return;
 
@@ -136,7 +136,7 @@ export function SessionsListPage() {
           orphanIds,
           async (sid) => {
             try {
-              const events = await fetchSessionEvents(sid);
+              const events = await fetchSessionEvents(sid, signal);
               let model = "";
               for (const e of events) {
                 if (
@@ -191,8 +191,8 @@ export function SessionsListPage() {
     };
   }, [loadData]);
 
-  // Scroll focused abstract session into view
-  useEffect(() => {
+  // Scroll focused abstract session into view (useLayoutEffect to act after DOM update)
+  useLayoutEffect(() => {
     if (focusId && focusRef.current && !loading) {
       focusRef.current.scrollIntoView?.({ behavior: "smooth", block: "center" });
     }
@@ -244,7 +244,9 @@ export function SessionsListPage() {
             data-testid={`abstract-session-${abstractId}`}
             style={{
               padding: "0.6rem",
-              border: `2px solid ${isFocused ? "#58a6ff" : "#30363d"}`,
+              borderWidth: "2px",
+              borderStyle: "solid",
+              borderColor: isFocused ? "#58a6ff" : "#30363d",
               borderRadius: "0.4rem",
               marginBottom: "0.7rem",
             }}
