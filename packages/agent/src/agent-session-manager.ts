@@ -161,6 +161,10 @@ export interface AgentSessionManagerOptions {
   persistPath?: string;
   /** GitHub token for authentication (from profile auth config). When set, passed to CopilotClient. */
   githubToken?: string;
+  /** Structured log function (info level). Falls back to structured JSON on console.error. */
+  log?: (message: string) => void;
+  /** Structured log function (error level). Falls back to structured JSON on console.error. */
+  logError?: (message: string) => void;
 }
 
 interface SessionSnapshot {
@@ -202,6 +206,8 @@ export class AgentSessionManager {
   private readonly workingDirectory: string | undefined;
   private readonly persistPath: string | undefined;
   private readonly githubToken: string | undefined;
+  private readonly log: (message: string) => void;
+  private readonly logError: (message: string) => void;
   private generationCounter = 0;
   // Backoff tracking: channelId → timestamp when backoff expires.
   // Intentionally in-memory only — not persisted across agent restarts.
@@ -218,6 +224,14 @@ export class AgentSessionManager {
     this.workingDirectory = options.workingDirectory;
     this.persistPath = options.persistPath;
     this.githubToken = options.githubToken;
+    const defaultLog = (message: string) => {
+      console.error(JSON.stringify({ ts: new Date().toISOString(), level: "info", component: "agent", msg: message }));
+    };
+    const defaultLogError = (message: string) => {
+      console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
+    };
+    this.log = options.log ?? defaultLog;
+    this.logError = options.logError ?? defaultLogError;
     this.loadBindings();
   }
 
@@ -239,7 +253,7 @@ export class AgentSessionManager {
         typeof parsed !== "object" || parsed === null ||
         !("sessions" in parsed) || !Array.isArray((parsed as { sessions: unknown }).sessions)
       ) {
-        console.error(`[agent] WARNING: invalid bindings file at ${this.persistPath}, ignoring`);
+        this.logError(`WARNING: invalid bindings file at ${this.persistPath}, ignoring`);
         return;
       }
       const sessions = (parsed as { sessions: unknown[] }).sessions;
@@ -270,12 +284,12 @@ export class AgentSessionManager {
         }
       }
       if (sessions.length > 0) {
-        console.error(`[agent] restored ${sessions.length} suspended session binding(s) from disk`);
+        this.log(`restored ${sessions.length} suspended session binding(s) from disk`);
       }
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") return; // normal on first run
-      console.error(`[agent] WARNING: could not load bindings from ${this.persistPath}: ${String(err)}`);
+      this.logError(`WARNING: could not load bindings from ${this.persistPath}: ${String(err)}`);
     }
   }
 
@@ -303,7 +317,7 @@ export class AgentSessionManager {
       writeFileSync(tmp, JSON.stringify(snapshot), "utf-8");
       renameSync(tmp, this.persistPath);
     } catch (err: unknown) {
-      console.error(`[agent] WARNING: could not save bindings to ${this.persistPath}: ${String(err)}`);
+      this.logError(`WARNING: could not save bindings to ${this.persistPath}: ${String(err)}`);
     }
   }
 
@@ -321,7 +335,7 @@ export class AgentSessionManager {
     try {
       return await client.rpc.account.getQuota() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
-      console.error("[agent] getQuota error:", err);
+      this.logError(`getQuota error: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
   }
@@ -332,7 +346,7 @@ export class AgentSessionManager {
     try {
       return await client.rpc.models.list() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
-      console.error("[agent] getModels error:", err);
+      this.logError(`getModels error: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
   }
@@ -344,7 +358,7 @@ export class AgentSessionManager {
         try {
           return await entry.copilotSession.getMessages();
         } catch (err: unknown) {
-          console.error("[agent] getSessionMessages error:", err);
+          this.logError(`getSessionMessages error: ${err instanceof Error ? err.message : String(err)}`);
           return null;
         }
       }
@@ -504,6 +518,7 @@ export class AgentSessionManager {
         subagentCompletionQueue.length = 0;
         return items;
       },
+      logError: this.logError,
     });
 
     const signal = entry.abortController.signal;
@@ -574,7 +589,7 @@ export class AgentSessionManager {
             // AbortError is expected when session is stopped — suppress silently.
             // Log other errors so production issues in the hook are visible.
             if (!(err instanceof Error && err.name === "AbortError")) {
-              console.error("[agent] onPostToolUse hook error:", err);
+              this.logError(`onPostToolUse hook error: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
           return;
@@ -827,7 +842,7 @@ export class AgentSessionManager {
       initialPrompt:
         "Call copilotclaw_wait now to receive the first user message.",
       onMessage: (content) => { console.log(`[ch:${logPrefix}] ${content}`); },
-      log: (message) => { console.error(`[agent:${logPrefix}] ${message}`); },
+      log: (message) => { this.log(`[${logPrefix}] ${message}`); },
       shouldStop: () => entry.abortController.signal.aborted,
     });
   }
@@ -845,7 +860,7 @@ export class AgentSessionManager {
       await client.start();
       const { models } = await client.rpc.models.list();
       if (models.length === 0) {
-        console.error("[agent] no models available from SDK, falling back to gpt-4.1");
+        this.logError("no models available from SDK, falling back to gpt-4.1");
         return this.model ?? "gpt-4.1";
       }
 
@@ -857,13 +872,13 @@ export class AgentSessionManager {
 
       if (this.zeroPremium) {
         if (nonPremium.length === 0) {
-          console.error("[agent] zeroPremium: no non-premium models available");
+          this.logError("zeroPremium: no non-premium models available");
           throw new Error("zeroPremium is enabled but no non-premium models are available");
         }
         if (this.model !== undefined) {
           const modelInfo = models.find((m) => m.id === this.model);
           if (modelInfo !== undefined && modelInfo.billing?.multiplier !== 0) {
-            console.error(`[agent] zeroPremium: overriding premium model ${this.model} → ${nonPremium[0]!.id}`);
+            this.log(`zeroPremium: overriding premium model ${this.model} → ${nonPremium[0]!.id}`);
             return nonPremium[0]!.id;
           }
           return this.model;
@@ -877,7 +892,7 @@ export class AgentSessionManager {
       return sorted[0]!.id;
     } catch (err: unknown) {
       if (err instanceof Error && err.message.includes("zeroPremium")) throw err;
-      console.error("[agent] failed to list models from SDK, falling back to gpt-4.1:", err);
+      this.logError(`failed to list models from SDK, falling back to gpt-4.1: ${err instanceof Error ? err.message : String(err)}`);
       return this.model ?? "gpt-4.1";
     }
   }
@@ -1004,7 +1019,7 @@ export class AgentSessionManager {
     const boundChannelId = entry.info.boundChannelId;
 
     // Stale session — suspend (abstract session survives), notify, flush stale inputs
-    console.error(`[agent] session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), suspending (deferred resume)`);
+    this.log(`session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), suspending (deferred resume)`);
 
     // Abort first to prevent the promise handler from double-suspending
     entry.abortController.abort();
@@ -1030,7 +1045,7 @@ export class AgentSessionManager {
       }
     }).catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
-      console.error(`[agent] session ${sessionId.slice(0, 8)} error:`, err);
+      this.logError(`session ${sessionId.slice(0, 8)} error: ${err instanceof Error ? err.message : String(err)}`);
       if (!entry.abortController.signal.aborted) {
         this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
@@ -1047,7 +1062,7 @@ export class AgentSessionManager {
     const elapsed = Date.now() - startTime;
     if (elapsed < RAPID_FAILURE_THRESHOLD_MS) {
       this.channelBackoff.set(channelId, Date.now() + BACKOFF_DURATION_MS);
-      console.error(`[agent] channel ${channelId.slice(0, 8)} entering ${BACKOFF_DURATION_MS / 1000}s backoff after rapid failure (${elapsed}ms)`);
+      this.log(`channel ${channelId.slice(0, 8)} entering ${BACKOFF_DURATION_MS / 1000}s backoff after rapid failure (${elapsed}ms)`);
     }
   }
 
@@ -1088,7 +1103,7 @@ export class AgentSessionManager {
     const age = Date.now() - new Date(entry.info.startedAt).getTime();
     if (age < this.maxSessionAgeMs) return false;
 
-    console.error(`[agent] session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), suspending (deferred resume)`);
+    this.log(`session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), suspending (deferred resume)`);
 
     // Abort first to prevent the promise handler from double-suspending
     entry.abortController.abort();

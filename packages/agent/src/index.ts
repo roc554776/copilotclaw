@@ -25,13 +25,19 @@ interface GatewayConfig {
 let structuredLogger: StructuredLogger | undefined;
 
 function log(message: string): void {
-  console.error(`[agent] ${message}`);
-  structuredLogger?.info(message);
+  if (structuredLogger !== undefined) {
+    structuredLogger.info(message);
+  } else {
+    console.error(JSON.stringify({ ts: new Date().toISOString(), level: "info", component: "agent", msg: message }));
+  }
 }
 
 function logError(message: string): void {
-  console.error(`[agent] ${message}`);
-  structuredLogger?.error(message);
+  if (structuredLogger !== undefined) {
+    structuredLogger.error(message);
+  } else {
+    console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
+  }
 }
 
 /** Wait for the gateway to establish a stream connection and push config.
@@ -123,6 +129,8 @@ async function main(): Promise<void> {
   const managerOpts: AgentSessionManagerOptions = {
     zeroPremium: config.zeroPremium,
     debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
+    log,
+    logError,
   };
   if (githubToken !== undefined) managerOpts.githubToken = githubToken;
   if (config.model !== null) managerOpts.model = config.model;
@@ -206,6 +214,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error("Error:", err);
+  logError(`fatal: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });

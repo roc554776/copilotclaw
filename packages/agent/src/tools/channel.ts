@@ -40,6 +40,8 @@ export interface ChannelToolDeps {
   onStatusChange?: (status: AgentStatusChange) => void;
   /** Drain all pending subagent completion events. Returns and clears the queue. */
   drainSubagentCompletions?: () => SubagentCompletionInfo[];
+  /** Structured log function (error level). Falls back to structured JSON on console.error. */
+  logError?: (message: string) => void;
 }
 
 interface NextInputResponse {
@@ -124,6 +126,10 @@ function combineMessages(inputs: NextInputResponse[]): string {
 }
 
 export function createChannelTools(deps: ChannelToolDeps) {
+  const logError = deps.logError ?? ((message: string) => {
+    console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
+  });
+
   // Swallowed-message detection state.
   // Tracks whether wait returned user messages and whether
   // send_message was called before the next wait invocation.
@@ -166,7 +172,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
         // messages but send_message was never called, the user got no reply.
         // Return immediately with a forceful reminder instead of polling.
         if (pendingReplyExpected) {
-          console.error("[agent] swallowed message detected — forcing reply reminder");
+          logError("swallowed message detected — forcing reply reminder");
           deps.onStatusChange?.("processing");
           return { userMessage: SWALLOWED_MESSAGE_INSTRUCTION };
         }
@@ -202,7 +208,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
         // AbortError (from shutdown) is also caught here intentionally —
         // the session loop's shouldStop() check handles clean shutdown.
         // Re-throwing any error would kill the physical session (deadlock).
-        console.error("[agent] wait internal error (suppressed):", err);
+        logError(`wait internal error (suppressed): ${err instanceof Error ? err.message : String(err)}`);
         // Return keepalive-equivalent response — indistinguishable from timeout
         return { userMessage: KEEPALIVE_INSTRUCTION };
       }
