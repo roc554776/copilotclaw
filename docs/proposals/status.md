@@ -100,8 +100,10 @@
 - Gateway-Agent 間通信の IPC 統一（agent → gateway の全 HTTP 通信を IPC stream に移行。`COPILOTCLAW_GATEWAY_URL` / `gatewayBaseUrl` / agent 内 HTTP fetch を除去。IPC stream プロトコルによる双方向メッセージング。MIN_AGENT_VERSION を 0.35.0 に引き上げ）
 
 **未実現（実現報告済みだが不完全）:**
-- `/sessions` の抽象セッション主体の階層表示が不完全（suspend の過去物理セッションが正しく表示されていない）
-- `/status` の sessions リンク表記が `All physical sessions →` のまま（`All sessions →` であるべき）
+- `/sessions` の抽象セッション主体の階層表示が不完全（suspend の過去物理セッションが正しく表示されていない — frontend のレンダリングは正しいが、`/api/status` が返すデータの調査が必要）
+
+**v0.36.0 で修正:**
+- `/status` の sessions リンク表記を `All physical sessions →` から `All sessions →` に修正
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
