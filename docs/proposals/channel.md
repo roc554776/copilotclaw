@@ -34,7 +34,7 @@ agent → [LLM 処理] → copilotclaw_send_message で途中報告（即時 ret
 agent → copilotclaw_send_message で最終回答 → copilotclaw_wait で次の入力を待機
 ```
 
-### チャンネルのアーカイブ（未実現）
+### チャンネルのアーカイブ（v0.37.0 で実現済み）
 
 不要になったチャンネルを dashboard の通常表示から除外する機能。
 

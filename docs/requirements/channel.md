@@ -13,7 +13,7 @@ Agent と human が gateway を介して対話する仕組み（channel）を提
 - Gateway 起動時にデフォルト channel を 1 つ作成する
 - Dashboard は複数タブで複数 channel を扱えるインターフェースとする
 
-### Req: チャンネルのアーカイブ（未実現）
+### Req: チャンネルのアーカイブ（v0.37.0 で実現済み）
 
 チャンネルをアーカイブし、dashboard 上の通常表示から除外できるようにする。
 
