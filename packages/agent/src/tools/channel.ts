@@ -4,7 +4,18 @@ const RECEIVE_INPUT_TOOL_NAME = "copilotclaw_receive_input";
 
 const DEFAULT_KEEPALIVE_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutes
 
-const RECEIVE_INSTRUCTION = `\n\n[SYSTEM] You MUST use ${RECEIVE_INPUT_TOOL_NAME} to wait for the next user message after you finish your work. Do NOT stop without calling this tool.`;
+const RECEIVE_INSTRUCTION =
+  `\n\n---\n` +
+  `[SYSTEM] Required workflow: (A) Call copilotclaw_send_message with your complete reply, ` +
+  `then (B) call ${RECEIVE_INPUT_TOOL_NAME} to wait for the next message. ` +
+  `You MUST call copilotclaw_send_message BEFORE ${RECEIVE_INPUT_TOOL_NAME}. ` +
+  `The user CANNOT see your text output — only messages sent via copilotclaw_send_message reach them. ` +
+  `Do NOT stop without calling ${RECEIVE_INPUT_TOOL_NAME}.`;
+
+const SWALLOWED_MESSAGE_INSTRUCTION =
+  `[SYSTEM] CRITICAL: You received user message(s) but called ${RECEIVE_INPUT_TOOL_NAME} ` +
+  `without sending a reply via copilotclaw_send_message. The user received NOTHING. ` +
+  `You MUST call copilotclaw_send_message with your response NOW, then call ${RECEIVE_INPUT_TOOL_NAME}.`;
 
 const KEEPALIVE_INSTRUCTION = `[SYSTEM] No user message received (keepalive cycle). Call ${RECEIVE_INPUT_TOOL_NAME} immediately to continue waiting. Do NOT stop.`;
 
@@ -83,6 +94,14 @@ function combineMessages(inputs: NextInputResponse[]): string {
 }
 
 export function createChannelTools(deps: ChannelToolDeps) {
+  // Swallowed-message detection state.
+  // Tracks whether receive_input returned user messages and whether
+  // send_message was called before the next receive_input invocation.
+  // When the LLM calls receive_input again without having called
+  // send_message, the handler returns a forceful reminder instead of
+  // polling — this is a deterministic safeguard against lost replies.
+  let pendingReplyExpected = false;
+
   const sendMessage = defineTool("copilotclaw_send_message", {
     description: "Send a message to the channel. Use this to report progress or reply to the user. Returns immediately.",
     parameters: {
@@ -104,6 +123,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
       if (!res.ok) {
         throw new Error(`send_message failed: ${res.status} ${res.statusText}`);
       }
+      pendingReplyExpected = false;
       return { status: "sent" };
     },
     skipPermission: true,
@@ -122,6 +142,15 @@ export function createChannelTools(deps: ChannelToolDeps) {
       // an error, the agent's physical session stops, causing an irrecoverable
       // deadlock. The agent must not perceive that an error occurred.
       try {
+        // Swallowed-message guard: if the previous receive_input returned user
+        // messages but send_message was never called, the user got no reply.
+        // Return immediately with a forceful reminder instead of polling.
+        if (pendingReplyExpected) {
+          console.error("[agent] swallowed message detected — forcing reply reminder");
+          deps.onStatusChange?.("processing");
+          return { userMessage: SWALLOWED_MESSAGE_INSTRUCTION };
+        }
+
         deps.onStatusChange?.("waiting");
         const inputs = await pollNextInputs(deps);
 
@@ -144,6 +173,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
           return { userMessage: KEEPALIVE_INSTRUCTION };
         }
         deps.onStatusChange?.("processing");
+        pendingReplyExpected = true;
         const combined = combineMessages(inputs);
         return { userMessage: combined + "\n\n" + subagentNotice + RECEIVE_INSTRUCTION };
       } catch (err: unknown) {

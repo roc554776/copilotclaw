@@ -8,7 +8,7 @@ import type { ChannelProvider } from "./channel-provider.js";
 import { DEFAULT_PORT, getProfileName, getStateDir, loadConfig } from "./config.js";
 import { getWorkspaceRoot } from "./workspace.js";
 import { LogBuffer } from "./log-buffer.js";
-import { renderEventsPage, renderStatusPage } from "./observability-pages.js";
+import { renderEventsPage, renderSessionsListPage, renderStatusPage } from "./observability-pages.js";
 import { SessionEventStore } from "./session-event-store.js";
 import { Store } from "./store.js";
 import { SseBroadcaster } from "./sse-broadcaster.js";
@@ -260,6 +260,13 @@ function createRequestHandler(
     if (fullPathname === "/status" && method === "GET") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(renderStatusPage());
+      return;
+    }
+
+    // Sessions list page (all physical sessions from event store)
+    if (fullPathname === "/sessions" && method === "GET") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(renderSessionsListPage());
       return;
     }
 

@@ -48,6 +48,8 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<void>
           if (settled) return;
           // Session ended — LLM decided to stop calling tools.
           // Do NOT send continuePrompt (session.send costs a premium request).
+          // The session will be suspended and revived when the next pending
+          // message arrives, costing zero premium requests.
           log("session idle — LLM stopped calling tools");
           settle(() => { resolve(); });
         },

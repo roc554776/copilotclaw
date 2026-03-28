@@ -853,7 +853,8 @@ export class AgentSessionManager {
   /** Transition an abstract session to suspended state, preserving channel binding.
    *  The physical session is gone but the abstract session survives for later revival.
    *  Cumulative token usage is accumulated from the physical session before clearing. */
-  private suspendSession(entry: AgentSessionEntry): void {
+  /** Transition the entry to suspended state without persisting to disk. */
+  private suspendSessionState(entry: AgentSessionEntry): void {
     // Accumulate token usage from the physical session being suspended
     const ps = entry.info.physicalSession;
     if (ps !== undefined) {
@@ -871,6 +872,10 @@ export class AgentSessionManager {
     entry.info.physicalSession = undefined;
     entry.info.subagentSessions = undefined;
     // copilotSessionId is preserved for resumeSession on revival
+  }
+
+  private suspendSession(entry: AgentSessionEntry): void {
+    this.suspendSessionState(entry);
     this.saveBindings();
   }
 
@@ -920,12 +925,14 @@ export class AgentSessionManager {
     for (const [sessionId, entry] of entries) {
       entry.abortController.abort();
       promises.push(entry.sessionPromise);
-      // Fully remove all sessions on explicit stop
-      const boundChannelId = entry.info.boundChannelId;
-      if (boundChannelId !== undefined) {
-        this.channelBindings.delete(boundChannelId);
+      if (entry.info.boundChannelId !== undefined) {
+        // Channel-bound sessions are suspended (not deleted) so the abstract
+        // session and channel binding survive the agent restart.
+        this.suspendSessionState(entry);
+      } else {
+        // Unbound sessions have no channel to revive them — fully remove.
+        this.sessions.delete(sessionId);
       }
-      this.sessions.delete(sessionId);
     }
     this.saveBindings();
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;

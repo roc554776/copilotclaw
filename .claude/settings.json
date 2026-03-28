@@ -57,7 +57,8 @@
       "Bash(pnpm --filter agent exec tsc --noEmit)",
       "Bash(pnpm --filter @copilotclaw/gateway run typecheck)",
       "Bash(pnpm --filter @copilotclaw/gateway run test)",
-      "Bash(pnpm vitest:*)"
+      "Bash(pnpm vitest:*)",
+      "Bash(pnpm test:*)"
     ]
   }
 }

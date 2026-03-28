@@ -1196,9 +1196,9 @@ describe("AgentSessionManager — cumulative token history across physical sessi
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 } });
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 200, outputTokens: 75 } });
 
-    // End session → suspended
+    // End session → suspended (after idle recovery attempts exhaust)
     mockSession.emit("session.idle");
-    await wait(50);
+    await wait(30);
 
     const statuses = manager.getSessionStatuses();
     const session = Object.values(statuses)[0];
@@ -1228,7 +1228,7 @@ describe("AgentSessionManager — cumulative token history across physical sessi
 
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 500, outputTokens: 200 } });
     mockSession.emit("session.idle");
-    await wait(50);
+    await wait(30);
 
     const raw = readFileSync(persistPath, "utf-8");
     const snapshot = JSON.parse(raw) as { sessions: Array<{ cumulativeInputTokens?: number; cumulativeOutputTokens?: number }> };
@@ -1257,7 +1257,7 @@ describe("AgentSessionManager — cumulative token history across physical sessi
 
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 300, outputTokens: 100 } });
     mockSession.emit("session.idle");
-    await wait(50);
+    await wait(30);
 
     // Create new manager — simulates agent restart
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
@@ -1311,7 +1311,7 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
 
     // End session → suspended → physicalSession moves to history
     mockSession.emit("session.idle");
-    await wait(50);
+    await wait(30);
 
     const statuses = manager.getSessionStatuses();
     const session = Object.values(statuses)[0];
@@ -1342,7 +1342,7 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
     await waitForPhysicalSession(manager);
 
     mockSession.emit("session.idle");
-    await wait(50);
+    await wait(30);
 
     const statuses = manager.getSessionStatuses();
     const session = Object.values(statuses)[0];
@@ -1372,7 +1372,7 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
 
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 400, outputTokens: 150 } });
     mockSession.emit("session.idle");
-    await wait(50);
+    await wait(30);
 
     // Verify bindings file contains physicalSessionHistory
     const raw = readFileSync(persistPath, "utf-8");
@@ -1393,5 +1393,66 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
     expect(restored?.physicalSessionHistory).toHaveLength(1);
     expect(restored?.physicalSessionHistory?.[0]?.sessionId).toBe("mock-sdk-session");
     expect(restored?.physicalSessionHistory?.[0]?.currentState).toBe("stopped");
+  });
+});
+
+describe("AgentSessionManager — stopAll suspends channel-bound sessions", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "asm-stopall-"));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("suspends channel-bound sessions on stopAll so they survive agent restart", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 204, json: async () => null, text: async () => "null",
+    } as Response);
+
+    const persistPath = join(tmpDir, "bindings.json");
+    const manager = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:1234",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-stopall" });
+    await wait(50); // session starts → idles → suspends
+
+    // Revive so the session is active again
+    const mockSession2 = makeMockCopilotSession("idle");
+    installClientMock(vi.fn().mockResolvedValue(mockSession2));
+    manager.startSession({ boundChannelId: "ch-stopall" });
+    await wait(10); // let session start
+
+    // Now stopAll — should suspend, not delete
+    await manager.stopAll();
+
+    // Verify the bindings file was saved with the suspended session
+    const raw = readFileSync(persistPath, "utf-8");
+    const snapshot = JSON.parse(raw) as { sessions: Array<{ sessionId: string; boundChannelId: string }> };
+    expect(snapshot.sessions.length).toBe(1);
+    expect(snapshot.sessions[0]!.sessionId).toBe(sessionId);
+    expect(snapshot.sessions[0]!.boundChannelId).toBe("ch-stopall");
+
+    // Verify a new manager restores the session
+    installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+    const manager2 = new AgentSessionManager({
+      gatewayBaseUrl: "http://localhost:1234",
+      fetch: fetchSpy,
+      persistPath,
+    });
+
+    expect(manager2.hasSessionForChannel("ch-stopall")).toBe(true);
+    const statuses = manager2.getSessionStatuses();
+    const restored = Object.values(statuses).find((s) => s.boundChannelId === "ch-stopall");
+    expect(restored?.status).toBe("suspended");
   });
 });

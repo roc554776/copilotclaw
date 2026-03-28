@@ -63,10 +63,13 @@ async function refresh() {
       // Sessions
       const entries = Object.entries(data.agent.sessions || {});
       if (entries.length > 0) {
-        html += '<div class="section"><div class="section-title">Sessions</div>';
+        html += '<div class="section"><div class="section-title">Sessions · <a href="/sessions" style="font-weight:normal;text-transform:none">All physical sessions &rarr;</a></div>';
         for (const [id, sess] of entries) {
           const chLabel = sess.boundChannelId ? ' → ch:' + escHtml(sess.boundChannelId.slice(0,8)) : '';
           html += '<div class="row"><span class="label">' + escHtml(id.slice(0,8)) + chLabel + '</span><span class="value">' + escHtml(sess.status) + '</span></div>';
+          if (sess.startedAt) {
+            html += '<div style="margin-left:1rem;font-size:0.8rem;color:#8b949e"><div class="row"><span class="label">Session started</span><span class="value">' + escHtml(sess.startedAt) + ' (' + elapsed(sess.startedAt) + ')</span></div></div>';
+          }
           if (sess.physicalSession) {
             const ps = sess.physicalSession;
             html += '<div style="margin-left:1rem;font-size:0.8rem;color:#8b949e">';
@@ -94,15 +97,16 @@ async function refresh() {
               html += '<div style="margin-left:1rem;font-size:0.8rem;color:#8b949e"><div class="row"><span class="label">Cumulative tokens</span><span class="value">in: ' + cIn + ' / out: ' + cOut + ' / total: ' + (cIn+cOut) + '</span></div></div>';
             }
           }
-          // Stopped physical session history
+          // Physical session history
           const history = sess.physicalSessionHistory || [];
           if (history.length > 0) {
             html += '<div style="margin-left:1rem;font-size:0.8rem;margin-top:0.3rem">';
-            html += '<details><summary style="color:#58a6ff;cursor:pointer">Stopped sessions (' + history.length + ')</summary>';
+            html += '<div style="color:#8b949e;margin-bottom:0.3rem">Physical sessions (' + history.length + ')</div>';
             for (const hps of history) {
               html += '<div style="margin:0.3rem 0;padding:0.3rem;border:1px solid #21262d;border-radius:0.3rem;color:#8b949e">';
               html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(hps.sessionId.slice(0,12)) + '</span></div>';
               html += '<div class="row"><span class="label">Model</span><span class="value">' + escHtml(hps.model) + '</span></div>';
+              html += '<div class="row"><span class="label">State</span><span class="value">' + escHtml(hps.currentState || 'stopped') + '</span></div>';
               if (hps.totalInputTokens != null || hps.totalOutputTokens != null) {
                 html += '<div class="row"><span class="label">Tokens</span><span class="value">in: ' + (hps.totalInputTokens??0) + ' / out: ' + (hps.totalOutputTokens??0) + '</span></div>';
               }
@@ -110,7 +114,7 @@ async function refresh() {
               html += '<div class="row"><span class="label">Events</span><span class="value"><a href="/sessions/' + encodeURIComponent(hps.sessionId) + '/events">View events &rarr;</a></span></div>';
               html += '</div>';
             }
-            html += '</details></div>';
+            html += '</div>';
           }
         }
         html += '</div>';
@@ -165,6 +169,100 @@ async function loadSessionPrompt(sessionId) {
 
 refresh();
 setInterval(refresh, 5000);
+</script>
+</body>
+</html>`;
+}
+
+/** Render the sessions list page showing all physical sessions from the event store. */
+export function renderSessionsListPage(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CopilotClaw — Physical Sessions</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #0d1117; color: #c9d1d9; margin: 0; padding: 1rem; }
+  h1 { font-size: 1.2rem; color: #58a6ff; margin-bottom: 1rem; }
+  .section { margin-bottom: 1rem; padding: 0.75rem; border: 1px solid #30363d; border-radius: 0.5rem; }
+  .row { display: flex; justify-content: space-between; padding: 0.2rem 0; font-size: 0.85rem; }
+  .label { color: #8b949e; }
+  .value { color: #c9d1d9; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  #content { max-width: 800px; margin: 0 auto; }
+  .back-link { margin-bottom: 1rem; display: inline-block; }
+  .session-card { padding: 0.5rem; border: 1px solid #21262d; border-radius: 0.3rem; margin-bottom: 0.5rem; }
+  .session-card:hover { border-color: #58a6ff; }
+  .session-id { color: #58a6ff; font-weight: 600; font-size: 0.85rem; }
+  .session-meta { color: #8b949e; font-size: 0.8rem; margin-top: 0.2rem; }
+  .empty { color: #8b949e; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<div id="content">
+  <a href="/status" class="back-link">&larr; Back to System Status</a>
+  <h1>Physical Sessions</h1>
+  <div id="sessions-content">Loading...</div>
+</div>
+<script>
+function escHtml(s) { const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+
+async function loadSessions() {
+  try {
+    const res = await fetch('/api/session-events/sessions');
+    if (!res.ok) { document.getElementById('sessions-content').textContent = 'Failed to load sessions'; return; }
+    const sessionIds = await res.json();
+    if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
+      document.getElementById('sessions-content').innerHTML = '<div class="empty">No physical sessions recorded.</div>';
+      return;
+    }
+
+    // Fetch first and last event for each session to show summary
+    const summaries = await Promise.all(sessionIds.map(async (sid) => {
+      try {
+        const evRes = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/events');
+        const events = await evRes.json();
+        const first = events[0];
+        const last = events[events.length - 1];
+        // Extract model from session events (model_change or first usage)
+        let model = '';
+        for (const e of events) {
+          if (e.type === 'session.model_change' && e.data?.newModel) { model = e.data.newModel; }
+          if (!model && e.type === 'assistant.usage' && e.data?.model) { model = e.data.model; }
+        }
+        return { sid, eventCount: events.length, firstTime: first?.timestamp, lastTime: last?.timestamp, model };
+      } catch { return { sid, eventCount: 0, firstTime: null, lastTime: null, model: '' }; }
+    }));
+
+    // Sort by most recent first
+    summaries.sort((a, b) => (b.lastTime || '').localeCompare(a.lastTime || ''));
+
+    let html = '';
+    for (const s of summaries) {
+      html += '<a href="/sessions/' + encodeURIComponent(s.sid) + '/events" style="text-decoration:none">';
+      html += '<div class="session-card">';
+      html += '<div class="session-id">' + escHtml(s.sid.slice(0, 12)) + '</div>';
+      html += '<div class="session-meta">';
+      if (s.model) html += 'Model: ' + escHtml(s.model) + ' · ';
+      html += escHtml(String(s.eventCount)) + ' events';
+      if (s.firstTime) {
+        html += ' · Started: ' + escHtml(new Date(s.firstTime).toLocaleString());
+      }
+      if (s.lastTime) {
+        html += ' · Last: ' + escHtml(new Date(s.lastTime).toLocaleString());
+      }
+      html += '</div></div></a>';
+    }
+
+    document.getElementById('sessions-content').innerHTML = html;
+  } catch (e) {
+    document.getElementById('sessions-content').innerHTML = '<div class="empty">Error: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+loadSessions();
 </script>
 </body>
 </html>`;
