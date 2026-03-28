@@ -6,10 +6,11 @@
   "main": "dist/index.js",
   "files": [
     "dist/",
+    "frontend-dist/",
     "package.json"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cd frontend && ../node_modules/.bin/vite build",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "stop": "node dist/stop.js",

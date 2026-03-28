@@ -23,7 +23,8 @@ pnpm --filter @copilotclaw/gateway run stop            # Stop gateway only (agen
 pnpm --filter @copilotclaw/gateway run restart         # Restart gateway (stop + start)
 pnpm --filter @copilotclaw/gateway run setup           # Initialize workspace (~/.copilotclaw/)
 pnpm --filter @copilotclaw/gateway run update          # Self-update via git pull + build
-pnpm --filter @copilotclaw/gateway run build:frontend  # Build React dashboard (Vite)
+pnpm --filter @copilotclaw/gateway run build            # Build server (tsc) + React dashboard (Vite)
+pnpm --filter @copilotclaw/gateway run build:frontend  # Build React dashboard only (Vite)
 pnpm --filter @copilotclaw/gateway run dev:frontend    # Start Vite dev server (HMR)
 pnpm --filter @copilotclaw/gateway run test:frontend   # Run React component tests
 ```
