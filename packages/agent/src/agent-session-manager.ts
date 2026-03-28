@@ -603,11 +603,35 @@ export class AgentSessionManager {
     // Resolve model dynamically from SDK model list
     const resolvedModel = await this.resolveModel(entry.client);
 
+    // Build systemMessage with transform callbacks to capture original system prompt.
+    // Each known section gets a pass-through callback that captures the content and
+    // forwards it to the gateway. The SDK's extractTransformCallbacks() detects these
+    // callbacks and sends action: "transform" in the wire payload, causing the CLI to
+    // call back via systemMessage.transform RPC when the system prompt is constructed.
+    const capturedSections: Record<string, string> = {};
+    const makeSectionCapture = (sectionId: string) => async (content: string) => {
+      capturedSections[sectionId] = content;
+      return content; // Return unchanged — pass-through
+    };
+    const KNOWN_SECTIONS = [
+      "identity", "tone", "tool_efficiency", "environment_context",
+      "code_change_rules", "guidelines", "safety", "tool_instructions",
+      "custom_instructions", "last_instructions",
+    ];
+    const sections: Record<string, { action: (content: string) => Promise<string> }> = {};
+    for (const id of KNOWN_SECTIONS) {
+      sections[id] = { action: makeSectionCapture(id) };
+    }
+
     // Resume existing SDK session or create new one
     const baseConfig = {
       model: resolvedModel,
       ...(this.workingDirectory !== undefined ? { workingDirectory: this.workingDirectory } : {}),
       ...sessionConfig,
+      systemMessage: {
+        mode: "customize" as const,
+        sections,
+      },
       // Custom agents: channel-operator (parent, infer:false) + worker (subagent, infer:true)
       customAgents: [
         { ...CHANNEL_OPERATOR_CONFIG, tools: null },
@@ -619,28 +643,34 @@ export class AgentSessionManager {
       ? await entry.client.resumeSession(entry.copilotSessionId, baseConfig)
       : await entry.client.createSession(baseConfig);
 
-    // Register transform callbacks to capture original system prompt.
-    // The callback receives the original prompt content and returns it unchanged —
-    // we use this to capture and forward the original content to gateway.
-    // SDK looks up callbacks by exact sectionId via Map.get(sectionId).
-    // To capture ALL sections regardless of their ID, we use a Map subclass
-    // that overrides get() to return the capture callback for any key.
-    const captureCallback = async (content: string) => {
-      this.postToGateway("/api/system-prompts/original", {
-        model: resolvedModel,
-        prompt: content,
-        capturedAt: new Date().toISOString(),
-      });
-      this.postToGateway("/api/system-prompts/session", {
-        sessionId: session.sessionId,
-        model: resolvedModel,
-        prompt: content,
-      });
-      return content; // Return unchanged
+    // After session creation, the CLI will call systemMessage.transform RPC for each
+    // section that has action: "transform". The callbacks above capture each section's
+    // content. Post the combined prompt to the gateway for storage and display.
+    const postCapturedPrompt = () => {
+      const combined = Object.values(capturedSections).filter(Boolean).join("\n\n");
+      if (combined.length > 0) {
+        this.postToGateway("/api/system-prompts/original", {
+          model: resolvedModel,
+          prompt: combined,
+          capturedAt: new Date().toISOString(),
+        });
+        this.postToGateway("/api/system-prompts/session", {
+          sessionId: session.sessionId,
+          model: resolvedModel,
+          prompt: combined,
+        });
+      }
     };
-    const catchAllMap = new Map<string, typeof captureCallback>();
-    catchAllMap.get = (_key: string) => captureCallback;
-    session.registerTransformCallbacks(catchAllMap);
+    // The transform callbacks fire during session.send() when the CLI builds the system
+    // prompt. Post once after the first assistant.turn_start to know the prompt has been built.
+    // For resumed sessions, the CLI may not re-fire transform RPCs; in that case
+    // capturedSections stays empty and postCapturedPrompt is a no-op (acceptable).
+    let promptPosted = false;
+    session.on("assistant.turn_start", () => {
+      if (promptPosted) return;
+      promptPosted = true;
+      postCapturedPrompt();
+    });
 
     entry.copilotSessionId = session.sessionId;
     entry.copilotSession = session;
