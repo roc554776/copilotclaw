@@ -93,6 +93,8 @@
 
 - Dashboard フロントエンドの vite + React 移行（server-side HTML テンプレート + inline JS → Vite + React SPA。型安全な JSX、React Testing Library によるコンポーネントテスト、SSE/fetch の hooks による状態管理。旧レンダリングはフォールバックとして残存）
 
+- セッションビューア UI 改善（`/sessions` を抽象セッション主体の階層表示に変更、`?focus` パラメタによるフォーカス、イベントページからの「Back to Sessions」ナビゲーション、parentId ネスト表示の廃止）
+
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
 - OpenTelemetry 導入（構造化ログ基盤は実装済み、OTel ログブリッジへの移行が残）

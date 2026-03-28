@@ -1,5 +1,4 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionEventsPage } from "../pages/SessionEventsPage";
@@ -23,6 +22,21 @@ const mockEvents = [
   },
 ];
 
+const mockStatusResponse = {
+  gateway: { status: "ok", version: "1.0.0" },
+  agent: {
+    sessions: {
+      "abstract-session-1": {
+        status: "active",
+        physicalSession: { sessionId: "test-session-id", model: "gpt-4o", currentState: "idle", startedAt: "2026-03-28T10:00:00Z" },
+        physicalSessionHistory: [],
+      },
+    },
+  },
+  agentCompatibility: "ok",
+  config: {},
+};
+
 function renderPage(sessionId = "test-session-id") {
   return render(
     <MemoryRouter initialEntries={[`/sessions/${sessionId}/events`]}>
@@ -36,10 +50,19 @@ function renderPage(sessionId = "test-session-id") {
 describe("SessionEventsPage", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockEvents),
-    } as Response);
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/api/status")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockStatusResponse),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(mockEvents),
+      } as Response);
+    });
   });
 
   afterEach(() => {
@@ -75,19 +98,6 @@ describe("SessionEventsPage", () => {
     });
   });
 
-  it("toggles nested view", async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getAllByText("session.start").length).toBeGreaterThanOrEqual(1);
-    });
-
-    const checkboxes = screen.getAllByRole("checkbox", { name: /nested view/i });
-    await user.click(checkboxes[0]!);
-    expect(checkboxes[0]).toBeChecked();
-  });
-
   it("has a refresh button", async () => {
     renderPage();
 
@@ -97,6 +107,27 @@ describe("SessionEventsPage", () => {
 
     const refreshBtns = screen.getAllByRole("button", { name: /refresh/i });
     expect(refreshBtns.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders Back to Sessions link", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("session.start").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const backLinks = screen.getAllByText(/Back to Sessions/);
+    expect(backLinks.length).toBeGreaterThanOrEqual(1);
+    expect(backLinks[0]!.tagName).toBe("A");
+  });
+
+  it("Back to Sessions link includes focus param when abstract session found", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      const backLinks = screen.getAllByText(/Back to Sessions/);
+      expect(backLinks[0]!.getAttribute("href")).toBe("/sessions?focus=abstract-session-1");
+    });
   });
 
   it("polls for new events", async () => {

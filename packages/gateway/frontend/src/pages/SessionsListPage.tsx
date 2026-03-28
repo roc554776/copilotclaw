@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchSessionEvents, fetchSessionIds } from "../api";
-import { SDK_SESSION_ID_SHORT } from "../utils";
+import { useSearchParams } from "react-router-dom";
+import {
+  fetchSessionEvents,
+  fetchSessionIds,
+  fetchStatus,
+  type AgentSession,
+  type PhysicalSession,
+  type StatusResponse,
+} from "../api";
+import { SDK_SESSION_ID_SHORT, SESSION_ID_SHORT } from "../utils";
 
 const CONCURRENCY_LIMIT = 5;
 
-interface SessionSummary {
+interface OrphanSummary {
   sid: string;
   eventCount: number;
-  firstTime: string | null;
-  lastTime: string | null;
   model: string;
 }
 
@@ -42,84 +48,129 @@ async function fetchWithConcurrencyLimit<T>(
   return results;
 }
 
+function collectPhysicalSessionIds(session: AgentSession): Set<string> {
+  const ids = new Set<string>();
+  if (session.physicalSession?.sessionId) {
+    ids.add(session.physicalSession.sessionId);
+  }
+  if (session.physicalSessionHistory) {
+    for (const ps of session.physicalSessionHistory) {
+      ids.add(ps.sessionId);
+    }
+  }
+  return ids;
+}
+
+function PhysicalSessionCard({ ps, label }: { ps: PhysicalSession; label?: string }) {
+  return (
+    <a
+      href={`/sessions/${encodeURIComponent(ps.sessionId)}/events`}
+      style={{ textDecoration: "none", display: "block" }}
+    >
+      <div
+        style={{
+          padding: "0.4rem 0.6rem",
+          border: "1px solid #21262d",
+          borderRadius: "0.3rem",
+          marginBottom: "0.3rem",
+          marginLeft: "1.5rem",
+          fontSize: "0.8rem",
+        }}
+      >
+        {label && (
+          <span style={{ color: "#8b949e", fontSize: "0.75rem", marginRight: "0.5rem" }}>
+            {label}
+          </span>
+        )}
+        <span style={{ color: "#58a6ff", fontWeight: 600 }}>
+          {ps.sessionId.slice(0, SDK_SESSION_ID_SHORT)}
+        </span>
+        <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
+          {ps.model && <>Model: {ps.model} &middot; </>}
+          State: {ps.currentState}
+          {ps.totalInputTokens != null && (
+            <> &middot; Tokens: {ps.totalInputTokens + (ps.totalOutputTokens ?? 0)}</>
+          )}
+        </span>
+      </div>
+    </a>
+  );
+}
+
 export function SessionsListPage() {
-  const [summaries, setSummaries] = useState<SessionSummary[]>([]);
+  const [searchParams] = useSearchParams();
+  const focusId = searchParams.get("focus");
+
+  const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [orphans, setOrphans] = useState<OrphanSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const focusRef = useRef<HTMLDivElement | null>(null);
 
-  const loadSessions = useCallback(async (signal: AbortSignal) => {
+  const loadData = useCallback(async (signal: AbortSignal) => {
     try {
-      const sessionIds = await fetchSessionIds();
+      const [statusData, physicalIds] = await Promise.all([
+        fetchStatus(signal),
+        fetchSessionIds(),
+      ]);
       if (signal.aborted) return;
-      if (sessionIds.length === 0) {
-        setSummaries([]);
-        setLoading(false);
-        return;
-      }
 
-      const results = await fetchWithConcurrencyLimit(
-        sessionIds,
-        async (sid) => {
-          try {
-            const events = await fetchSessionEvents(sid);
-            const first = events[0] ?? null;
-            const last = events[events.length - 1] ?? null;
-            let model = "";
-            for (const e of events) {
-              if (
-                e.type === "session.model_change" &&
-                typeof (e.data as Record<string, unknown>)[
-                  "newModel"
-                ] === "string"
-              ) {
-                model = (e.data as Record<string, unknown>)[
-                  "newModel"
-                ] as string;
-              }
-              if (
-                !model &&
-                e.type === "assistant.usage" &&
-                typeof (e.data as Record<string, unknown>)[
-                  "model"
-                ] === "string"
-              ) {
-                model = (e.data as Record<string, unknown>)[
-                  "model"
-                ] as string;
-              }
-            }
-            return {
-              sid,
-              eventCount: events.length,
-              firstTime: first?.timestamp ?? null,
-              lastTime: last?.timestamp ?? null,
-              model,
-            };
-          } catch {
-            return {
-              sid,
-              eventCount: 0,
-              firstTime: null,
-              lastTime: null,
-              model: "",
-            };
+      setStatus(statusData);
+
+      // Determine which physical session IDs are associated with abstract sessions
+      const knownPhysicalIds = new Set<string>();
+      if (statusData.agent?.sessions) {
+        for (const session of Object.values(statusData.agent.sessions)) {
+          for (const id of collectPhysicalSessionIds(session)) {
+            knownPhysicalIds.add(id);
           }
-        },
-        CONCURRENCY_LIMIT,
-        signal,
-      );
-
-      if (signal.aborted) return;
-
-      const valid: SessionSummary[] = [];
-      for (const r of results) {
-        if (r !== undefined) valid.push(r);
+        }
       }
-      valid.sort((a, b) =>
-        (b.lastTime ?? "").localeCompare(a.lastTime ?? ""),
-      );
-      setSummaries(valid);
+
+      // Orphaned physical sessions = those not in any abstract session
+      const orphanIds = physicalIds.filter((id) => !knownPhysicalIds.has(id));
+
+      if (orphanIds.length > 0) {
+        const results = await fetchWithConcurrencyLimit(
+          orphanIds,
+          async (sid) => {
+            try {
+              const events = await fetchSessionEvents(sid);
+              let model = "";
+              for (const e of events) {
+                if (
+                  e.type === "session.model_change" &&
+                  typeof (e.data as Record<string, unknown>)["newModel"] === "string"
+                ) {
+                  model = (e.data as Record<string, unknown>)["newModel"] as string;
+                }
+                if (
+                  !model &&
+                  e.type === "assistant.usage" &&
+                  typeof (e.data as Record<string, unknown>)["model"] === "string"
+                ) {
+                  model = (e.data as Record<string, unknown>)["model"] as string;
+                }
+              }
+              return { sid, eventCount: events.length, model };
+            } catch {
+              return { sid, eventCount: 0, model: "" };
+            }
+          },
+          CONCURRENCY_LIMIT,
+          signal,
+        );
+        if (signal.aborted) return;
+        const valid: OrphanSummary[] = [];
+        for (const r of results) {
+          if (r !== undefined) valid.push(r);
+        }
+        setOrphans(valid);
+      } else {
+        setOrphans([]);
+      }
+
       setError(null);
     } catch (e) {
       if (signal.aborted) return;
@@ -134,16 +185,24 @@ export function SessionsListPage() {
   useEffect(() => {
     const controller = new AbortController();
     abortRef.current = controller;
-    loadSessions(controller.signal);
+    loadData(controller.signal);
     return () => {
       controller.abort();
     };
-  }, [loadSessions]);
+  }, [loadData]);
+
+  // Scroll focused abstract session into view
+  useEffect(() => {
+    if (focusId && focusRef.current && !loading) {
+      focusRef.current.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    }
+  }, [focusId, loading]);
+
+  const sessions = status?.agent?.sessions ?? {};
+  const sessionEntries = Object.entries(sessions);
 
   return (
-    <div
-      style={{ padding: "1rem", maxWidth: 800, margin: "0 auto" }}
-    >
+    <div style={{ padding: "1rem", maxWidth: 800, margin: "0 auto" }}>
       <a
         href="/status"
         style={{ marginBottom: "1rem", display: "inline-block" }}
@@ -157,7 +216,7 @@ export function SessionsListPage() {
           marginBottom: "1rem",
         }}
       >
-        Physical Sessions
+        Sessions
       </h1>
 
       {loading && (
@@ -170,62 +229,109 @@ export function SessionsListPage() {
           Error: {error}
         </div>
       )}
-      {!loading && summaries.length === 0 && (
+      {!loading && sessionEntries.length === 0 && orphans.length === 0 && (
         <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
-          No physical sessions recorded.
+          No sessions found.
         </div>
       )}
 
-      {summaries.map((s) => (
-        <a
-          key={s.sid}
-          href={`/sessions/${encodeURIComponent(s.sid)}/events`}
-          style={{ textDecoration: "none" }}
-        >
+      {sessionEntries.map(([abstractId, session]) => {
+        const isFocused = focusId === abstractId;
+        return (
           <div
+            key={abstractId}
+            ref={isFocused ? focusRef : undefined}
+            data-testid={`abstract-session-${abstractId}`}
             style={{
-              padding: "0.5rem",
-              border: "1px solid #21262d",
-              borderRadius: "0.3rem",
-              marginBottom: "0.5rem",
+              padding: "0.6rem",
+              border: `2px solid ${isFocused ? "#58a6ff" : "#30363d"}`,
+              borderRadius: "0.4rem",
+              marginBottom: "0.7rem",
             }}
           >
-            <div
-              style={{
-                color: "#58a6ff",
-                fontWeight: 600,
-                fontSize: "0.85rem",
-              }}
-            >
-              {s.sid.slice(0, SDK_SESSION_ID_SHORT)}
-            </div>
-            <div
-              style={{
-                color: "#8b949e",
-                fontSize: "0.8rem",
-                marginTop: "0.2rem",
-              }}
-            >
-              {s.model && <>Model: {s.model} &middot; </>}
-              {s.eventCount} events
-              {s.firstTime && (
-                <>
-                  {" "}
-                  &middot; Started:{" "}
-                  {new Date(s.firstTime).toLocaleString()}
-                </>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <span style={{ color: "#58a6ff", fontWeight: 600, fontSize: "0.9rem" }}>
+                {abstractId.slice(0, SESSION_ID_SHORT)}
+              </span>
+              <span
+                style={{
+                  color: session.status === "active" ? "#3fb950" : "#8b949e",
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                }}
+              >
+                {session.status}
+              </span>
+              {session.boundChannelId && (
+                <span style={{ color: "#8b949e", fontSize: "0.8rem" }}>
+                  Channel: {session.boundChannelId.slice(0, 8)}
+                </span>
               )}
-              {s.lastTime && (
-                <>
-                  {" "}
-                  &middot; Last:{" "}
-                  {new Date(s.lastTime).toLocaleString()}
-                </>
+              {session.startedAt && (
+                <span style={{ color: "#8b949e", fontSize: "0.75rem" }}>
+                  Started: {new Date(session.startedAt).toLocaleString()}
+                </span>
               )}
             </div>
+
+            {/* Current physical session */}
+            {session.physicalSession && (
+              <div style={{ marginTop: "0.4rem" }}>
+                <PhysicalSessionCard ps={session.physicalSession} label="current" />
+              </div>
+            )}
+
+            {/* Physical session history */}
+            {session.physicalSessionHistory && session.physicalSessionHistory.length > 0 && (
+              <div style={{ marginTop: "0.2rem" }}>
+                {session.physicalSessionHistory.map((ps) => (
+                  <PhysicalSessionCard key={ps.sessionId} ps={ps} label="history" />
+                ))}
+              </div>
+            )}
           </div>
-        </a>
-      ))}
+        );
+      })}
+
+      {/* Orphaned physical sessions */}
+      {orphans.length > 0 && (
+        <>
+          <h2
+            style={{
+              fontSize: "1rem",
+              color: "#8b949e",
+              marginTop: "1.5rem",
+              marginBottom: "0.7rem",
+            }}
+          >
+            Other physical sessions
+          </h2>
+          {orphans.map((o) => (
+            <a
+              key={o.sid}
+              href={`/sessions/${encodeURIComponent(o.sid)}/events`}
+              style={{ textDecoration: "none" }}
+            >
+              <div
+                style={{
+                  padding: "0.5rem",
+                  border: "1px solid #21262d",
+                  borderRadius: "0.3rem",
+                  marginBottom: "0.5rem",
+                }}
+              >
+                <div style={{ color: "#58a6ff", fontWeight: 600, fontSize: "0.85rem" }}>
+                  {o.sid.slice(0, SDK_SESSION_ID_SHORT)}
+                </div>
+                <div style={{ color: "#8b949e", fontSize: "0.8rem", marginTop: "0.2rem" }}>
+                  {o.model && <>Model: {o.model} &middot; </>}
+                  {o.eventCount} events
+                </div>
+              </div>
+            </a>
+          ))}
+        </>
+      )}
     </div>
   );
 }

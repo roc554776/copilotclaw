@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { fetchSessionEvents, type SessionEvent } from "../api";
+import { fetchSessionEvents, fetchStatus, type SessionEvent } from "../api";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import { usePolling } from "../hooks/usePolling";
 import { SESSION_ID_SHORT } from "../utils";
@@ -16,10 +16,40 @@ function formatTime(iso: string): string {
 export function SessionEventsPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [events, setEvents] = useState<SessionEvent[]>([]);
-  const [nested, setNested] = useState(false);
+  const [abstractSessionId, setAbstractSessionId] = useState<string | null>(null);
 
   const { containerRef, handleScroll } =
     useAutoScroll<HTMLDivElement>([events.length]);
+
+  // Find which abstract session owns this physical session
+  useEffect(() => {
+    if (!sessionId) return;
+    const controller = new AbortController();
+    fetchStatus(controller.signal)
+      .then((status) => {
+        if (controller.signal.aborted || !status.agent?.sessions) return;
+        for (const [absId, session] of Object.entries(status.agent.sessions)) {
+          if (session.physicalSession?.sessionId === sessionId) {
+            setAbstractSessionId(absId);
+            return;
+          }
+          if (session.physicalSessionHistory) {
+            for (const ps of session.physicalSessionHistory) {
+              if (ps.sessionId === sessionId) {
+                setAbstractSessionId(absId);
+                return;
+              }
+            }
+          }
+        }
+        // Not found in any abstract session
+        setAbstractSessionId(null);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    return () => controller.abort();
+  }, [sessionId]);
 
   const refresh = useCallback(async () => {
     if (!sessionId) return;
@@ -40,126 +70,20 @@ export function SessionEventsPage() {
 
   usePolling(refresh, 2000);
 
-  const renderFlat = () =>
-    events.map((e, i) => (
-      <div
-        key={`${e.timestamp}-${e.type}-${i}`}
-        style={{
-          padding: "0.3rem 0.5rem",
-          borderBottom: "1px solid #21262d",
-          fontSize: "0.8rem",
-        }}
-      >
-        <span style={{ color: "#58a6ff", fontWeight: 600 }}>
-          {e.type}
-        </span>
-        <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
-          {formatTime(e.timestamp)}
-        </span>
-        {e.parentId && (
-          <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
-            [parent: {e.parentId.slice(0, SESSION_ID_SHORT)}]
-          </span>
-        )}
-        <div
-          style={{
-            color: "#7d8590",
-            marginTop: "0.2rem",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-            maxHeight: 200,
-            overflowY: "auto",
-          }}
-        >
-          {JSON.stringify(e.data, null, 2)}
-        </div>
-      </div>
-    ));
-
-  const renderNested = () => {
-    const byParent = new Map<string, SessionEvent[]>();
-    const roots: SessionEvent[] = [];
-
-    for (const e of events) {
-      if (e.parentId) {
-        const list = byParent.get(e.parentId) ?? [];
-        list.push(e);
-        byParent.set(e.parentId, list);
-      } else {
-        roots.push(e);
-      }
-    }
-
-    const renderNode = (
-      e: SessionEvent,
-      idx: number,
-    ): React.ReactNode => {
-      const toolCallId = (e.data as Record<string, unknown>)[
-        "toolCallId"
-      ] as string | undefined;
-      const sid = (e.data as Record<string, unknown>)[
-        "sessionId"
-      ] as string | undefined;
-      const children =
-        byParent.get(toolCallId ?? "") ??
-        byParent.get(sid ?? "") ??
-        [];
-
-      return (
-        <div
-          key={`${e.timestamp}-${e.type}-${idx}`}
-          style={{
-            padding: "0.3rem 0.5rem",
-            borderBottom: "1px solid #21262d",
-            fontSize: "0.8rem",
-          }}
-        >
-          <span style={{ color: "#58a6ff", fontWeight: 600 }}>
-            {e.type}
-          </span>
-          <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
-            {formatTime(e.timestamp)}
-          </span>
-          <div
-            style={{
-              color: "#7d8590",
-              marginTop: "0.2rem",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
-              maxHeight: 200,
-              overflowY: "auto",
-            }}
-          >
-            {JSON.stringify(e.data, null, 2)}
-          </div>
-          {children.length > 0 && (
-            <div
-              style={{
-                marginLeft: "1.5rem",
-                borderLeft: "2px solid #30363d",
-                paddingLeft: "0.5rem",
-              }}
-            >
-              {children.map((child, ci) =>
-                renderNode(child, ci),
-              )}
-            </div>
-          )}
-        </div>
-      );
-    };
-
-    return roots.map((e, i) => renderNode(e, i));
-  };
+  const sessionsLink = abstractSessionId
+    ? `/sessions?focus=${encodeURIComponent(abstractSessionId)}`
+    : "/sessions";
 
   return (
     <div style={{ padding: "1rem" }}>
-      <a
-        href="/status"
-        style={{ marginBottom: "1rem", display: "inline-block" }}
-      >
-        &larr; Back to System Status
-      </a>
+      <div style={{ marginBottom: "1rem", display: "flex", gap: "1rem" }}>
+        <a href="/status" style={{ display: "inline-block" }}>
+          &larr; Back to System Status
+        </a>
+        <a href={sessionsLink} style={{ display: "inline-block" }}>
+          &larr; Back to Sessions
+        </a>
+      </div>
       <h1
         style={{
           fontSize: "1rem",
@@ -187,14 +111,6 @@ export function SessionEventsPage() {
           alignItems: "center",
         }}
       >
-        <label style={{ fontSize: "0.85rem", color: "#8b949e" }}>
-          <input
-            type="checkbox"
-            checked={nested}
-            onChange={(e) => setNested(e.target.checked)}
-          />{" "}
-          Nested view (parent-child)
-        </label>
         <button
           onClick={refresh}
           style={{
@@ -223,7 +139,40 @@ export function SessionEventsPage() {
           padding: "0.5rem",
         }}
       >
-        {nested ? renderNested() : renderFlat()}
+        {events.map((e, i) => (
+          <div
+            key={`${e.timestamp}-${e.type}-${i}`}
+            style={{
+              padding: "0.3rem 0.5rem",
+              borderBottom: "1px solid #21262d",
+              fontSize: "0.8rem",
+            }}
+          >
+            <span style={{ color: "#58a6ff", fontWeight: 600 }}>
+              {e.type}
+            </span>
+            <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
+              {formatTime(e.timestamp)}
+            </span>
+            {e.parentId && (
+              <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
+                [parent: {e.parentId.slice(0, SESSION_ID_SHORT)}]
+              </span>
+            )}
+            <div
+              style={{
+                color: "#7d8590",
+                marginTop: "0.2rem",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+                maxHeight: 200,
+                overflowY: "auto",
+              }}
+            >
+              {JSON.stringify(e.data, null, 2)}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
