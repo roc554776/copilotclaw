@@ -150,7 +150,10 @@ async function main(): Promise<void> {
     if (channelId === undefined || count <= 0) return;
 
     if (!sessionManager.hasActiveSessionForChannel(channelId)) {
-      if (sessionManager.isChannelInBackoff(channelId)) return;
+      if (sessionManager.isChannelInBackoff(channelId)) {
+        log(`skipping session start for channel ${channelId.slice(0, 8)} (in backoff)`);
+        return;
+      }
       log(`starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
       sessionManager.startSession({ boundChannelId: channelId });
     }

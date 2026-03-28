@@ -1039,6 +1039,8 @@ export class AgentSessionManager {
 
     return this.runSession(entry).then(() => {
       if (!entry.abortController.signal.aborted) {
+        const elapsed = Date.now() - startTime;
+        this.log(`session ${sessionId.slice(0, 8)} idle exit after ${Math.round(elapsed / 1000)}s (channel ${boundChannelId?.slice(0, 8) ?? "none"})`);
         this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
         this.notifyChannelSessionStopped(boundChannelId);
