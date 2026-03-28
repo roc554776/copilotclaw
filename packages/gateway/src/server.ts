@@ -1,6 +1,6 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
@@ -12,7 +12,7 @@ import { renderEventsPage, renderSessionsListPage, renderStatusPage } from "./ob
 import { SessionEventStore } from "./session-event-store.js";
 import { Store } from "./store.js";
 import { SseBroadcaster } from "./sse-broadcaster.js";
-import { FRONTEND_DIST_DIR, FRONTEND_INDEX_HTML, hasFrontendDist, isWithinFrontendDist } from "./frontend-dist.js";
+import { FRONTEND_DIST_DIR, FRONTEND_INDEX_HTML, hasFrontendDist } from "./frontend-dist.js";
 
 export { DEFAULT_PORT };
 
@@ -32,28 +32,36 @@ const MIME_TYPES: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
+// Pre-load all frontend assets into memory at startup (Vite outputs a handful of hashed files).
+// This eliminates synchronous file I/O from the request path.
+const assetCache = new Map<string, { content: Buffer; mime: string }>();
+if (hasFrontendDist()) {
+  const assetsDir = join(FRONTEND_DIST_DIR, "assets");
+  try {
+    for (const name of readdirSync(assetsDir)) {
+      const filePath = join(assetsDir, name);
+      try {
+        const stat = statSync(filePath);
+        if (stat.isFile()) {
+          const ext = extname(name);
+          const mime = MIME_TYPES[ext] ?? "application/octet-stream";
+          assetCache.set("/assets/" + name, { content: readFileSync(filePath), mime });
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* assets dir missing */ }
+}
+
 /** Serve SPA HTML page routes or static assets from frontend-dist. Returns true if handled. */
 function serveFrontend(pathname: string, res: ServerResponse): boolean {
   if (!hasFrontendDist()) return false;
 
-  // Serve static assets from frontend-dist/assets/
-  if (pathname.startsWith("/assets/")) {
-    const filePath = resolve(FRONTEND_DIST_DIR, "." + pathname);
-    // Path traversal guard: resolved path must stay within FRONTEND_DIST_DIR
-    if (!isWithinFrontendDist(filePath)) return false;
-    try {
-      const stat = statSync(filePath);
-      if (stat.isFile()) {
-        const ext = extname(filePath);
-        const mime = MIME_TYPES[ext] ?? "application/octet-stream";
-        const content = readFileSync(filePath);
-        res.writeHead(200, { "Content-Type": mime, "Cache-Control": "public, max-age=31536000, immutable" });
-        res.end(content);
-        return true;
-      }
-    } catch {
-      // File not found, fall through
-    }
+  // Serve static assets from pre-loaded cache
+  const cached = assetCache.get(pathname);
+  if (cached !== undefined) {
+    res.writeHead(200, { "Content-Type": cached.mime, "Cache-Control": "public, max-age=31536000, immutable" });
+    res.end(cached.content);
+    return true;
   }
 
   // SPA HTML routes — serve index.html for known page routes
