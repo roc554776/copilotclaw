@@ -184,8 +184,7 @@ export function StatusPage() {
                 </div>
               </div>
 
-              {Object.entries(status.agent.sessions).length > 0 && (
-                <div style={sectionStyle}>
+              <div style={sectionStyle}>
                   <div style={titleStyle}>
                     Sessions{" "}
                     <a
@@ -198,6 +197,11 @@ export function StatusPage() {
                       All sessions &rarr;
                     </a>
                   </div>
+                  {Object.entries(status.agent.sessions).length === 0 && (
+                    <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
+                      No active sessions.
+                    </div>
+                  )}
                   {Object.entries(status.agent.sessions).map(
                     ([id, sess]) => (
                       <div key={id} style={{ marginBottom: "0.5rem" }}>
@@ -454,7 +458,6 @@ export function StatusPage() {
                     ),
                   )}
                 </div>
-              )}
             </>
           ) : (
             <div style={sectionStyle}>

@@ -21,6 +21,7 @@ export interface AgentIpcServerHandle {
   socketPath: string;
   state: AgentIpcState;
   close: () => Promise<void>;
+  setSessionManager: (mgr: AgentSessionManager) => void;
 }
 
 interface IpcRequest {
@@ -120,7 +121,7 @@ function handleStreamMessage(msg: Record<string, unknown>): void {
 function handleConnection(
   socket: Socket,
   state: AgentIpcState,
-  sessionManager: AgentSessionManager | null,
+  sessionManagerRef: { current: AgentSessionManager | null },
   onStop: () => void,
 ): void {
   let buffer = "";
@@ -175,7 +176,7 @@ function handleConnection(
 
         switch (req.method) {
           case "status": {
-            const sessions = sessionManager?.getSessionStatuses() ?? {};
+            const sessions = sessionManagerRef.current?.getSessionStatuses() ?? {};
             socket.write(JSON.stringify({
               version: AGENT_VERSION,
               bootId: state.bootId,
@@ -190,7 +191,7 @@ function handleConnection(
               socket.write(JSON.stringify({ error: "missing sessionId" }) + "\n");
               break;
             }
-            const info = sessionManager?.getSessionStatus(sessionId);
+            const info = sessionManagerRef.current?.getSessionStatus(sessionId);
             if (info === undefined) {
               socket.write(JSON.stringify({ status: "not_running" }) + "\n");
             } else {
@@ -205,8 +206,8 @@ function handleConnection(
             });
             break;
           case "quota":
-            if (sessionManager !== null) {
-              sessionManager.getQuota().then((quota) => {
+            if (sessionManagerRef.current !== null) {
+              sessionManagerRef.current.getQuota().then((quota) => {
                 socket.write(JSON.stringify(quota ?? { error: "no active session" }) + "\n");
               }).catch(() => {
                 socket.write(JSON.stringify({ error: "quota fetch failed" }) + "\n");
@@ -216,8 +217,8 @@ function handleConnection(
             }
             break;
           case "models":
-            if (sessionManager !== null) {
-              sessionManager.getModels().then((models) => {
+            if (sessionManagerRef.current !== null) {
+              sessionManagerRef.current.getModels().then((models) => {
                 socket.write(JSON.stringify(models ?? { error: "no active session" }) + "\n");
               }).catch(() => {
                 socket.write(JSON.stringify({ error: "models fetch failed" }) + "\n");
@@ -232,8 +233,8 @@ function handleConnection(
               socket.write(JSON.stringify({ error: "missing sessionId" }) + "\n");
               break;
             }
-            if (sessionManager !== null) {
-              sessionManager.getSessionMessages(sid).then((messages) => {
+            if (sessionManagerRef.current !== null) {
+              sessionManagerRef.current.getSessionMessages(sid).then((messages) => {
                 socket.write(JSON.stringify(messages ?? { error: "session not found" }) + "\n");
               }).catch(() => {
                 socket.write(JSON.stringify({ error: "messages fetch failed" }) + "\n");
@@ -257,11 +258,12 @@ export type ListenResult =
   | { kind: "server"; handle: AgentIpcServerHandle }
   | { kind: "already-running" };
 
-function createHandle(server: Server, socketPath: string, state: AgentIpcState): AgentIpcServerHandle {
+function createHandle(server: Server, socketPath: string, state: AgentIpcState, sessionManagerRef: { current: AgentSessionManager | null }): AgentIpcServerHandle {
   return {
     server,
     socketPath,
     state,
+    setSessionManager: (mgr: AgentSessionManager) => { sessionManagerRef.current = mgr; },
     close: () => {
       const closePromise = new Promise<void>((res) => {
         server.close(() => {
@@ -286,7 +288,7 @@ export function listenIpc(
   onStop: () => void,
   sessionManager?: AgentSessionManager | null,
 ): Promise<ListenResult> {
-  const mgr = sessionManager ?? null;
+  const sessionManagerRef = { current: sessionManager ?? null };
   const state: AgentIpcState = {
     bootId: randomUUID(),
     startedAt: new Date().toISOString(),
@@ -294,7 +296,7 @@ export function listenIpc(
 
   return new Promise((resolve, reject) => {
     const server = createServer((socket) => {
-      handleConnection(socket, state, mgr, onStop);
+      handleConnection(socket, state, sessionManagerRef, onStop);
     });
 
     server.on("error", (err: NodeJS.ErrnoException) => {
@@ -310,11 +312,11 @@ export function listenIpc(
             server.close();
             try { unlinkSync(socketPath); } catch {}
             const freshServer = createServer((socket) => {
-              handleConnection(socket, state, mgr, onStop);
+              handleConnection(socket, state, sessionManagerRef, onStop);
             });
             freshServer.on("error", (retryErr) => { reject(retryErr); });
             freshServer.listen(socketPath, () => {
-              resolve({ kind: "server", handle: createHandle(freshServer, socketPath, state) });
+              resolve({ kind: "server", handle: createHandle(freshServer, socketPath, state, sessionManagerRef) });
             });
           } else {
             resolve({ kind: "already-running" });
@@ -326,7 +328,7 @@ export function listenIpc(
     });
 
     server.listen(socketPath, () => {
-      resolve({ kind: "server", handle: createHandle(server, socketPath, state) });
+      resolve({ kind: "server", handle: createHandle(server, socketPath, state, sessionManagerRef) });
     });
   });
 }

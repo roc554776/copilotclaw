@@ -133,6 +133,7 @@ async function main(): Promise<void> {
     managerOpts.persistPath = join(config.stateDir, "data", "agent-bindings.json");
   }
   const sessionManager = new AgentSessionManager(managerOpts);
+  ipc.setSessionManager(sessionManager);
 
   // Listen for pending_notify push messages from gateway — start sessions as needed
   const pendingHandler = (msg: Record<string, unknown>) => {

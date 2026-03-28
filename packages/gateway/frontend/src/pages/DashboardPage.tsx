@@ -788,8 +788,7 @@ function StatusModalContent({
           </div>
 
           {/* Sessions */}
-          {Object.entries(status.agent.sessions).length > 0 && (
-            <div style={modalSectionStyle}>
+          <div style={modalSectionStyle}>
               <div style={modalTitleStyle}>
                 Sessions ({Object.keys(status.agent.sessions).length}){" "}
                 <a
@@ -801,6 +800,11 @@ function StatusModalContent({
                   All sessions &rarr;
                 </a>
               </div>
+              {Object.entries(status.agent.sessions).length === 0 && (
+                <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
+                  No active sessions.
+                </div>
+              )}
               {Object.entries(status.agent.sessions).map(([id, sess]) => (
                 <div key={id} style={{ marginBottom: "0.5rem" }}>
                   <div style={modalRowStyle}>
@@ -979,7 +983,6 @@ function StatusModalContent({
                 </div>
               ))}
             </div>
-          )}
         </>
       ) : (
         <div style={modalSectionStyle}>
