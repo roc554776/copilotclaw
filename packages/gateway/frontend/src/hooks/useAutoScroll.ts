@@ -19,19 +19,14 @@ export function useAutoScroll<T extends HTMLElement>(deps: unknown[] = []) {
     isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < THRESHOLD;
   }, []);
 
-  const scrollToBottom = useCallback(() => {
-    const el = containerRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, []);
-
   useEffect(() => {
     if (isAtBottomRef.current) {
-      scrollToBottom();
+      const el = containerRef.current;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
-  return { containerRef, handleScroll, scrollToBottom, isAtBottomRef };
+  return { containerRef, handleScroll, isAtBottomRef };
 }

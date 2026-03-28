@@ -54,24 +54,11 @@ describe("useAutoScroll", () => {
     expect(result.current.isAtBottomRef.current).toBe(true);
   });
 
-  it("scrollToBottom sets scrollTop to scrollHeight", () => {
+  it("returns containerRef and handleScroll in the hook result", () => {
     const { result } = renderHook(() => useAutoScroll<HTMLDivElement>());
 
-    const fakeEl = {
-      scrollHeight: 1000,
-      scrollTop: 0,
-      clientHeight: 400,
-    } as unknown as HTMLDivElement;
-
-    Object.defineProperty(result.current.containerRef, "current", {
-      writable: true,
-      value: fakeEl,
-    });
-
-    act(() => {
-      result.current.scrollToBottom();
-    });
-
-    expect(fakeEl.scrollTop).toBe(1000);
+    expect(result.current.containerRef).toBeDefined();
+    expect(typeof result.current.handleScroll).toBe("function");
+    expect(result.current.isAtBottomRef).toBeDefined();
   });
 });

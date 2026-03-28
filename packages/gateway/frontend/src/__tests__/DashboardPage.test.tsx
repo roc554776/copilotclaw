@@ -41,18 +41,23 @@ const mockStatus = {
   config: {},
 };
 
-// Mock EventSource
+// Mock EventSource — must be set on globalThis before component mounts
 class MockEventSource {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
-  close() {}
+  readyState = 1;
+  close() {
+    this.readyState = 2;
+  }
 }
+
+// Set early so it's available even before beforeEach runs
+(globalThis as unknown as Record<string, unknown>).EventSource = MockEventSource;
 
 describe("DashboardPage", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    (globalThis as unknown as Record<string, unknown>).EventSource = MockEventSource;
 
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
       const urlStr = typeof url === "string" ? url : (url as Request).url;
@@ -81,7 +86,6 @@ describe("DashboardPage", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    delete (globalThis as unknown as Record<string, unknown>).EventSource;
   });
 
   it("renders chat messages", async () => {

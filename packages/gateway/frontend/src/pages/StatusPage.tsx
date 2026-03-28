@@ -79,9 +79,19 @@ export function StatusPage() {
   usePolling(refresh, 5000);
 
   const loadSessionPrompt = async (sessionId: string) => {
-    const data = await fetchSessionPrompt(sessionId);
-    if (data) {
-      setSessionPrompts((prev) => [...prev, { sessionId, data }]);
+    try {
+      // Prevent duplicate loads
+      if (sessionPrompts.some((sp) => sp.sessionId === sessionId)) return;
+      const data = await fetchSessionPrompt(sessionId);
+      if (data) {
+        setSessionPrompts((prev) => {
+          // Double-check to prevent race condition duplicates
+          if (prev.some((sp) => sp.sessionId === sessionId)) return prev;
+          return [...prev, { sessionId, data }];
+        });
+      }
+    } catch {
+      /* ignore fetch errors */
     }
   };
 
@@ -380,8 +390,8 @@ export function StatusPage() {
       {originalPrompts.length > 0 && (
         <div style={sectionStyle}>
           <div style={titleStyle}>Original System Prompts (from Copilot SDK)</div>
-          {originalPrompts.map((p, i) => (
-            <div key={i} style={{ marginTop: "0.5rem" }}>
+          {originalPrompts.map((p) => (
+            <div key={`${p.model}:${p.capturedAt}`} style={{ marginTop: "0.5rem" }}>
               <div style={{ fontSize: "0.8rem", color: "#8b949e", marginBottom: "0.3rem" }}>
                 Model: {p.model} -- Captured: {p.capturedAt}
               </div>
@@ -392,8 +402,8 @@ export function StatusPage() {
       )}
 
       {/* Session Prompts loaded on demand */}
-      {sessionPrompts.map((sp, i) => (
-        <div key={i} style={sectionStyle}>
+      {sessionPrompts.map((sp) => (
+        <div key={sp.sessionId} style={sectionStyle}>
           <div style={titleStyle}>Session System Prompt ({sp.data.model})</div>
           <pre style={preStyle}>{sp.data.prompt}</pre>
         </div>

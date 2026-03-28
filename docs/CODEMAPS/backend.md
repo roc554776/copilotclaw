@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-27 | Files scanned: 41 | Version: 0.30.0 | Token estimate: ~3400 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Files scanned: 41 | Version: 0.31.0 | Token estimate: ~3800 -->
 
 # Backend
 
@@ -38,7 +38,7 @@ GET  /                                    → 200 HTML dashboard (status bar + c
 ### Key Files
 
 ```
-src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents; /api/quota, /api/models, and /api/sessions/:sessionId/messages proxy to agent via agentManager; /api/status config includes stateDir from getStateDir(); ServerDeps accepts optional sessionEventStore; observability routes (session events, system prompts) gated on sessionEventStore presence; /status and /sessions/:id/events serve standalone HTML pages via observability-pages.ts
+src/server.ts              — HTTP server, route handler, startServer(), GATEWAY_VERSION from package.json; /api/logs endpoint serves LogBuffer contents; /api/quota, /api/models, and /api/sessions/:sessionId/messages proxy to agent via agentManager; /api/status config includes stateDir from getStateDir(); ServerDeps accepts optional sessionEventStore; observability routes (session events, system prompts) gated on sessionEventStore presence; serves React SPA from frontend-dist/ for page routes and static assets (serveFrontend helper); falls back to server-rendered HTML via observability-pages.ts when frontend-dist/ not built; /status and /sessions/:id/events serve standalone HTML pages as fallback
 src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, getStateDir, CONFIG_ENV_VARS, parseBool helper; profile-aware ({{stateDir}}/config.json where {{stateDir}}=~/.copilotclaw/ or ~/.copilotclaw-{{profile}}/); getStateDir() returns state dir base path (used by workspace.ts for workspace/ and data/ subdirs); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS) take precedence over file values; CopilotclawConfig includes configVersion, model, zeroPremium, debugMockCopilotUnsafeTools, auth fields; AuthContainerConfig wraps AuthConfig as `github` field (v0.25.0); AuthConfig interface defines auth configuration (type: "gh-cli"|"pat"|"command", plus type-specific fields); CopilotclawConfig.auth is AuthContainerConfig (not AuthConfig); loadConfig applies migrateConfig and writes back if migrated, passes through auth from file config; saveConfig stamps LATEST_CONFIG_VERSION; ensureConfigFile includes configVersion; LATEST_CONFIG_VERSION = 2; MIGRATIONS registry for sequential schema migration (v1→v2: moves auth.* into auth.github.*); migrateConfig(raw) applies migrations from current version to LATEST_CONFIG_VERSION, returns { config, migrated }
 src/config-cli.ts          — `copilotclaw config` CLI: configGet (resolve + display, notes env var override), configSet (validate + save, warns if env var shadows); valid keys: upstream, port, model, zeroPremium, debugMockCopilotUnsafeTools; BOOLEAN_KEYS handling for zeroPremium/debugMockCopilotUnsafeTools
 src/daemon.ts              — daemon entry point (ensureWorkspace creates data/ + workspace/ dirs + Store init with SQLite persistPath=getStoreDbPath() and legacyJsonPath=getStoreFilePath() for one-time JSON migration + LogBuffer creation + enableFileOutput to {{stateDir}}/data/gateway.log + console intercept + creates SessionEventStore(dataDir) + passes to startServer on resolvePort() + periodic agent monitor every 30s, max 3 retries)
@@ -57,6 +57,7 @@ src/session-event-store.ts — SessionEventStore: SQLite-based event storage (se
 src/observability-pages.ts — renderStatusPage() and renderEventsPage(): standalone HTML pages for system status and session events stream (flat/nested toggle, auto-scroll); status page shows stopped session history per session via <details> element (v0.30.0)
 src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening); status modal shows physical session details (with elapsed time, accumulated tokens in/out/total), cumulative tokens across physical sessions (v0.27.0), subagent sessions, premium requests, available models; quota display uses /api/quota with fallback to latestQuotaSnapshots from session data; showSessionDetail() fetches and displays copilot session context detail via /api/sessions/:sessionId/messages; modal includes "Open in new tab" link to /status page; physical sessions have "View events" link to /sessions/:id/events; stopped session history shown as collapsed toggle ("Stopped sessions (N) ▸") with model, tokens, started time, and events link per entry (v0.30.0)
 src/sse-broadcaster.ts                  — SseBroadcaster: SSE event broadcasting to connected clients
+frontend/                  — Vite + React + TypeScript SPA (v0.31.0); see Frontend section below
 src/doctor.ts              — `copilotclaw doctor` CLI: checkWorkspace, checkConfig, checkGateway, checkAgent, checkZeroPremium, checkAuth diagnostics; checkWorkspace uses checkWorkspaceHealth from setup.ts to verify workspace files and git init; checkConfig validates configVersion (warns if missing or unexpected); checkAuth reads config.auth?.github (v0.25.0); runDoctor orchestrates checks and optional --fix (fixWorkspace calls ensureWorkspaceReady, fixConfig, fixStaleSocket); exits 1 on failures
 src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); uses createRequire to resolve @copilotclaw/agent package path; ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods; getQuota(), getModels(), and getSessionMessages() proxy to agent IPC; MIN_AGENT_VERSION exported; semverSatisfies exported (used by doctor); agent stderr redirected to {{stateDir}}/data/agent.log on spawn (openSync append mode)
 src/ipc-client.ts          — IPC client (status/stop/quota/models/session_messages to agent process); AgentStatusResponse includes bootId field; AgentSessionStatusResponse status includes "suspended" (v0.27.0 fix), cumulativeInputTokens, cumulativeOutputTokens (v0.27.0), physicalSessionHistory (PhysicalSessionSummary[], v0.30.0); PhysicalSessionSummary type (includes totalInputTokens, totalOutputTokens, latestQuotaSnapshots); SubagentInfo type; getAgentQuota(), getAgentModels(), and getAgentSessionMessages() functions
@@ -160,6 +161,47 @@ src/stop.ts                     — CLI stop command (IPC stop)
 src/tools/channel.ts            — send_message, receive_input (drains subagent completions; try-catch swallows ALL exceptions → keepalive response, console.error only), list_messages; exports SubagentCompletionInfo
 ```
 
+## Frontend SPA (packages/gateway/frontend, v0.31.0)
+
+Vite + React + TypeScript single-page application. Built to `frontend-dist/` and served by gateway server with fallback to old server-rendered pages.
+
+### Routes (App.tsx via react-router-dom)
+
+```
+/                              → DashboardPage (chat UI with channels, SSE, status bar, logs panel)
+/status                        → StatusPage (gateway, agent, sessions, config, system prompts; elapsed time helper; 5s auto-refresh)
+/sessions                      → SessionsListPage (all physical sessions with event counts, model, time range)
+/sessions/:sessionId/events    → SessionEventsPage (session events with event count in heading, flat/nested toggle, auto-scroll; 2s auto-refresh)
+```
+
+### Key Files
+
+```
+index.html                     — SPA entry point
+vite.config.ts                 — Vite config (React plugin, build output to ../frontend-dist/)
+vitest.config.ts               — Vitest config for frontend tests (jsdom environment)
+src/main.tsx                   — React DOM root mount
+src/App.tsx                    — BrowserRouter with route definitions
+src/global.css                 — Global styles
+src/api.ts                     — Typed fetch wrappers for all gateway API endpoints (Channel, Message, StatusResponse, SessionEvent, QuotaResponse, ModelsResponse, etc.)
+src/hooks/useAutoScroll.ts     — Position-based auto-scroll hook (follows bottom, disengages on scroll-up, re-engages at bottom)
+src/hooks/usePolling.ts        — Generic polling hook (immediate call + setInterval, cleanup on unmount)
+src/pages/DashboardPage.tsx    — Chat dashboard (channel management, message list, input form, SSE events, status bar, logs panel)
+src/pages/StatusPage.tsx       — System status page (gateway/agent/sessions/config display, elapsed time helper, session prompt loading, cumulative tokens, physical session history)
+src/pages/SessionsListPage.tsx — Physical sessions list (fetches all session IDs, loads events per session for summary, sorted by last event time)
+src/pages/SessionEventsPage.tsx — Session event viewer (flat/nested toggle, event count display, auto-scroll via useAutoScroll, 2s polling via usePolling)
+src/__tests__/setup.ts         — Test setup (jsdom + @testing-library/jest-dom matchers)
+src/__tests__/*.test.tsx       — Component tests (SessionEventsPage, StatusPage, DashboardPage, useAutoScroll)
+```
+
+### Build Scripts (in packages/gateway/package.json)
+
+```
+build:frontend                 — cd frontend && npx vite build (outputs to frontend-dist/)
+dev:frontend                   — cd frontend && npx vite (dev server with HMR)
+test:frontend                  — cd frontend && npx vitest run
+```
+
 ## Testing
 
 ### Configuration
@@ -169,10 +211,11 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (294 total: 286 vitest + 8 Playwright)
+### Test Suites (317 total: 309 vitest + 8 Playwright)
 
 ```
-Gateway vitest (203 tests) — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store tests)
-Agent vitest (83 tests)    — unit tests with mock Copilot SDK session (includes structured-logger, token-resolver tests)
+Gateway vitest (203 tests)   — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store tests)
+Agent vitest (84 tests)      — unit tests with mock Copilot SDK session (includes structured-logger, token-resolver tests)
+Frontend vitest (22 tests)   — React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, useAutoScroll) via jsdom + @testing-library/react
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```

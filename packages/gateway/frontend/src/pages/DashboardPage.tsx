@@ -39,6 +39,7 @@ export function DashboardPage() {
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const evtSourceRef = useRef<EventSource | null>(null);
+  const refreshStatusRef = useRef<() => void>(() => {});
 
   const activeChannelId = searchParams.get("channel") ?? channels[0]?.id;
 
@@ -83,7 +84,7 @@ export function DashboardPage() {
         const event = JSON.parse(e.data as string) as { type: string; data?: Record<string, unknown> };
         if (event.type === "new_message") {
           refreshMessages();
-          refreshStatus();
+          refreshStatusRef.current();
         } else if (event.type === "status_update") {
           const d = event.data;
           if (d) {
@@ -126,6 +127,8 @@ export function DashboardPage() {
       /* ignore */
     }
   }, [activeChannelId]);
+
+  refreshStatusRef.current = refreshStatus;
 
   usePolling(refreshStatus, 5000);
 
@@ -206,6 +209,8 @@ export function DashboardPage() {
       >
         <span>
           <span
+            role="status"
+            aria-label={sseConnected ? "SSE connected" : "SSE disconnected"}
             style={{
               display: "inline-block",
               width: 6,
@@ -307,6 +312,7 @@ export function DashboardPage() {
           >
             <button
               onClick={() => setShowModal(false)}
+              aria-label="Close modal"
               style={{
                 position: "absolute",
                 top: "0.75rem",
@@ -381,6 +387,7 @@ export function DashboardPage() {
         })}
         <button
           onClick={handleNewChannel}
+          aria-label="Create new channel"
           style={{
             padding: "0.4rem 0.6rem",
             background: "none",

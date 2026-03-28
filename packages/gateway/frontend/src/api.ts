@@ -174,8 +174,3 @@ export async function fetchSessionPrompt(sessionId: string): Promise<SessionProm
   return res.json() as Promise<SessionPrompt>;
 }
 
-export async function fetchSessionMessages(sessionId: string): Promise<unknown[] | null> {
-  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
-  if (!res.ok) return null;
-  return res.json() as Promise<unknown[]>;
-}
