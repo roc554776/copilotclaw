@@ -63,6 +63,20 @@ Every implementation must include automated tests. PRs with implementation only 
 - Test doubles (mocks / stubs) must be implemented in place. Tests must never be skipped due to missing test doubles
 - E2E tests start servers on dedicated ports (`port: 0`) to isolate from the production environment
 
+## OpenTelemetry
+
+copilotclaw supports OpenTelemetry for logs and metrics export. Configure OTLP endpoints in `config.json`:
+
+```json
+{
+  "otel": {
+    "endpoints": ["http://localhost:4318"]
+  }
+}
+```
+
+When endpoints are configured, logs emitted via `StructuredLogger` and metrics (session counts, token usage) are exported to all listed OTLP HTTP endpoints. When no endpoints are configured, OTel export is disabled but internal structured logging continues unchanged.
+
 ## Versioning
 
 - Gateway and agent are versioned independently via `package.json`

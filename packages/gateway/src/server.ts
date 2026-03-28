@@ -189,6 +189,7 @@ function createRequestHandler(
           // Full auth config is safe to expose on localhost — values are references
           // to secrets (env var names, file paths, commands), not secrets themselves.
           auth: config.auth?.github ?? null,
+          otel: config.otel ?? null,
         },
       });
       return;

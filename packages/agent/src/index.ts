@@ -2,11 +2,16 @@ import { join } from "node:path";
 import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { listenIpc } from "./ipc-server.js";
+import { initOtel, getLogger, shutdownOtel } from "./otel.js";
 import { StructuredLogger } from "./structured-logger.js";
 import { type AuthConfig, resolveToken } from "./token-resolver.js";
 
 const GATEWAY_URL = process.env["COPILOTCLAW_GATEWAY_URL"] ?? "http://localhost:19741";
 const POLL_INTERVAL_MS = 5000;
+
+interface OtelConfig {
+  endpoints?: string[];
+}
 
 interface GatewayConfig {
   model: string | null;
@@ -15,6 +20,7 @@ interface GatewayConfig {
   stateDir: string | null;
   workspaceRoot: string | null;
   auth: AuthConfig | null;
+  otel: OtelConfig | null;
 }
 
 let structuredLogger: StructuredLogger | undefined;
@@ -39,7 +45,7 @@ async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
   } catch (err: unknown) {
     log(`failed to fetch gateway config: ${String(err)}`);
   }
-  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null };
+  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null, otel: null };
 }
 
 async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, number>> {
@@ -75,13 +81,18 @@ async function main(): Promise<void> {
   const config = await fetchGatewayConfig(GATEWAY_URL);
   log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, debugMockCopilotUnsafeTools=${config.debugMockCopilotUnsafeTools}`);
 
+  // Initialize OpenTelemetry (before structured logger, so bridge is available)
+  const otelEndpoints = config.otel?.endpoints ?? [];
+  initOtel({ endpoints: otelEndpoints, serviceName: "copilotclaw-agent" });
+  const otelLoggerRaw = getLogger("agent");
+
   // Initialize structured logger if state dir is available.
   // When stateDir is null (gateway unreachable at startup), structured
   // file logging is unavailable — stderr redirect from gateway is the fallback.
   if (config.stateDir !== null) {
     const dataDir = join(config.stateDir, "data");
     const agentLogPath = join(dataDir, "agent.log");
-    structuredLogger = new StructuredLogger(agentLogPath, "agent");
+    structuredLogger = new StructuredLogger(agentLogPath, "agent", otelLoggerRaw);
     log("structured logger initialized");
   }
 
@@ -168,6 +179,7 @@ async function main(): Promise<void> {
   log("shutting down");
   await sessionManager.stopAll();
   await ipc.close();
+  await shutdownOtel();
 }
 
 main().catch((err: unknown) => {

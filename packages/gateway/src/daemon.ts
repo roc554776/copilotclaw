@@ -1,7 +1,9 @@
 import { join } from "node:path";
 import { AgentManager } from "./agent-manager.js";
-import { getProfileName, resolvePort } from "./config.js";
+import { getProfileName, loadConfig, resolvePort } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
+import { initOtel, shutdownOtel } from "./otel.js";
+import { initMetrics } from "./otel-metrics.js";
 import { startServer } from "./server.js";
 import { SessionEventStore } from "./session-event-store.js";
 import { Store } from "./store.js";
@@ -17,6 +19,12 @@ async function main(): Promise<void> {
   const logBuffer = new LogBuffer();
   logBuffer.enableFileOutput(join(getDataDir(getProfileName()), "gateway.log"));
   logBuffer.interceptConsole();
+
+  // Initialize OpenTelemetry (before any structured logging)
+  const config = loadConfig(getProfileName());
+  const otelEndpoints = config.otel?.endpoints ?? [];
+  initOtel({ endpoints: otelEndpoints, serviceName: "copilotclaw-gateway" });
+  initMetrics();
   const store = new Store({ persistPath: getStoreDbPath(getProfileName()), legacyJsonPath: getStoreFilePath(getProfileName()) });
   const port = resolvePort(getProfileName());
   const agentManager = new AgentManager({ gatewayPort: port });
@@ -60,6 +68,14 @@ async function main(): Promise<void> {
     }
   }, AGENT_MONITOR_INTERVAL_MS);
   monitor.unref();
+
+  // Graceful OTel shutdown on process exit
+  const gracefulShutdown = async (): Promise<void> => {
+    await shutdownOtel();
+    process.exit(0);
+  };
+  process.once("SIGTERM", () => { gracefulShutdown(); });
+  process.once("SIGINT", () => { gracefulShutdown(); });
 }
 
 main().catch((err: unknown) => {

@@ -95,9 +95,10 @@
 
 - セッションビューア UI 改善（`/sessions` を抽象セッション主体の階層表示に変更、`?focus` パラメタによるフォーカス、イベントページからの「Back to Sessions」ナビゲーション、parentId ネスト表示の廃止）
 
+- OpenTelemetry 導入（@opentelemetry/api + sdk-logs + sdk-metrics。StructuredLogger への OTel ログブリッジ統合、config.json `otel.endpoints` 設定、config migration v2→v3、copilotclaw.sessions.active/suspended ゲージ + copilotclaw.tokens.input/output カウンター、console.error の構造化ログ移行）
+
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
-- OpenTelemetry 本格導入（全ログ・メトリクスの OTel シグナル出力、config.json での OTLP エンドポイント設定、非構造化ログの完全移行）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）
 - コーディング支援ツール群（ファイル操作・シェル実行・検索・Git）の実装
 - Observability スタックの独立リポジトリへの分離（`.example` パターンの導入を含む）

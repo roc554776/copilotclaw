@@ -80,6 +80,28 @@ describe("config migration", () => {
       expect(config["auth"]).toEqual({ github: { type: "gh-auth", user: "already-nested" } });
     });
 
+    it("migrates v2 to v3 (configVersion bump only)", () => {
+      const { config, migrated } = migrateConfig({
+        configVersion: 2,
+        port: 19741,
+        auth: { github: { type: "gh-auth" } },
+      });
+      expect(migrated).toBe(true);
+      expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
+      expect(config["port"]).toBe(19741);
+      expect(config["auth"]).toEqual({ github: { type: "gh-auth" } });
+    });
+
+    it("preserves otel config during v2→v3 migration", () => {
+      const { config, migrated } = migrateConfig({
+        configVersion: 2,
+        otel: { endpoints: ["http://localhost:4318"] },
+      });
+      expect(migrated).toBe(true);
+      expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
+      expect(config["otel"]).toEqual({ endpoints: ["http://localhost:4318"] });
+    });
+
     it("does not migrate when configVersion is above latest (future version)", () => {
       const { config, migrated } = migrateConfig({ configVersion: 99, port: 19741 });
       expect(migrated).toBe(false);

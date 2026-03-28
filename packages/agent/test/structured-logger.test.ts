@@ -73,4 +73,44 @@ describe("StructuredLogger", () => {
     const logger = new StructuredLogger(tempDir, "agent");
     expect(() => logger.info("should not crash")).not.toThrow();
   });
+
+  it("emits to OTel logger bridge when provided", () => {
+    const logPath = join(tempDir, "otel-test.log");
+    const emitted: Array<Record<string, unknown>> = [];
+    const mockOtelLogger = {
+      emit(record: Record<string, unknown>) {
+        emitted.push(record);
+      },
+    };
+
+    const logger = new StructuredLogger(logPath, "agent", mockOtelLogger);
+    logger.info("test info", { key: "value" });
+    logger.error("test error");
+
+    // File output still works
+    const lines = readFileSync(logPath, "utf-8").trim().split("\n");
+    expect(lines).toHaveLength(2);
+
+    // OTel bridge received log records
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]!.severityNumber).toBe(9); // INFO
+    expect(emitted[0]!.body).toBe("test info");
+    expect(emitted[0]!.attributes).toEqual({ component: "agent", key: "value" });
+    expect(emitted[1]!.severityNumber).toBe(17); // ERROR
+    expect(emitted[1]!.body).toBe("test error");
+  });
+
+  it("does not crash when OTel bridge throws", () => {
+    const logPath = join(tempDir, "otel-error-test.log");
+    const failingBridge = {
+      emit() {
+        throw new Error("OTel export failed");
+      },
+    };
+
+    const logger = new StructuredLogger(logPath, "agent", failingBridge);
+    expect(() => logger.info("should not crash")).not.toThrow();
+    const content = readFileSync(logPath, "utf-8");
+    expect(content).toContain("should not crash");
+  });
 });
