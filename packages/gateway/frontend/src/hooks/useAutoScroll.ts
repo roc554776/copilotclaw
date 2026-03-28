@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 
+const THRESHOLD = 50;
+
 /**
  * Position-based auto-scroll hook.
  *
@@ -7,11 +9,12 @@ import { useCallback, useEffect, useRef } from "react";
  * causes auto-follow. If the user has scrolled up, auto-follow is disabled
  * until they scroll back to the bottom.
  */
-export function useAutoScroll<T extends HTMLElement>(deps: unknown[] = []) {
+export function useAutoScroll<T extends HTMLElement>(
+  /** Primitive values that signal new content has been added (e.g. `[items.length]`). */
+  deps: React.DependencyList = [],
+) {
   const containerRef = useRef<T>(null);
   const isAtBottomRef = useRef(true);
-
-  const THRESHOLD = 50;
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current;

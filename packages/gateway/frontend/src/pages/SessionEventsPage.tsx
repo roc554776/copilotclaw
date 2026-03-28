@@ -1,23 +1,38 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchSessionEvents, type SessionEvent } from "../api";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import { usePolling } from "../hooks/usePolling";
+import { SESSION_ID_SHORT } from "../utils";
+
+function formatTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString();
+  } catch {
+    return iso;
+  }
+}
 
 export function SessionEventsPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [nested, setNested] = useState(false);
-  const lastEventCountRef = useRef(0);
 
-  const { containerRef, handleScroll } = useAutoScroll<HTMLDivElement>([events.length]);
+  const { containerRef, handleScroll } =
+    useAutoScroll<HTMLDivElement>([events.length]);
 
   const refresh = useCallback(async () => {
     if (!sessionId) return;
     try {
-      const newEvents = await fetchSessionEvents(sessionId);
-      setEvents(newEvents);
-      lastEventCountRef.current = newEvents.length;
+      const allEvents = await fetchSessionEvents(sessionId);
+      setEvents((prev) => {
+        if (allEvents.length === prev.length) return prev;
+        if (allEvents.length > prev.length) {
+          const newSlice = allEvents.slice(prev.length);
+          return [...prev, ...newSlice];
+        }
+        return allEvents;
+      });
     } catch {
       /* ignore */
     }
@@ -25,29 +40,25 @@ export function SessionEventsPage() {
 
   usePolling(refresh, 2000);
 
-  const formatTime = (iso: string) => {
-    try {
-      return new Date(iso).toLocaleTimeString();
-    } catch {
-      return iso;
-    }
-  };
-
   const renderFlat = () =>
     events.map((e, i) => (
       <div
-        key={i}
+        key={`${e.timestamp}-${e.type}-${i}`}
         style={{
           padding: "0.3rem 0.5rem",
           borderBottom: "1px solid #21262d",
           fontSize: "0.8rem",
         }}
       >
-        <span style={{ color: "#58a6ff", fontWeight: 600 }}>{e.type}</span>
-        <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>{formatTime(e.timestamp)}</span>
+        <span style={{ color: "#58a6ff", fontWeight: 600 }}>
+          {e.type}
+        </span>
+        <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
+          {formatTime(e.timestamp)}
+        </span>
         {e.parentId && (
           <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
-            [parent: {e.parentId.slice(0, 8)}]
+            [parent: {e.parentId.slice(0, SESSION_ID_SHORT)}]
           </span>
         )}
         <div
@@ -79,21 +90,33 @@ export function SessionEventsPage() {
       }
     }
 
-    const renderNode = (e: SessionEvent, idx: number): React.ReactNode => {
-      const toolCallId = (e.data as Record<string, unknown>)["toolCallId"] as string | undefined;
-      const sid = (e.data as Record<string, unknown>)["sessionId"] as string | undefined;
-      const children = byParent.get(toolCallId ?? "") ?? byParent.get(sid ?? "") ?? [];
+    const renderNode = (
+      e: SessionEvent,
+      idx: number,
+    ): React.ReactNode => {
+      const toolCallId = (e.data as Record<string, unknown>)[
+        "toolCallId"
+      ] as string | undefined;
+      const sid = (e.data as Record<string, unknown>)[
+        "sessionId"
+      ] as string | undefined;
+      const children =
+        byParent.get(toolCallId ?? "") ??
+        byParent.get(sid ?? "") ??
+        [];
 
       return (
         <div
-          key={idx}
+          key={`${e.timestamp}-${e.type}-${idx}`}
           style={{
             padding: "0.3rem 0.5rem",
             borderBottom: "1px solid #21262d",
             fontSize: "0.8rem",
           }}
         >
-          <span style={{ color: "#58a6ff", fontWeight: 600 }}>{e.type}</span>
+          <span style={{ color: "#58a6ff", fontWeight: 600 }}>
+            {e.type}
+          </span>
           <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
             {formatTime(e.timestamp)}
           </span>
@@ -117,7 +140,9 @@ export function SessionEventsPage() {
                 paddingLeft: "0.5rem",
               }}
             >
-              {children.map((child, ci) => renderNode(child, ci))}
+              {children.map((child, ci) =>
+                renderNode(child, ci),
+              )}
             </div>
           )}
         </div>
@@ -129,12 +154,27 @@ export function SessionEventsPage() {
 
   return (
     <div style={{ padding: "1rem" }}>
-      <a href="/status" style={{ marginBottom: "1rem", display: "inline-block" }}>
+      <a
+        href="/status"
+        style={{ marginBottom: "1rem", display: "inline-block" }}
+      >
         &larr; Back to System Status
       </a>
-      <h1 style={{ fontSize: "1rem", color: "#58a6ff", marginBottom: "0.5rem" }}>
+      <h1
+        style={{
+          fontSize: "1rem",
+          color: "#58a6ff",
+          marginBottom: "0.5rem",
+        }}
+      >
         Session Events
-        <span style={{ color: "#8b949e", fontSize: "0.8rem", marginLeft: "1rem" }}>
+        <span
+          style={{
+            color: "#8b949e",
+            fontSize: "0.8rem",
+            marginLeft: "1rem",
+          }}
+        >
           ({events.length} events)
         </span>
       </h1>

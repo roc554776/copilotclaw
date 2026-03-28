@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   fetchOriginalPrompts,
   fetchSessionPrompt,
@@ -8,17 +8,7 @@ import {
   type StatusResponse,
 } from "../api";
 import { usePolling } from "../hooks/usePolling";
-
-function elapsed(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  if (isNaN(ms) || ms < 0) return "--";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
+import { elapsed, SESSION_ID_SHORT, SDK_SESSION_ID_SHORT } from "../utils";
 
 const sectionStyle: React.CSSProperties = {
   marginBottom: "1rem",
@@ -52,10 +42,54 @@ const preStyle: React.CSSProperties = {
   overflowY: "auto",
 };
 
+function CumulativeTokens({
+  sess,
+}: {
+  sess: {
+    cumulativeInputTokens?: number;
+    cumulativeOutputTokens?: number;
+    physicalSession?: {
+      totalInputTokens?: number;
+      totalOutputTokens?: number;
+    };
+  };
+}) {
+  if (
+    sess.cumulativeInputTokens == null &&
+    sess.cumulativeOutputTokens == null
+  )
+    return null;
+  const cIn =
+    (sess.cumulativeInputTokens ?? 0) +
+    (sess.physicalSession?.totalInputTokens ?? 0);
+  const cOut =
+    (sess.cumulativeOutputTokens ?? 0) +
+    (sess.physicalSession?.totalOutputTokens ?? 0);
+  if (cIn === 0 && cOut === 0) return null;
+  return (
+    <div
+      style={{
+        marginLeft: "1rem",
+        fontSize: "0.8rem",
+        color: "#8b949e",
+      }}
+    >
+      <div style={rowStyle}>
+        <span style={labelStyle}>Cumulative tokens</span>
+        <span>
+          in: {cIn} / out: {cOut} / total: {cIn + cOut}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function StatusPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [originalPrompts, setOriginalPrompts] = useState<OriginalPrompt[]>([]);
+  const [originalPrompts, setOriginalPrompts] = useState<OriginalPrompt[]>(
+    [],
+  );
   const [sessionPrompts, setSessionPrompts] = useState<
     Array<{ sessionId: string; data: SessionPrompt }>
   >([]);
@@ -78,37 +112,44 @@ export function StatusPage() {
 
   usePolling(refresh, 5000);
 
-  const loadSessionPrompt = async (sessionId: string) => {
+  const loadingPromptsRef = useRef(new Set<string>());
+  const loadSessionPrompt = useCallback(async (sessionId: string) => {
+    if (loadingPromptsRef.current.has(sessionId)) return;
+    loadingPromptsRef.current.add(sessionId);
     try {
-      // Prevent duplicate loads
-      if (sessionPrompts.some((sp) => sp.sessionId === sessionId)) return;
       const data = await fetchSessionPrompt(sessionId);
       if (data) {
         setSessionPrompts((prev) => {
-          // Double-check to prevent race condition duplicates
           if (prev.some((sp) => sp.sessionId === sessionId)) return prev;
           return [...prev, { sessionId, data }];
         });
       }
-    } catch {
-      /* ignore fetch errors */
+    } finally {
+      loadingPromptsRef.current.delete(sessionId);
     }
-  };
+  }, []);
 
   return (
     <div style={{ padding: "1rem", maxWidth: 800, margin: "0 auto" }}>
       <a href="/" style={{ marginBottom: "1rem", display: "inline-block" }}>
         &larr; Back to chat
       </a>
-      <h1 style={{ fontSize: "1.2rem", color: "#58a6ff", marginBottom: "1rem" }}>
+      <h1
+        style={{
+          fontSize: "1.2rem",
+          color: "#58a6ff",
+          marginBottom: "1rem",
+        }}
+      >
         System Status
       </h1>
 
-      {error && <div style={sectionStyle}>Error loading status: {error}</div>}
+      {error && (
+        <div style={sectionStyle}>Error loading status: {error}</div>
+      )}
 
       {status && (
         <>
-          {/* Gateway */}
           <div style={sectionStyle}>
             <div style={titleStyle}>Gateway</div>
             <div style={rowStyle}>
@@ -125,7 +166,6 @@ export function StatusPage() {
             </div>
           </div>
 
-          {/* Agent */}
           {status.agent ? (
             <>
               <div style={sectionStyle}>
@@ -144,219 +184,275 @@ export function StatusPage() {
                 </div>
               </div>
 
-              {/* Sessions */}
               {Object.entries(status.agent.sessions).length > 0 && (
                 <div style={sectionStyle}>
                   <div style={titleStyle}>
                     Sessions{" "}
                     <a
                       href="/sessions"
-                      style={{ fontWeight: "normal", textTransform: "none" }}
+                      style={{
+                        fontWeight: "normal",
+                        textTransform: "none",
+                      }}
                     >
                       All physical sessions &rarr;
                     </a>
                   </div>
-                  {Object.entries(status.agent.sessions).map(([id, sess]) => (
-                    <div key={id} style={{ marginBottom: "0.5rem" }}>
-                      <div style={rowStyle}>
-                        <span style={labelStyle}>
-                          {id.slice(0, 8)}
-                          {sess.boundChannelId
-                            ? ` → ch:${sess.boundChannelId.slice(0, 8)}`
-                            : ""}
-                        </span>
-                        <span>{sess.status}</span>
-                      </div>
-                      {sess.startedAt && (
-                        <div
-                          style={{
-                            marginLeft: "1rem",
-                            fontSize: "0.8rem",
-                            color: "#8b949e",
-                          }}
-                        >
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>Session started</span>
-                            <span>
-                              {sess.startedAt} ({elapsed(sess.startedAt)})
-                            </span>
-                          </div>
+                  {Object.entries(status.agent.sessions).map(
+                    ([id, sess]) => (
+                      <div key={id} style={{ marginBottom: "0.5rem" }}>
+                        <div style={rowStyle}>
+                          <span style={labelStyle}>
+                            {id.slice(0, SESSION_ID_SHORT)}
+                            {sess.boundChannelId
+                              ? ` → ch:${sess.boundChannelId.slice(0, SESSION_ID_SHORT)}`
+                              : ""}
+                          </span>
+                          <span>{sess.status}</span>
                         </div>
-                      )}
-                      {sess.physicalSession && (
-                        <div
-                          style={{
-                            marginLeft: "1rem",
-                            fontSize: "0.8rem",
-                            color: "#8b949e",
-                          }}
-                        >
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>SDK Session</span>
-                            <span>{sess.physicalSession.sessionId.slice(0, 12)}</span>
-                          </div>
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>Model</span>
-                            <span>{sess.physicalSession.model}</span>
-                          </div>
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>State</span>
-                            <span>{sess.physicalSession.currentState}</span>
-                          </div>
-                          {sess.physicalSession.currentTokens != null &&
-                            sess.physicalSession.tokenLimit != null && (
-                              <div style={rowStyle}>
-                                <span style={labelStyle}>Context</span>
-                                <span>
-                                  {sess.physicalSession.currentTokens} /{" "}
-                                  {sess.physicalSession.tokenLimit} (
-                                  {Math.round(
-                                    (sess.physicalSession.currentTokens /
-                                      sess.physicalSession.tokenLimit) *
-                                      100,
-                                  )}
-                                  %)
-                                </span>
-                              </div>
-                            )}
-                          {(sess.physicalSession.totalInputTokens != null ||
-                            sess.physicalSession.totalOutputTokens != null) && (
-                            <div style={rowStyle}>
-                              <span style={labelStyle}>Tokens used</span>
-                              <span>
-                                in: {sess.physicalSession.totalInputTokens ?? 0} / out:{" "}
-                                {sess.physicalSession.totalOutputTokens ?? 0} / total:{" "}
-                                {(sess.physicalSession.totalInputTokens ?? 0) +
-                                  (sess.physicalSession.totalOutputTokens ?? 0)}
-                              </span>
-                            </div>
-                          )}
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>Started</span>
-                            <span>
-                              {sess.physicalSession.startedAt} (
-                              {elapsed(sess.physicalSession.startedAt)})
-                            </span>
-                          </div>
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>Events</span>
-                            <span>
-                              <a
-                                href={`/sessions/${encodeURIComponent(sess.physicalSession.sessionId)}/events`}
-                              >
-                                View events &rarr;
-                              </a>
-                            </span>
-                          </div>
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>System Prompt</span>
-                            <span>
-                              <a
-                                href="#"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  loadSessionPrompt(sess.physicalSession!.sessionId);
-                                }}
-                              >
-                                View &rarr;
-                              </a>
-                            </span>
-                          </div>
-                        </div>
-                      )}
-                      {/* Cumulative tokens */}
-                      {(sess.cumulativeInputTokens != null ||
-                        sess.cumulativeOutputTokens != null) &&
-                        (() => {
-                          const cIn =
-                            (sess.cumulativeInputTokens ?? 0) +
-                            (sess.physicalSession?.totalInputTokens ?? 0);
-                          const cOut =
-                            (sess.cumulativeOutputTokens ?? 0) +
-                            (sess.physicalSession?.totalOutputTokens ?? 0);
-                          return cIn > 0 || cOut > 0 ? (
-                            <div
-                              style={{
-                                marginLeft: "1rem",
-                                fontSize: "0.8rem",
-                                color: "#8b949e",
-                              }}
-                            >
-                              <div style={rowStyle}>
-                                <span style={labelStyle}>Cumulative tokens</span>
-                                <span>
-                                  in: {cIn} / out: {cOut} / total: {cIn + cOut}
-                                </span>
-                              </div>
-                            </div>
-                          ) : null;
-                        })()}
-                      {/* Physical session history */}
-                      {sess.physicalSessionHistory &&
-                        sess.physicalSessionHistory.length > 0 && (
+                        {sess.startedAt && (
                           <div
                             style={{
                               marginLeft: "1rem",
                               fontSize: "0.8rem",
-                              marginTop: "0.3rem",
+                              color: "#8b949e",
                             }}
                           >
-                            <div style={{ color: "#8b949e", marginBottom: "0.3rem" }}>
-                              Physical sessions ({sess.physicalSessionHistory.length})
+                            <div style={rowStyle}>
+                              <span style={labelStyle}>
+                                Session started
+                              </span>
+                              <span>
+                                {sess.startedAt} (
+                                {elapsed(sess.startedAt)})
+                              </span>
                             </div>
-                            {sess.physicalSessionHistory.map((hps) => (
-                              <div
-                                key={hps.sessionId}
-                                style={{
-                                  margin: "0.3rem 0",
-                                  padding: "0.3rem",
-                                  border: "1px solid #21262d",
-                                  borderRadius: "0.3rem",
-                                  color: "#8b949e",
-                                }}
-                              >
-                                <div style={rowStyle}>
-                                  <span style={labelStyle}>SDK Session</span>
-                                  <span>{hps.sessionId.slice(0, 12)}</span>
-                                </div>
-                                <div style={rowStyle}>
-                                  <span style={labelStyle}>Model</span>
-                                  <span>{hps.model}</span>
-                                </div>
-                                <div style={rowStyle}>
-                                  <span style={labelStyle}>State</span>
-                                  <span>{hps.currentState || "stopped"}</span>
-                                </div>
-                                {(hps.totalInputTokens != null ||
-                                  hps.totalOutputTokens != null) && (
-                                  <div style={rowStyle}>
-                                    <span style={labelStyle}>Tokens</span>
-                                    <span>
-                                      in: {hps.totalInputTokens ?? 0} / out:{" "}
-                                      {hps.totalOutputTokens ?? 0}
-                                    </span>
-                                  </div>
-                                )}
-                                <div style={rowStyle}>
-                                  <span style={labelStyle}>Started</span>
-                                  <span>{hps.startedAt}</span>
-                                </div>
-                                <div style={rowStyle}>
-                                  <span style={labelStyle}>Events</span>
-                                  <span>
-                                    <a
-                                      href={`/sessions/${encodeURIComponent(hps.sessionId)}/events`}
-                                    >
-                                      View events &rarr;
-                                    </a>
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
                           </div>
                         )}
-                    </div>
-                  ))}
+                        {sess.physicalSession && (
+                          <div
+                            style={{
+                              marginLeft: "1rem",
+                              fontSize: "0.8rem",
+                              color: "#8b949e",
+                            }}
+                          >
+                            <div style={rowStyle}>
+                              <span style={labelStyle}>
+                                SDK Session
+                              </span>
+                              <span>
+                                {sess.physicalSession.sessionId.slice(
+                                  0,
+                                  SDK_SESSION_ID_SHORT,
+                                )}
+                              </span>
+                            </div>
+                            <div style={rowStyle}>
+                              <span style={labelStyle}>Model</span>
+                              <span>
+                                {sess.physicalSession.model}
+                              </span>
+                            </div>
+                            <div style={rowStyle}>
+                              <span style={labelStyle}>State</span>
+                              <span>
+                                {sess.physicalSession.currentState}
+                              </span>
+                            </div>
+                            {sess.physicalSession.currentTokens !=
+                              null &&
+                              sess.physicalSession.tokenLimit !=
+                                null && (
+                                <div style={rowStyle}>
+                                  <span style={labelStyle}>
+                                    Context
+                                  </span>
+                                  <span>
+                                    {
+                                      sess.physicalSession
+                                        .currentTokens
+                                    }{" "}
+                                    /{" "}
+                                    {
+                                      sess.physicalSession.tokenLimit
+                                    }{" "}
+                                    (
+                                    {Math.round(
+                                      (sess.physicalSession
+                                        .currentTokens /
+                                        sess.physicalSession
+                                          .tokenLimit) *
+                                        100,
+                                    )}
+                                    %)
+                                  </span>
+                                </div>
+                              )}
+                            {(sess.physicalSession
+                              .totalInputTokens != null ||
+                              sess.physicalSession
+                                .totalOutputTokens != null) && (
+                              <div style={rowStyle}>
+                                <span style={labelStyle}>
+                                  Tokens used
+                                </span>
+                                <span>
+                                  in:{" "}
+                                  {sess.physicalSession
+                                    .totalInputTokens ?? 0}{" "}
+                                  / out:{" "}
+                                  {sess.physicalSession
+                                    .totalOutputTokens ?? 0}{" "}
+                                  / total:{" "}
+                                  {(sess.physicalSession
+                                    .totalInputTokens ?? 0) +
+                                    (sess.physicalSession
+                                      .totalOutputTokens ?? 0)}
+                                </span>
+                              </div>
+                            )}
+                            <div style={rowStyle}>
+                              <span style={labelStyle}>Started</span>
+                              <span>
+                                {sess.physicalSession.startedAt} (
+                                {elapsed(
+                                  sess.physicalSession.startedAt,
+                                )}
+                                )
+                              </span>
+                            </div>
+                            <div style={rowStyle}>
+                              <span style={labelStyle}>Events</span>
+                              <span>
+                                <a
+                                  href={`/sessions/${encodeURIComponent(sess.physicalSession.sessionId)}/events`}
+                                >
+                                  View events &rarr;
+                                </a>
+                              </span>
+                            </div>
+                            <div style={rowStyle}>
+                              <span style={labelStyle}>
+                                System Prompt
+                              </span>
+                              <span>
+                                <a
+                                  href="#"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    loadSessionPrompt(
+                                      sess.physicalSession!
+                                        .sessionId,
+                                    );
+                                  }}
+                                >
+                                  View &rarr;
+                                </a>
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                        <CumulativeTokens sess={sess} />
+                        {sess.physicalSessionHistory &&
+                          sess.physicalSessionHistory.length > 0 && (
+                            <div
+                              style={{
+                                marginLeft: "1rem",
+                                fontSize: "0.8rem",
+                                marginTop: "0.3rem",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  color: "#8b949e",
+                                  marginBottom: "0.3rem",
+                                }}
+                              >
+                                Physical sessions (
+                                {sess.physicalSessionHistory.length})
+                              </div>
+                              {sess.physicalSessionHistory.map(
+                                (hps) => (
+                                  <div
+                                    key={hps.sessionId}
+                                    style={{
+                                      margin: "0.3rem 0",
+                                      padding: "0.3rem",
+                                      border: "1px solid #21262d",
+                                      borderRadius: "0.3rem",
+                                      color: "#8b949e",
+                                    }}
+                                  >
+                                    <div style={rowStyle}>
+                                      <span style={labelStyle}>
+                                        SDK Session
+                                      </span>
+                                      <span>
+                                        {hps.sessionId.slice(
+                                          0,
+                                          SDK_SESSION_ID_SHORT,
+                                        )}
+                                      </span>
+                                    </div>
+                                    <div style={rowStyle}>
+                                      <span style={labelStyle}>
+                                        Model
+                                      </span>
+                                      <span>{hps.model}</span>
+                                    </div>
+                                    <div style={rowStyle}>
+                                      <span style={labelStyle}>
+                                        State
+                                      </span>
+                                      <span>
+                                        {hps.currentState ||
+                                          "stopped"}
+                                      </span>
+                                    </div>
+                                    {(hps.totalInputTokens != null ||
+                                      hps.totalOutputTokens !=
+                                        null) && (
+                                      <div style={rowStyle}>
+                                        <span style={labelStyle}>
+                                          Tokens
+                                        </span>
+                                        <span>
+                                          in:{" "}
+                                          {hps.totalInputTokens ??
+                                            0}{" "}
+                                          / out:{" "}
+                                          {hps.totalOutputTokens ??
+                                            0}
+                                        </span>
+                                      </div>
+                                    )}
+                                    <div style={rowStyle}>
+                                      <span style={labelStyle}>
+                                        Started
+                                      </span>
+                                      <span>{hps.startedAt}</span>
+                                    </div>
+                                    <div style={rowStyle}>
+                                      <span style={labelStyle}>
+                                        Events
+                                      </span>
+                                      <span>
+                                        <a
+                                          href={`/sessions/${encodeURIComponent(hps.sessionId)}/events`}
+                                        >
+                                          View events &rarr;
+                                        </a>
+                                      </span>
+                                    </div>
+                                  </div>
+                                ),
+                              )}
+                            </div>
+                          )}
+                      </div>
+                    ),
+                  )}
                 </div>
               )}
             </>
@@ -369,7 +465,6 @@ export function StatusPage() {
             </div>
           )}
 
-          {/* Config */}
           {status.config && (
             <div style={sectionStyle}>
               <div style={titleStyle}>Config</div>
@@ -386,13 +481,23 @@ export function StatusPage() {
         </>
       )}
 
-      {/* Original System Prompts */}
       {originalPrompts.length > 0 && (
         <div style={sectionStyle}>
-          <div style={titleStyle}>Original System Prompts (from Copilot SDK)</div>
+          <div style={titleStyle}>
+            Original System Prompts (from Copilot SDK)
+          </div>
           {originalPrompts.map((p) => (
-            <div key={`${p.model}:${p.capturedAt}`} style={{ marginTop: "0.5rem" }}>
-              <div style={{ fontSize: "0.8rem", color: "#8b949e", marginBottom: "0.3rem" }}>
+            <div
+              key={`${p.model}-${p.capturedAt}`}
+              style={{ marginTop: "0.5rem" }}
+            >
+              <div
+                style={{
+                  fontSize: "0.8rem",
+                  color: "#8b949e",
+                  marginBottom: "0.3rem",
+                }}
+              >
                 Model: {p.model} -- Captured: {p.capturedAt}
               </div>
               <pre style={preStyle}>{p.prompt}</pre>
@@ -401,10 +506,11 @@ export function StatusPage() {
         </div>
       )}
 
-      {/* Session Prompts loaded on demand */}
       {sessionPrompts.map((sp) => (
         <div key={sp.sessionId} style={sectionStyle}>
-          <div style={titleStyle}>Session System Prompt ({sp.data.model})</div>
+          <div style={titleStyle}>
+            Session System Prompt ({sp.data.model})
+          </div>
           <pre style={preStyle}>{sp.data.prompt}</pre>
         </div>
       ))}

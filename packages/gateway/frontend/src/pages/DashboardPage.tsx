@@ -18,6 +18,21 @@ import {
 } from "../api";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import { usePolling } from "../hooks/usePolling";
+import { elapsed, SESSION_ID_SHORT, SDK_SESSION_ID_SHORT } from "../utils";
+
+/* M-2: Hoisted style objects for StatusModalContent */
+const modalSectionStyle: React.CSSProperties = { marginBottom: "1rem" };
+const modalTitleStyle: React.CSSProperties = {
+  fontWeight: 600,
+  color: "#8b949e",
+  marginBottom: "0.3rem",
+};
+const modalRowStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  padding: "0.2rem 0",
+};
+const modalLabelStyle: React.CSSProperties = { color: "#8b949e" };
 
 export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -36,29 +51,40 @@ export function DashboardPage() {
   const [modalModels, setModalModels] = useState<ModelsResponse | null>(null);
   const [logsVisible, setLogsVisible] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const evtSourceRef = useRef<EventSource | null>(null);
   const refreshStatusRef = useRef<() => void>(() => {});
+  const modalAbortRef = useRef<AbortController | null>(null);
 
   const activeChannelId = searchParams.get("channel") ?? channels[0]?.id;
 
-  const { containerRef: chatRef, handleScroll: handleChatScroll } = useAutoScroll<HTMLDivElement>([
-    messages,
-  ]);
+  /* H-5: use stable primitive (messages.length) instead of messages array */
+  const { containerRef: chatRef, handleScroll: handleChatScroll } =
+    useAutoScroll<HTMLDivElement>([messages.length]);
 
-  // Load channels on mount
+  // Load channels on mount (M-8: loading/error state)
   useEffect(() => {
+    setLoading(true);
     fetchChannels()
-      .then(setChannels)
-      .catch(() => {});
+      .then((chs) => {
+        setChannels(chs);
+        setLoadError(null);
+      })
+      .catch((e) => {
+        setLoadError(String(e));
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  // Load messages when active channel changes
+  // H-1: capture activeChannelId in closure
   const refreshMessages = useCallback(async () => {
-    if (!activeChannelId) return;
+    const channelId = activeChannelId;
+    if (!channelId) return;
     try {
-      const msgs = await fetchMessages(activeChannelId, 500);
+      const msgs = await fetchMessages(channelId, 500);
       // API returns reverse-chronological; reverse for display
       setMessages(msgs.slice().reverse());
     } catch {
@@ -70,18 +96,23 @@ export function DashboardPage() {
     refreshMessages();
   }, [refreshMessages]);
 
-  // SSE connection
+  // SSE connection — H-2: use ref for refreshStatus
   useEffect(() => {
     if (!activeChannelId) return;
 
-    const source = new EventSource(`/api/events?channel=${encodeURIComponent(activeChannelId)}`);
+    const source = new EventSource(
+      `/api/events?channel=${encodeURIComponent(activeChannelId)}`,
+    );
     evtSourceRef.current = source;
 
     source.onopen = () => setSseConnected(true);
     source.onerror = () => setSseConnected(false);
     source.onmessage = (e) => {
       try {
-        const event = JSON.parse(e.data as string) as { type: string; data?: Record<string, unknown> };
+        const event = JSON.parse(e.data as string) as {
+          type: string;
+          data?: Record<string, unknown>;
+        };
         if (event.type === "new_message") {
           refreshMessages();
           refreshStatusRef.current();
@@ -114,9 +145,15 @@ export function DashboardPage() {
       if (data.agent) {
         setAgentVersion(data.agent.version ?? "--");
         const sessions = Object.values(data.agent.sessions);
-        const bound = sessions.find((s) => s.boundChannelId === activeChannelId);
+        const bound = sessions.find(
+          (s) => s.boundChannelId === activeChannelId,
+        );
         setSessionStatus(
-          bound ? bound.status : sessions.length > 0 ? "other channel" : "no session",
+          bound
+            ? bound.status
+            : sessions.length > 0
+              ? "other channel"
+              : "no session",
         );
       } else {
         setAgentVersion("--");
@@ -128,6 +165,7 @@ export function DashboardPage() {
     }
   }, [activeChannelId]);
 
+  // H-2: keep ref in sync with latest refreshStatus
   refreshStatusRef.current = refreshStatus;
 
   usePolling(refreshStatus, 5000);
@@ -158,21 +196,46 @@ export function DashboardPage() {
     }
   }, [inputText, activeChannelId, refreshMessages]);
 
-  // Open status modal
+  // M-4: Open status modal with AbortController
   const openModal = useCallback(async () => {
+    modalAbortRef.current?.abort();
+    const controller = new AbortController();
+    modalAbortRef.current = controller;
+
     setShowModal(true);
+    setModalStatus(null);
+    setModalQuota(null);
+    setModalModels(null);
     try {
+      const { signal } = controller;
       const [status, quota, models] = await Promise.all([
-        fetchStatus(),
-        fetchQuota(),
-        fetchModels(),
+        fetchStatus(signal),
+        fetchQuota(signal),
+        fetchModels(signal),
       ]);
+      if (controller.signal.aborted) return;
       setModalStatus(status);
       setModalQuota(quota);
       setModalModels(models);
-    } catch {
-      /* ignore */
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      if (!controller.signal.aborted) {
+        setModalStatus({ gateway: { status: "error", version: "—" }, agent: null, agentCompatibility: "unavailable", config: {} } as StatusResponse);
+      }
     }
+  }, []);
+
+  const closeModal = useCallback(() => {
+    modalAbortRef.current?.abort();
+    modalAbortRef.current = null;
+    setShowModal(false);
+  }, []);
+
+  // Abort modal fetch on unmount
+  useEffect(() => {
+    return () => {
+      modalAbortRef.current?.abort();
+    };
   }, []);
 
   // Create new channel
@@ -186,7 +249,10 @@ export function DashboardPage() {
     }
   }, [setSearchParams]);
 
-  const compatLabel = compatibility && compatibility !== "compatible" ? ` [${compatibility}]` : "";
+  const compatLabel =
+    compatibility && compatibility !== "compatible"
+      ? ` [${compatibility}]`
+      : "";
   const isProcessing = sessionStatus === "processing";
 
   return (
@@ -229,6 +295,8 @@ export function DashboardPage() {
             e.stopPropagation();
             setLogsVisible((v) => !v);
           }}
+          aria-label="Toggle logs"
+          aria-pressed={logsVisible}
           style={{
             background: "none",
             border: "1px solid #30363d",
@@ -258,7 +326,7 @@ export function DashboardPage() {
         >
           {logs.map((entry, i) => (
             <div
-              key={i}
+              key={`${entry.timestamp}-${entry.source}-${i}`}
               style={{
                 padding: "0.1rem 0",
                 color: entry.level === "error" ? "#f85149" : "#8b949e",
@@ -269,14 +337,16 @@ export function DashboardPage() {
               <span style={{ color: "#484f58", marginRight: "0.5rem" }}>
                 {entry.timestamp?.slice(11, 19)}
               </span>
-              <span style={{ color: "#58a6ff", marginRight: "0.5rem" }}>[{entry.source}]</span>
+              <span style={{ color: "#58a6ff", marginRight: "0.5rem" }}>
+                [{entry.source}]
+              </span>
               {entry.message}
             </div>
           ))}
         </div>
       )}
 
-      {/* Status Modal */}
+      {/* Status Modal — L-3: role="dialog" and aria-modal="true" */}
       {showModal && (
         <>
           <div
@@ -289,9 +359,11 @@ export function DashboardPage() {
               background: "rgba(0,0,0,0.6)",
               zIndex: 100,
             }}
-            onClick={() => setShowModal(false)}
+            onClick={closeModal}
           />
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
               position: "fixed",
               top: "50%",
@@ -311,8 +383,8 @@ export function DashboardPage() {
             }}
           >
             <button
-              onClick={() => setShowModal(false)}
-              aria-label="Close modal"
+              onClick={closeModal}
+              aria-label="Close"
               style={{
                 position: "absolute",
                 top: "0.75rem",
@@ -326,11 +398,21 @@ export function DashboardPage() {
             >
               &times;
             </button>
-            <h3 style={{ marginBottom: "1rem", fontSize: "1rem", color: "#58a6ff" }}>
+            <h3
+              style={{
+                marginBottom: "1rem",
+                fontSize: "1rem",
+                color: "#58a6ff",
+              }}
+            >
               System Status{" "}
               <a
                 href="/status"
-                style={{ fontSize: "0.8rem", fontWeight: "normal", marginLeft: "0.5rem" }}
+                style={{
+                  fontSize: "0.8rem",
+                  fontWeight: "normal",
+                  marginLeft: "0.5rem",
+                }}
               >
                 Open in new tab &rarr;
               </a>
@@ -381,13 +463,13 @@ export function DashboardPage() {
                 marginBottom: isActive ? -1 : 0,
               }}
             >
-              {ch.id.slice(0, 8)}
+              {ch.id.slice(0, SESSION_ID_SHORT)}
             </a>
           );
         })}
         <button
           onClick={handleNewChannel}
-          aria-label="Create new channel"
+          aria-label="New channel"
           style={{
             padding: "0.4rem 0.6rem",
             background: "none",
@@ -402,7 +484,7 @@ export function DashboardPage() {
         </button>
       </div>
 
-      {/* Chat Messages */}
+      {/* Chat Messages — M-8: loading/error states */}
       <div
         ref={chatRef}
         onScroll={handleChatScroll}
@@ -415,8 +497,36 @@ export function DashboardPage() {
           gap: "0.5rem",
         }}
       >
-        {messages.length === 0 && (
-          <div style={{ color: "#484f58", textAlign: "center", marginTop: "2rem" }}>
+        {loading && (
+          <div
+            style={{
+              color: "#8b949e",
+              textAlign: "center",
+              marginTop: "2rem",
+            }}
+          >
+            Loading...
+          </div>
+        )}
+        {loadError && (
+          <div
+            style={{
+              color: "#f85149",
+              textAlign: "center",
+              marginTop: "2rem",
+            }}
+          >
+            Failed to load: {loadError}
+          </div>
+        )}
+        {!loading && !loadError && messages.length === 0 && (
+          <div
+            style={{
+              color: "#484f58",
+              textAlign: "center",
+              marginTop: "2rem",
+            }}
+          >
             Send a message to start the conversation.
           </div>
         )}
@@ -448,7 +558,13 @@ export function DashboardPage() {
               >
                 {msg.message}
               </div>
-              <div style={{ fontSize: "0.7rem", color: "#484f58", marginTop: "0.2rem" }}>
+              <div
+                style={{
+                  fontSize: "0.7rem",
+                  color: "#484f58",
+                  marginTop: "0.2rem",
+                }}
+              >
                 {msg.createdAt}
               </div>
             </div>
@@ -468,8 +584,14 @@ export function DashboardPage() {
             }}
           >
             <span className="typing-dot" style={{ animationDelay: "0s" }} />
-            <span className="typing-dot" style={{ animationDelay: "0.2s" }} />
-            <span className="typing-dot" style={{ animationDelay: "0.4s" }} />
+            <span
+              className="typing-dot"
+              style={{ animationDelay: "0.2s" }}
+            />
+            <span
+              className="typing-dot"
+              style={{ animationDelay: "0.4s" }}
+            />
           </div>
         )}
       </div>
@@ -526,35 +648,100 @@ export function DashboardPage() {
           Send
         </button>
       </div>
-
-      {/* Typing dots animation */}
-      <style>{`
-        .typing-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: #8b949e;
-          animation: typing 1.4s infinite;
-          display: inline-block;
-        }
-        @keyframes typing {
-          0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
-          30% { opacity: 1; transform: translateY(-4px); }
-        }
-      `}</style>
     </div>
   );
 }
 
-function elapsed(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  if (isNaN(ms) || ms < 0) return "--";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+/* M-5: Extracted helper component for cumulative tokens (replaces IIFE) */
+function CumulativeTokens({
+  sess,
+  rowStyle,
+  labelStyle,
+}: {
+  sess: {
+    cumulativeInputTokens?: number;
+    cumulativeOutputTokens?: number;
+    physicalSession?: {
+      totalInputTokens?: number;
+      totalOutputTokens?: number;
+    };
+  };
+  rowStyle: React.CSSProperties;
+  labelStyle: React.CSSProperties;
+}) {
+  if (
+    sess.cumulativeInputTokens == null &&
+    sess.cumulativeOutputTokens == null
+  )
+    return null;
+  const cIn =
+    (sess.cumulativeInputTokens ?? 0) +
+    (sess.physicalSession?.totalInputTokens ?? 0);
+  const cOut =
+    (sess.cumulativeOutputTokens ?? 0) +
+    (sess.physicalSession?.totalOutputTokens ?? 0);
+  if (cIn === 0 && cOut === 0) return null;
+  return (
+    <div
+      style={{
+        marginLeft: "1rem",
+        fontSize: "0.8rem",
+        color: "#8b949e",
+      }}
+    >
+      <div style={rowStyle}>
+        <span style={labelStyle}>Cumulative tokens</span>
+        <span>
+          in: {cIn} / out: {cOut} / total: {cIn + cOut}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* M-5: Extracted helper component for quota section (replaces IIFE) */
+function QuotaSection({
+  quota,
+  sectionStyle,
+  titleStyle,
+  rowStyle,
+  labelStyle,
+}: {
+  quota: QuotaResponse | null;
+  sectionStyle: React.CSSProperties;
+  titleStyle: React.CSSProperties;
+  rowStyle: React.CSSProperties;
+  labelStyle: React.CSSProperties;
+}) {
+  const snapshots = quota?.quotaSnapshots ?? {};
+  const keys = Object.keys(snapshots);
+  if (keys.length === 0) return null;
+  return (
+    <div style={sectionStyle}>
+      <div style={titleStyle}>Premium Requests</div>
+      {keys.map((key) => {
+        const q = snapshots[key]!;
+        const used = q.usedRequests ?? 0;
+        const total = q.entitlementRequests ?? 0;
+        return (
+          <div key={key}>
+            <div style={rowStyle}>
+              <span style={labelStyle}>{key}</span>
+              <span>
+                {total - used} / {total}
+              </span>
+            </div>
+            {(q.overage ?? 0) > 0 && (
+              <div style={rowStyle}>
+                <span style={labelStyle}>Overage</span>
+                <span>{q.overage}</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function StatusModalContent({
@@ -566,30 +753,17 @@ function StatusModalContent({
   quota: QuotaResponse | null;
   models: ModelsResponse | null;
 }) {
-  const sectionStyle: React.CSSProperties = { marginBottom: "1rem" };
-  const titleStyle: React.CSSProperties = {
-    fontWeight: 600,
-    color: "#8b949e",
-    marginBottom: "0.3rem",
-  };
-  const rowStyle: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    padding: "0.2rem 0",
-  };
-  const labelStyle: React.CSSProperties = { color: "#8b949e" };
-
   return (
     <>
       {/* Gateway */}
-      <div style={sectionStyle}>
-        <div style={titleStyle}>Gateway</div>
-        <div style={rowStyle}>
-          <span style={labelStyle}>Status</span>
+      <div style={modalSectionStyle}>
+        <div style={modalTitleStyle}>Gateway</div>
+        <div style={modalRowStyle}>
+          <span style={modalLabelStyle}>Status</span>
           <span>{status.gateway.status}</span>
         </div>
-        <div style={rowStyle}>
-          <span style={labelStyle}>Version</span>
+        <div style={modalRowStyle}>
+          <span style={modalLabelStyle}>Version</span>
           <span>{status.gateway.version}</span>
         </div>
       </div>
@@ -597,26 +771,26 @@ function StatusModalContent({
       {/* Agent */}
       {status.agent ? (
         <>
-          <div style={sectionStyle}>
-            <div style={titleStyle}>Agent</div>
-            <div style={rowStyle}>
-              <span style={labelStyle}>Version</span>
+          <div style={modalSectionStyle}>
+            <div style={modalTitleStyle}>Agent</div>
+            <div style={modalRowStyle}>
+              <span style={modalLabelStyle}>Version</span>
               <span>{status.agent.version ?? "--"}</span>
             </div>
-            <div style={rowStyle}>
-              <span style={labelStyle}>Started</span>
+            <div style={modalRowStyle}>
+              <span style={modalLabelStyle}>Started</span>
               <span>{status.agent.startedAt ?? "--"}</span>
             </div>
-            <div style={rowStyle}>
-              <span style={labelStyle}>Compatibility</span>
+            <div style={modalRowStyle}>
+              <span style={modalLabelStyle}>Compatibility</span>
               <span>{status.agentCompatibility}</span>
             </div>
           </div>
 
           {/* Sessions */}
           {Object.entries(status.agent.sessions).length > 0 && (
-            <div style={sectionStyle}>
-              <div style={titleStyle}>
+            <div style={modalSectionStyle}>
+              <div style={modalTitleStyle}>
                 Sessions ({Object.keys(status.agent.sessions).length}){" "}
                 <a
                   href="/sessions"
@@ -629,19 +803,25 @@ function StatusModalContent({
               </div>
               {Object.entries(status.agent.sessions).map(([id, sess]) => (
                 <div key={id} style={{ marginBottom: "0.5rem" }}>
-                  <div style={rowStyle}>
-                    <span style={labelStyle}>
-                      {id.slice(0, 8)}
-                      {sess.boundChannelId ? ` → ch:${sess.boundChannelId.slice(0, 8)}` : ""}
+                  <div style={modalRowStyle}>
+                    <span style={modalLabelStyle}>
+                      {id.slice(0, SESSION_ID_SHORT)}
+                      {sess.boundChannelId
+                        ? ` → ch:${sess.boundChannelId.slice(0, SESSION_ID_SHORT)}`
+                        : ""}
                     </span>
                     <span>{sess.status}</span>
                   </div>
                   {sess.startedAt && (
                     <div
-                      style={{ marginLeft: "1rem", fontSize: "0.8rem", color: "#8b949e" }}
+                      style={{
+                        marginLeft: "1rem",
+                        fontSize: "0.8rem",
+                        color: "#8b949e",
+                      }}
                     >
-                      <div style={rowStyle}>
-                        <span style={labelStyle}>Session started</span>
+                      <div style={modalRowStyle}>
+                        <span style={modalLabelStyle}>Session started</span>
                         <span>
                           {sess.startedAt} ({elapsed(sess.startedAt)})
                         </span>
@@ -650,24 +830,33 @@ function StatusModalContent({
                   )}
                   {sess.physicalSession && (
                     <div
-                      style={{ marginLeft: "1rem", fontSize: "0.8rem", color: "#8b949e" }}
+                      style={{
+                        marginLeft: "1rem",
+                        fontSize: "0.8rem",
+                        color: "#8b949e",
+                      }}
                     >
-                      <div style={rowStyle}>
-                        <span style={labelStyle}>SDK Session</span>
-                        <span>{sess.physicalSession.sessionId.slice(0, 12)}</span>
+                      <div style={modalRowStyle}>
+                        <span style={modalLabelStyle}>SDK Session</span>
+                        <span>
+                          {sess.physicalSession.sessionId.slice(
+                            0,
+                            SDK_SESSION_ID_SHORT,
+                          )}
+                        </span>
                       </div>
-                      <div style={rowStyle}>
-                        <span style={labelStyle}>Model</span>
+                      <div style={modalRowStyle}>
+                        <span style={modalLabelStyle}>Model</span>
                         <span>{sess.physicalSession.model}</span>
                       </div>
-                      <div style={rowStyle}>
-                        <span style={labelStyle}>State</span>
+                      <div style={modalRowStyle}>
+                        <span style={modalLabelStyle}>State</span>
                         <span>{sess.physicalSession.currentState}</span>
                       </div>
                       {sess.physicalSession.currentTokens != null &&
                         sess.physicalSession.tokenLimit != null && (
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>Context</span>
+                          <div style={modalRowStyle}>
+                            <span style={modalLabelStyle}>Context</span>
                             <span>
                               {sess.physicalSession.currentTokens} /{" "}
                               {sess.physicalSession.tokenLimit} (
@@ -682,21 +871,23 @@ function StatusModalContent({
                         )}
                       {(sess.physicalSession.totalInputTokens != null ||
                         sess.physicalSession.totalOutputTokens != null) && (
-                        <div style={rowStyle}>
-                          <span style={labelStyle}>Tokens used</span>
+                        <div style={modalRowStyle}>
+                          <span style={modalLabelStyle}>Tokens used</span>
                           <span>
-                            in: {sess.physicalSession.totalInputTokens ?? 0} / out:{" "}
-                            {sess.physicalSession.totalOutputTokens ?? 0} / total:{" "}
+                            in: {sess.physicalSession.totalInputTokens ?? 0} /
+                            out:{" "}
+                            {sess.physicalSession.totalOutputTokens ?? 0} /
+                            total:{" "}
                             {(sess.physicalSession.totalInputTokens ?? 0) +
                               (sess.physicalSession.totalOutputTokens ?? 0)}
                           </span>
                         </div>
                       )}
-                      <div style={rowStyle}>
-                        <span style={labelStyle}>Started</span>
+                      <div style={modalRowStyle}>
+                        <span style={modalLabelStyle}>Started</span>
                         <span>
-                          {sess.physicalSession.startedAt} ({elapsed(sess.physicalSession.startedAt)}
-                          )
+                          {sess.physicalSession.startedAt} (
+                          {elapsed(sess.physicalSession.startedAt)})
                         </span>
                       </div>
                       <div style={{ marginTop: "0.3rem" }}>
@@ -708,148 +899,112 @@ function StatusModalContent({
                       </div>
                     </div>
                   )}
-                  {/* Cumulative tokens */}
-                  {(sess.cumulativeInputTokens != null ||
-                    sess.cumulativeOutputTokens != null) && (() => {
-                    const cIn =
-                      (sess.cumulativeInputTokens ?? 0) +
-                      (sess.physicalSession?.totalInputTokens ?? 0);
-                    const cOut =
-                      (sess.cumulativeOutputTokens ?? 0) +
-                      (sess.physicalSession?.totalOutputTokens ?? 0);
-                    return cIn > 0 || cOut > 0 ? (
+                  <CumulativeTokens
+                    sess={sess}
+                    rowStyle={modalRowStyle}
+                    labelStyle={modalLabelStyle}
+                  />
+                  {/* Physical session history */}
+                  {sess.physicalSessionHistory &&
+                    sess.physicalSessionHistory.length > 0 && (
                       <div
                         style={{
                           marginLeft: "1rem",
                           fontSize: "0.8rem",
-                          color: "#8b949e",
+                          marginTop: "0.3rem",
                         }}
                       >
-                        <div style={rowStyle}>
-                          <span style={labelStyle}>Cumulative tokens</span>
-                          <span>
-                            in: {cIn} / out: {cOut} / total: {cIn + cOut}
-                          </span>
-                        </div>
-                      </div>
-                    ) : null;
-                  })()}
-                  {/* Physical session history */}
-                  {sess.physicalSessionHistory && sess.physicalSessionHistory.length > 0 && (
-                    <div
-                      style={{
-                        marginLeft: "1rem",
-                        fontSize: "0.8rem",
-                        marginTop: "0.3rem",
-                      }}
-                    >
-                      <div style={{ color: "#8b949e", marginBottom: "0.3rem" }}>
-                        Physical sessions ({sess.physicalSessionHistory.length})
-                      </div>
-                      {sess.physicalSessionHistory.map((hps) => (
                         <div
-                          key={hps.sessionId}
                           style={{
-                            marginBottom: "0.5rem",
-                            padding: "0.3rem",
-                            border: "1px solid #21262d",
-                            borderRadius: "0.3rem",
                             color: "#8b949e",
+                            marginBottom: "0.3rem",
                           }}
                         >
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>SDK Session</span>
-                            <span>{hps.sessionId.slice(0, 12)}</span>
-                          </div>
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>Model</span>
-                            <span>{hps.model}</span>
-                          </div>
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>State</span>
-                            <span>{hps.currentState || "stopped"}</span>
-                          </div>
-                          {(hps.totalInputTokens != null || hps.totalOutputTokens != null) && (
-                            <div style={rowStyle}>
-                              <span style={labelStyle}>Tokens</span>
+                          Physical sessions (
+                          {sess.physicalSessionHistory.length})
+                        </div>
+                        {sess.physicalSessionHistory.map((hps) => (
+                          <div
+                            key={hps.sessionId}
+                            style={{
+                              marginBottom: "0.5rem",
+                              padding: "0.3rem",
+                              border: "1px solid #21262d",
+                              borderRadius: "0.3rem",
+                              color: "#8b949e",
+                            }}
+                          >
+                            <div style={modalRowStyle}>
+                              <span style={modalLabelStyle}>SDK Session</span>
                               <span>
-                                in: {hps.totalInputTokens ?? 0} / out:{" "}
-                                {hps.totalOutputTokens ?? 0}
+                                {hps.sessionId.slice(0, SDK_SESSION_ID_SHORT)}
                               </span>
                             </div>
-                          )}
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>Started</span>
-                            <span>{hps.startedAt}</span>
+                            <div style={modalRowStyle}>
+                              <span style={modalLabelStyle}>Model</span>
+                              <span>{hps.model}</span>
+                            </div>
+                            <div style={modalRowStyle}>
+                              <span style={modalLabelStyle}>State</span>
+                              <span>{hps.currentState || "stopped"}</span>
+                            </div>
+                            {(hps.totalInputTokens != null ||
+                              hps.totalOutputTokens != null) && (
+                              <div style={modalRowStyle}>
+                                <span style={modalLabelStyle}>Tokens</span>
+                                <span>
+                                  in: {hps.totalInputTokens ?? 0} / out:{" "}
+                                  {hps.totalOutputTokens ?? 0}
+                                </span>
+                              </div>
+                            )}
+                            <div style={modalRowStyle}>
+                              <span style={modalLabelStyle}>Started</span>
+                              <span>{hps.startedAt}</span>
+                            </div>
+                            <div style={modalRowStyle}>
+                              <span style={modalLabelStyle}>Events</span>
+                              <span>
+                                <a
+                                  href={`/sessions/${encodeURIComponent(hps.sessionId)}/events`}
+                                >
+                                  View events &rarr;
+                                </a>
+                              </span>
+                            </div>
                           </div>
-                          <div style={rowStyle}>
-                            <span style={labelStyle}>Events</span>
-                            <span>
-                              <a
-                                href={`/sessions/${encodeURIComponent(hps.sessionId)}/events`}
-                              >
-                                View events &rarr;
-                              </a>
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                        ))}
+                      </div>
+                    )}
                 </div>
               ))}
             </div>
           )}
         </>
       ) : (
-        <div style={sectionStyle}>
-          <div style={titleStyle}>Agent</div>
-          <div style={rowStyle}>
-            <span style={labelStyle}>Not running</span>
+        <div style={modalSectionStyle}>
+          <div style={modalTitleStyle}>Agent</div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Not running</span>
           </div>
         </div>
       )}
 
-      {/* Quota */}
-      {(() => {
-        const snapshots = quota?.quotaSnapshots ?? {};
-        const keys = Object.keys(snapshots);
-        if (keys.length === 0) return null;
-        return (
-          <div style={sectionStyle}>
-            <div style={titleStyle}>Premium Requests</div>
-            {keys.map((key) => {
-              const q = snapshots[key]!;
-              const used = q.usedRequests ?? 0;
-              const total = q.entitlementRequests ?? 0;
-              return (
-                <div key={key}>
-                  <div style={rowStyle}>
-                    <span style={labelStyle}>{key}</span>
-                    <span>
-                      {total - used} / {total}
-                    </span>
-                  </div>
-                  {(q.overage ?? 0) > 0 && (
-                    <div style={rowStyle}>
-                      <span style={labelStyle}>Overage</span>
-                      <span>{q.overage}</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        );
-      })()}
+      <QuotaSection
+        quota={quota}
+        sectionStyle={modalSectionStyle}
+        titleStyle={modalTitleStyle}
+        rowStyle={modalRowStyle}
+        labelStyle={modalLabelStyle}
+      />
 
       {/* Models */}
       {models && models.models.length > 0 && (
-        <div style={sectionStyle}>
-          <div style={titleStyle}>Available Models</div>
+        <div style={modalSectionStyle}>
+          <div style={modalTitleStyle}>Available Models</div>
           {models.models.map((m) => (
-            <div key={m.id} style={rowStyle}>
-              <span style={labelStyle}>{m.id}</span>
+            <div key={m.id} style={modalRowStyle}>
+              <span style={modalLabelStyle}>{m.id}</span>
               <span>x{m.billing?.multiplier ?? "?"}</span>
             </div>
           ))}

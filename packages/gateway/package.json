@@ -21,9 +21,9 @@
     "test:unit": "vitest run test/unit",
     "test:e2e": "vitest run test/e2e",
     "test:browser": "playwright test",
-    "build:frontend": "cd frontend && npx vite build",
-    "dev:frontend": "cd frontend && npx vite",
-    "test:frontend": "cd frontend && npx vitest run"
+    "build:frontend": "cd frontend && ../node_modules/.bin/vite build",
+    "dev:frontend": "cd frontend && ../node_modules/.bin/vite",
+    "test:frontend": "cd frontend && ../node_modules/.bin/vitest run"
   },
   "engines": {
     "node": ">=20.0.0"

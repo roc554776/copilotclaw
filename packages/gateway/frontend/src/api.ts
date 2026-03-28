@@ -98,8 +98,8 @@ export interface SessionPrompt {
   prompt: string;
 }
 
-export async function fetchStatus(): Promise<StatusResponse> {
-  const res = await fetch("/api/status");
+export async function fetchStatus(signal?: AbortSignal): Promise<StatusResponse> {
+  const res = await fetch("/api/status", signal ? { signal } : undefined);
   if (!res.ok) throw new Error(`status ${res.status}`);
   return res.json() as Promise<StatusResponse>;
 }
@@ -132,14 +132,14 @@ export async function createChannel(): Promise<Channel> {
   return res.json() as Promise<Channel>;
 }
 
-export async function fetchQuota(): Promise<QuotaResponse | null> {
-  const res = await fetch("/api/quota");
+export async function fetchQuota(signal?: AbortSignal): Promise<QuotaResponse | null> {
+  const res = await fetch("/api/quota", signal ? { signal } : undefined);
   if (!res.ok) return null;
   return res.json() as Promise<QuotaResponse>;
 }
 
-export async function fetchModels(): Promise<ModelsResponse | null> {
-  const res = await fetch("/api/models");
+export async function fetchModels(signal?: AbortSignal): Promise<ModelsResponse | null> {
+  const res = await fetch("/api/models", signal ? { signal } : undefined);
   if (!res.ok) return null;
   return res.json() as Promise<ModelsResponse>;
 }
