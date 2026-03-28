@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.35.0 | Token estimate: ~2200 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.36.0 | Token estimate: ~2200 -->
 
 # Architecture
 
@@ -113,7 +113,7 @@ Environment variables:
 - **Event Forwarding**: agent registers SDK event listeners (session.idle, session.error, tool.execution_start/complete, subagent.started/completed/failed, assistant.message/usage/turn_start/turn_end, session.compaction_start/complete, session.usage_info, session.model_change, session.title_changed) and forwards them to gateway via fire-and-forget IPC stream push (type "session_event")
 - **System Prompt Capture**: agent uses registerTransformCallbacks("*") on CopilotSession to intercept the original system prompt from the SDK; captured prompt forwarded to gateway via IPC stream push as both original prompt (type "system_prompt_original", per-model) and session prompt (type "system_prompt_session", per-session)
 - **React SPA Frontend (v0.32.0)**: Vite + React + TypeScript SPA in `packages/gateway/frontend/`; routes: `/` (DashboardPage), `/status` (StatusPage), `/sessions` (SessionsListPage), `/sessions/:sessionId/events` (SessionEventsPage); hooks: useAutoScroll (position-based scroll follow), usePolling (generic interval polling); API client: `api.ts` with typed fetch wrappers for all gateway endpoints; built to `frontend-dist/` via `build:frontend` script; server serves SPA with fallback to old server-rendered HTML pages (observability-pages.ts) when `frontend-dist/` not present
-- **Status Page** (`/status`): shows gateway, agent, sessions (with elapsed time helper), config, and original system prompts; auto-refreshes every 5s; links to session event pages and session prompt viewer; shows stopped session history per session (v0.30.0)
+- **Status Page** (`/status`): shows gateway, agent, sessions (with elapsed time helper), config, and original system prompts; auto-refreshes every 5s; links to session event pages and session prompt viewer; shows stopped session history per session (v0.30.0); sessions link text: "All sessions →" (v0.36.0, changed from "All physical sessions →")
 - **Events Page** (`/sessions/:id/events`): shows session events with event count in heading, flat event list and auto-scroll; auto-refreshes every 2s; "Back to System Status" and "Back to Sessions" links (latter uses ?focus= param targeting parent abstract session)
 - **Sessions List Page** (`/sessions`): fetches abstract sessions from /api/status and renders them with physical sessions (current + history) as children; orphaned physical sessions listed separately; supports ?focus= URL param to highlight and scroll-to a specific abstract session; back link to /status
 - **Dashboard Integration**: status modal includes "Open in new tab" link to /status; physical session details include "View events" link to events page; stopped session history shown as collapsed toggle ("Stopped sessions (N) ▸") with model, tokens, started time, and events link per entry (v0.30.0)
@@ -131,6 +131,6 @@ Environment variables:
 - Channel backoff: AgentSessionManager tracks channelBackoff map; recordBackoffIfRapidFailure() sets backoff when session fails within rapid-failure threshold; isChannelInBackoff() checked in polling loop to skip channels in backoff (prevents retry storms); notifyChannelSessionStopped() includes error reason in system message when available
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (346 tests: 91 agent + 226 gateway + 29 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
-- Frontend tests: vitest + jsdom + @testing-library/react for React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, useAutoScroll)
+- Test runners: vitest for unit + E2E (348 tests: 91 agent + 226 gateway + 31 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
+- Frontend tests: vitest + jsdom + @testing-library/react for React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll)
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal

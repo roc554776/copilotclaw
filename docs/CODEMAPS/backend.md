@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Files scanned: 42 | Version: 0.35.0 | Token estimate: ~4000 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Files scanned: 42 | Version: 0.36.0 | Token estimate: ~4000 -->
 
 # Backend
 
@@ -225,11 +225,11 @@ src/api.ts                     — Typed fetch wrappers for all gateway API endp
 src/hooks/useAutoScroll.ts     — Position-based auto-scroll hook (follows bottom, disengages on scroll-up, re-engages at bottom)
 src/hooks/usePolling.ts        — Generic polling hook (immediate call + setInterval, cleanup on unmount)
 src/pages/DashboardPage.tsx    — Chat dashboard (channel management, message list, input form, SSE events, status bar, logs panel)
-src/pages/StatusPage.tsx       — System status page (gateway/agent/sessions/config display, elapsed time helper, session prompt loading, cumulative tokens, physical session history)
+src/pages/StatusPage.tsx       — System status page (gateway/agent/sessions/config display, elapsed time helper, session prompt loading, cumulative tokens, physical session history); sessions link text: "All sessions →" (v0.36.0)
 src/pages/SessionsListPage.tsx — Sessions list: fetches abstract sessions from /api/status, renders each with physical sessions (current + history) as children; orphaned physical sessions (not in any abstract session) listed separately with event counts and model; supports ?focus= URL param to highlight and scroll-to an abstract session
 src/pages/SessionEventsPage.tsx — Session event viewer (flat event list, event count display, auto-scroll via useAutoScroll, 2s polling via usePolling; "Back to Sessions" link with ?focus= param targeting parent abstract session; resolves parent abstract session from /api/status)
 src/__tests__/setup.ts         — Test setup (jsdom + @testing-library/jest-dom matchers)
-src/__tests__/*.test.tsx       — Component tests (SessionEventsPage, StatusPage, DashboardPage, useAutoScroll)
+src/__tests__/*.test.tsx       — Component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll)
 ```
 
 ### Build Scripts (in packages/gateway/package.json)
@@ -250,11 +250,11 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (354 total: 346 vitest + 8 Playwright)
+### Test Suites (356 total: 348 vitest + 8 Playwright)
 
 ```
 Gateway vitest (226 tests)   — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store tests)
 Agent vitest (91 tests)      — unit tests with mock Copilot SDK session + IPC stream tests (includes structured-logger, token-resolver, ipc-stream tests)
-Frontend vitest (29 tests)   — React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, useAutoScroll) via jsdom + @testing-library/react
+Frontend vitest (31 tests)   — React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll) via jsdom + @testing-library/react
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```
