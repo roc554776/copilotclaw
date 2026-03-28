@@ -150,4 +150,65 @@ describe("SessionsListPage", () => {
       expect(screen.getAllByText("Sessions").length).toBeGreaterThanOrEqual(1);
     });
   });
+
+  it("shows suspended abstract session with all past physical sessions", async () => {
+    const suspendedStatus = {
+      ...mockStatusResponse,
+      agent: {
+        sessions: {
+          "suspended-session-id-1234": {
+            status: "suspended",
+            boundChannelId: "chan-99887766",
+            startedAt: "2026-03-28T06:00:00Z",
+            physicalSessionHistory: [
+              {
+                sessionId: "phys-old-session-001",
+                model: "gpt-4o",
+                currentState: "stopped",
+                startedAt: "2026-03-28T06:00:00Z",
+              },
+              {
+                sessionId: "phys-old-session-002",
+                model: "gpt-4o-mini",
+                currentState: "stopped",
+                startedAt: "2026-03-28T07:00:00Z",
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url === "/api/status") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(suspendedStatus),
+        } as Response);
+      }
+      if (url === "/api/session-events/sessions") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(["phys-old-session-001", "phys-old-session-002"]),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      } as Response);
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      // Abstract session shown with status "suspended"
+      expect(screen.getAllByText("suspended").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Both past physical sessions shown as history
+    expect(screen.getAllByText("phys-old-ses").length).toBe(2);
+    // Both labeled as "history"
+    expect(screen.getAllByText("history").length).toBe(2);
+  });
 });

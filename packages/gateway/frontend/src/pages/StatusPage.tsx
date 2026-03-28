@@ -195,7 +195,7 @@ export function StatusPage() {
                         textTransform: "none",
                       }}
                     >
-                      All physical sessions &rarr;
+                      All sessions &rarr;
                     </a>
                   </div>
                   {Object.entries(status.agent.sessions).map(

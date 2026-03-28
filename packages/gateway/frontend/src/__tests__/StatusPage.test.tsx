@@ -105,4 +105,20 @@ describe("StatusPage", () => {
     const backLink = links.find((l) => l.getAttribute("href") === "/");
     expect(backLink).toBeDefined();
   });
+
+  it("shows 'All sessions' link to /sessions (not 'All physical sessions')", async () => {
+    render(
+      <MemoryRouter>
+        <StatusPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const links = screen.getAllByRole("link");
+      const sessionsLink = links.find((l) => l.getAttribute("href") === "/sessions");
+      expect(sessionsLink).toBeDefined();
+      expect(sessionsLink!.textContent).toContain("All sessions");
+      expect(sessionsLink!.textContent).not.toContain("physical");
+    });
+  });
 });

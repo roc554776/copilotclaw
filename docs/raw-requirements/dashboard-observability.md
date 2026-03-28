@@ -62,3 +62,16 @@
 - 物理セッションのシステムプロンプトを、API や dashboard 等で取得できるようにする
 - SystemStatus で表示する
 - ※ 今は system prompt を変更していないので、オリジナルのシステムプロンプトと同じものが表示されるが、将来的には変更する可能性があるので、別々に表示するようにする
+
+<!-- 2026-03-28 -->
+## `/sessions` の抽象セッション階層表示が不完全
+
+- `/sessions` は abstract agent session の一覧と、それに紐づく physical agent session の一覧を親子関係で表示するようにしてください。
+  - 本来の期待
+    - suspend になっている過去の物理 session も含め、全て表示される
+- 過去に出しているはずの要望で、かつ実現報告も受けているのに、実現されていないようです。
+
+## `/status` の sessions リンク表記の修正
+
+- `/status` にある sessions へのリンクの表記は `All sessions →` にすべき
+  - 現状: `Sessions All physical sessions →` という表示になっている
