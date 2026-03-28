@@ -24,11 +24,47 @@ IPC ソケット上で改行区切り JSON を送受信する。
 
 ### Agent IPC プロトコル
 
+**現在のプロトコル（gateway → agent 方向のみ）:**
+
 | メソッド | 応答 | 用途 |
 | :--- | :--- | :--- |
 | `status` | `{ version, startedAt, sessions: { [sessionId]: AgentSessionInfo } }` | 全 agent session の状態を一括取得（version を含む） |
 | `session_status` (params: `{ sessionId }`) | `AgentSessionInfo` | 個別 agent session の状態を取得 |
 | `stop` | `{ ok: true }` | graceful shutdown |
+
+### Gateway-Agent 間通信の IPC 統一（未実現）
+
+現在 agent process は gateway の HTTP API にアクセスしている（pending poll、メッセージ送信、イベント転送、プロンプト保存、config 取得）。これを全て IPC に移行し、agent process が gateway の HTTP server の存在を知らない構成にする。
+
+**移行対象（現在 agent → gateway HTTP）:**
+
+| 現在の HTTP 通信 | IPC 化後 |
+| :--- | :--- |
+| `GET /api/status`（config 取得） | IPC 接続時に gateway が config を push |
+| `GET /api/channels/pending`（定期ポーリング） | gateway が pending 発生時に IPC で push |
+| `GET /api/channels/{{id}}/messages/pending/peek` | gateway が IPC で通知 |
+| `POST /api/channels/{{id}}/messages/pending/flush` | agent が IPC で flush 要求 |
+| `POST /api/channels/{{id}}/messages`（メッセージ送信） | agent が IPC でメッセージ送信 |
+| `POST /api/session-events`（イベント転送） | agent が IPC でイベント送信 |
+| `POST /api/system-prompts/original`（プロンプト保存） | agent が IPC でプロンプト送信 |
+| `POST /api/system-prompts/session`（同上） | agent が IPC でプロンプト送信 |
+
+**通信方向の変更:**
+- 現在: gateway が agent の IPC socket に接続（一方向リクエスト/レスポンス）
+- 移行後: 同じ接続上で双方向通信。gateway → agent（status 取得、pending 通知、config push）と agent → gateway（メッセージ送信、イベント転送）の両方を 1 本の IPC 接続で行う
+
+**除去対象:**
+- agent process から `COPILOTCLAW_GATEWAY_URL` 環境変数の参照
+- `gatewayBaseUrl` の設定・保持
+- agent 内の全 HTTP fetch 呼び出し（`fetchPendingCounts`, `peekOldestPending`, `flushPending`, `fetchGatewayConfig`, `postToGateway`, `postChannelMessage`、channel.ts 内の `pollNextInputs` の HTTP 部分）
+
+**影響範囲:**
+- `packages/agent/src/index.ts` — ポーリングループを IPC push 受信に変更
+- `packages/agent/src/agent-session-manager.ts` — `gatewayBaseUrl` と `postToGateway`/`postChannelMessage` を IPC メッセージに変更
+- `packages/agent/src/tools/channel.ts` — `pollNextInputs` の HTTP fetch を IPC 受信に変更
+- `packages/agent/src/ipc-server.ts` — 双方向通信プロトコルの追加
+- `packages/gateway/src/agent-manager.ts` — IPC 接続の永続化と双方向通信の追加
+- `packages/gateway/src/server.ts` — agent 向け HTTP API は維持（dashboard/外部ツール向け）
 
 AgentSessionInfo:
 

@@ -19,7 +19,20 @@
   - user message POST 時に agent session を ensure する（agent process 側の責務: gateway をポーリングして pending を見つけたら session を起動）
   - gateway stop 時に agent process は停止しない（独立プロセスの原則）
   - gateway の責務: user message の管理、agent プロセスの ensure（start 時のみ）、チャットシステムの提供
-  - agent プロセスの責務
+  <!-- 2026-03-28 -->
+## Gateway-Agent 間通信の IPC 統一
+
+- agent process は、gateway と http server ではなく、IPC でやりとりするようにする
+  - http の部分は channel や human がシステムの status や設定を確認するためのインタフェースであって、gateway と agent process の通信には使わない
+  - agent process は gateway の http server の存在を知るべきではない
+  - 理由: モジュール構成を健全に保つため
+- gateway が通信の主体
+  - gateway が agent process の socket に接続する形にする
+  - agent process から gateway への通信を、双方向にすることは問題ない
+
+## agent プロセスの責務（既存）
+
+- agent プロセスの責務
     - gateway をポーリングして pending user message を確認し、必要なら agent session を起動（session ensure は agent 側の責務）
     - チャンネルセッションが user message 処理中のまま既定の時間（デフォルト 10 分）が経過した場合は停止させる
       - 再起動・停止を無制限に繰り返さないようにする
