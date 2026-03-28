@@ -56,14 +56,15 @@ SystemStatus（現在はモーダル表示のみ）を、gateway の独立ペー
 
 session event の parentId がほぼ付与されないため、parentId に基づくネスト表示機能は不要。廃止する。
 
-### Req: オリジナルのシステムプロンプトの取得・表示
+### Req: オリジナルのシステムプロンプトの取得・表示（未実現 — キャプチャが動作していない）
 
 モデルごとの、Copilot SDK が提供するオリジナルのシステムプロンプトを API と dashboard で参照できるようにする。
 
-- `createSession` 時に `registerTransformCallbacks` を使い、改変せずにオリジナルの system prompt を取得して保存する
+- `createSession` の config で `systemMessage: { mode: "customize", sections: { ... } }` を指定し、各セクションに transform callback を設定してオリジナルの system prompt を取得して保存する
 - 最新のものが取得されるたびに上書き保存する
 - モデル名、システムプロンプト本文、取得日時を保存する
 - API と dashboard で「オリジナルの」system prompt であることが明確に分かるようにする
+- 現状の問題: `registerTransformCallbacks` を `createSession` の後に呼んでおり、CLI の wire payload に transform が通知されないためコールバックが発火しない
 
 ### Req: 物理セッションのシステムプロンプトの表示
 
