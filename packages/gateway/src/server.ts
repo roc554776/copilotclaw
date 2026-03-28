@@ -274,11 +274,14 @@ function createRequestHandler(
           json(res, 404, { error: "channel not found" });
           return;
         }
-        // Agent process ensure is done at gateway start, not per-message.
-        // Agent session ensure is the agent process's responsibility (it polls for pending).
         // Notify all channel providers
         for (const provider of channelProviders) {
           provider.onMessage?.(channelId, sender, msg.message);
+        }
+        // Notify agent via IPC stream when a user message arrives
+        if (sender === "user" && agentManager !== null) {
+          const pendingCount = store.pendingCounts()[channelId] ?? 0;
+          agentManager.notifyPending(channelId, pendingCount);
         }
         json(res, 201, msg);
         return;
@@ -461,7 +464,7 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const onStop = options?.onStop ?? (() => { process.exit(0); });
   const agentManager = options?.agentManager === null
     ? null
-    : options?.agentManager ?? new AgentManager({ gatewayPort: port });
+    : options?.agentManager ?? new AgentManager();
   const sseBroadcaster = options?.sseBroadcaster ?? new SseBroadcaster();
   const logBuffer = options?.logBuffer ?? new LogBuffer();
   const sessionEventStore = options?.sessionEventStore ?? null;

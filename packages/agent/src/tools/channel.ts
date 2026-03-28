@@ -1,4 +1,5 @@
 import { defineTool } from "@github/copilot-sdk";
+import { requestFromGateway, sendToGateway, streamEvents } from "../ipc-server.js";
 
 const WAIT_TOOL_NAME = "copilotclaw_wait";
 
@@ -33,11 +34,8 @@ export interface SubagentCompletionInfo {
 }
 
 export interface ChannelToolDeps {
-  gatewayBaseUrl: string;
   channelId: string;
-  pollIntervalMs?: number;
   keepaliveTimeoutMs?: number;
-  fetch?: typeof globalThis.fetch;
   abortSignal?: AbortSignal;
   onStatusChange?: (status: AgentStatusChange) => void;
   /** Drain all pending subagent completion events. Returns and clears the queue. */
@@ -57,36 +55,68 @@ interface MessageResponse {
   createdAt: string;
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+/** Drain pending messages via IPC. Returns messages or empty array. */
+async function drainPendingViaIpc(channelId: string): Promise<NextInputResponse[]> {
+  try {
+    const data = await requestFromGateway({ type: "drain_pending", channelId });
+    if (Array.isArray(data)) return data as NextInputResponse[];
+  } catch {
+    // IPC error — treat as no messages
+  }
+  return [];
+}
+
+/** Wait for pending_notify from gateway, with keepalive timeout.
+ *  Returns true if notified, false on timeout or abort. */
+function waitForPendingNotify(channelId: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(false); return; }
+
+    let settled = false;
+    const settle = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => { settle(false); }, timeoutMs);
+    timer.unref();
+
+    const onNotify = (msg: Record<string, unknown>) => {
+      if (msg["channelId"] === channelId) {
+        settle(true);
+      }
+    };
+
+    const onAbort = () => { settle(false); };
+
+    streamEvents.on("pending_notify", onNotify);
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    function cleanup(): void {
+      clearTimeout(timer);
+      streamEvents.removeListener("pending_notify", onNotify);
+      signal?.removeEventListener("abort", onAbort);
+    }
   });
 }
 
-async function pollNextInputs(deps: ChannelToolDeps): Promise<NextInputResponse[]> {
-  const fetchFn = deps.fetch ?? globalThis.fetch;
-  const interval = deps.pollIntervalMs ?? 5000;
-  const keepaliveTimeout = deps.keepaliveTimeoutMs ?? DEFAULT_KEEPALIVE_TIMEOUT_MS;
-  const signal = deps.abortSignal;
-  const fetchOpts: RequestInit = { method: "POST" };
-  if (signal !== undefined) fetchOpts.signal = signal;
-  const startTime = Date.now();
+/** Poll for inputs via IPC: drain, if empty wait for notify, drain again.
+ *  Returns messages or empty array (on keepalive timeout). */
+async function pollNextInputs(channelId: string, keepaliveTimeoutMs: number, signal?: AbortSignal): Promise<NextInputResponse[]> {
+  if (signal?.aborted) return [];
 
-  for (;;) {
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    if (Date.now() - startTime >= keepaliveTimeout) return [];
-    const res = await fetchFn(
-      `${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/messages/pending`,
-      fetchOpts,
-    );
-    if (res.status === 200) {
-      const data = await res.json() as NextInputResponse[];
-      return data;
-    }
-    await sleep(interval, signal);
-  }
+  // First attempt: drain immediately
+  const immediate = await drainPendingViaIpc(channelId);
+  if (immediate.length > 0) return immediate;
+
+  // No messages — wait for push notification or timeout
+  const notified = await waitForPendingNotify(channelId, keepaliveTimeoutMs, signal);
+  if (!notified) return []; // timeout or abort
+
+  // Notified — drain again
+  return drainPendingViaIpc(channelId);
 }
 
 function combineMessages(inputs: NextInputResponse[]): string {
@@ -112,17 +142,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
       required: ["message"],
     },
     handler: async (args: { message: string }) => {
-      const fetchFn = deps.fetch ?? globalThis.fetch;
-      const opts: RequestInit = {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sender: "agent", message: args.message }),
-      };
-      if (deps.abortSignal !== undefined) opts.signal = deps.abortSignal;
-      const res = await fetchFn(`${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/messages`, opts);
-      if (!res.ok) {
-        throw new Error(`send_message failed: ${res.status} ${res.statusText}`);
-      }
+      sendToGateway({ type: "channel_message", channelId: deps.channelId, sender: "agent", message: args.message });
       pendingReplyExpected = false;
       return { status: "sent" };
     },
@@ -152,7 +172,8 @@ export function createChannelTools(deps: ChannelToolDeps) {
         }
 
         deps.onStatusChange?.("waiting");
-        const inputs = await pollNextInputs(deps);
+        const keepaliveTimeout = deps.keepaliveTimeoutMs ?? DEFAULT_KEEPALIVE_TIMEOUT_MS;
+        const inputs = await pollNextInputs(deps.channelId, keepaliveTimeout, deps.abortSignal);
 
         // Drain subagent completions that occurred while waiting
         const subagentCompletions = deps.drainSubagentCompletions?.() ?? [];
@@ -199,19 +220,13 @@ export function createChannelTools(deps: ChannelToolDeps) {
       required: [],
     },
     handler: async (args: { limit?: number }) => {
-      const fetchFn = deps.fetch ?? globalThis.fetch;
       const limit = args.limit ?? 5;
-      const fetchOpts: RequestInit = {};
-      if (deps.abortSignal !== undefined) fetchOpts.signal = deps.abortSignal;
-      const res = await fetchFn(
-        `${deps.gatewayBaseUrl}/api/channels/${deps.channelId}/messages?limit=${limit}`,
-        fetchOpts,
-      );
-      if (!res.ok) {
-        throw new Error(`list_messages failed: ${res.status} ${res.statusText}`);
+      try {
+        const data = await requestFromGateway({ type: "list_messages", channelId: deps.channelId, limit });
+        return { messages: Array.isArray(data) ? data as MessageResponse[] : [] };
+      } catch (err: unknown) {
+        throw new Error(`list_messages failed: ${err instanceof Error ? err.message : String(err)}`);
       }
-      const messages = await res.json() as MessageResponse[];
-      return { messages };
     },
     skipPermission: true,
   });

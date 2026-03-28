@@ -5,6 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock @github/copilot-sdk before importing the module under test.
 // CopilotClient is used with `new`, so we use a vi.fn() that is a constructor.
+// Mock IPC server functions before importing the module under test.
+vi.mock("../src/ipc-server.js", async () => {
+  const { EventEmitter } = await import("node:events");
+  return {
+    sendToGateway: vi.fn(),
+    requestFromGateway: vi.fn().mockResolvedValue(null),
+    streamEvents: new EventEmitter(),
+    hasStream: vi.fn().mockReturnValue(true),
+    getStreamSocket: vi.fn().mockReturnValue(null),
+    setStreamSocket: vi.fn(),
+  };
+});
+
 vi.mock("@github/copilot-sdk", () => {
   const approveAll = vi.fn();
   // eslint-disable-next-line prefer-arrow-callback
@@ -23,6 +36,7 @@ vi.mock("@github/copilot-sdk", () => {
 
 import { AgentSessionManager } from "../src/agent-session-manager.js";
 import { CopilotClient } from "@github/copilot-sdk";
+import { sendToGateway, requestFromGateway } from "../src/ipc-server.js";
 
 /** Builds a fake CopilotSession that fires idle or error after send(). */
 function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit: (event: string, ...args: unknown[]) => void; sessionId: string; getMessages: ReturnType<typeof vi.fn>; registerTransformCallbacks: ReturnType<typeof vi.fn> } {
@@ -90,17 +104,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
   it("suspends session and notifies channel when physical session ends normally (idle, unaborted)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 204,
-      json: async () => null,
-      text: async () => "null",
-    } as Response);
-
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     const sessionId = manager.startSession({ boundChannelId: "ch-idle" });
 
@@ -112,29 +116,19 @@ describe("AgentSessionManager — stopped status and channel notification", () =
     expect(manager.hasSessionForChannel("ch-idle")).toBe(true);
     expect(manager.hasActiveSessionForChannel("ch-idle")).toBe(false);
 
-    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
-      ([url]) => (url as string).includes("/messages"),
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const notifyCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(notifyCalls).toHaveLength(1);
-    const body = JSON.parse(notifyCalls[0]![1].body as string) as { sender: string; message: string };
-    expect(body.sender).toBe("agent");
-    expect(body.message).toContain("stopped unexpectedly");
+    expect(notifyCalls[0]![0].sender).toBe("agent");
+    expect(notifyCalls[0]![0].message).toContain("stopped unexpectedly");
   });
 
   it("suspends session and notifies channel when physical session throws an error (unaborted)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("error")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 204,
-      json: async () => null,
-      text: async () => "null",
-    } as Response);
-
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     const sessionId = manager.startSession({ boundChannelId: "ch-error" });
 
@@ -145,12 +139,12 @@ describe("AgentSessionManager — stopped status and channel notification", () =
     expect(statuses[sessionId]?.status).toBe("suspended");
     expect(manager.hasSessionForChannel("ch-error")).toBe(true);
 
-    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
-      ([url]) => (url as string).includes("/messages"),
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const notifyCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(notifyCalls).toHaveLength(1);
-    const body = JSON.parse(notifyCalls[0]![1].body as string) as { sender: string; message: string };
-    expect(body.message).toContain("stopped unexpectedly");
+    expect(notifyCalls[0]![0].message).toContain("stopped unexpectedly");
   });
 
   it("does not notify the channel when session is aborted via stopSession", async () => {
@@ -158,17 +152,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
     const pendingCreate = new Promise<object>((res) => { resolveCreate = res; });
     installClientMock(vi.fn().mockReturnValue(pendingCreate));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 201,
-      json: async () => ({}),
-      text: async () => "{}",
-    } as Response);
-
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     const sessionId = manager.startSession({ boundChannelId: "ch-abort" });
 
@@ -180,8 +164,9 @@ describe("AgentSessionManager — stopped status and channel notification", () =
 
     await wait(50);
 
-    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
-      ([url]) => (url as string).includes("/messages"),
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const notifyCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(notifyCalls).toHaveLength(0);
   });
@@ -201,14 +186,9 @@ describe("AgentSessionManager — stopped status and channel notification", () =
       };
     }));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
       staleTimeoutMs: 1,
-      fetch: fetchSpy,
     });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-stale" });
@@ -222,20 +202,16 @@ describe("AgentSessionManager — stopped status and channel notification", () =
   it("does not notify when there is no bound channel (channel-less session errors immediately)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 201 } as Response);
-
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     // No boundChannelId — runSession throws "channel-less sessions not yet supported"
     manager.startSession();
 
     await wait(50);
 
-    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
-      ([url]) => (url as string).includes("/messages"),
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const notifyCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(notifyCalls).toHaveLength(0);
   });
@@ -262,14 +238,8 @@ describe("AgentSessionManager — session max age", () => {
       };
     }));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
-
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
       maxSessionAgeMs: 1,
-      fetch: fetchSpy,
     });
 
     manager.startSession({ boundChannelId: "ch-age" });
@@ -308,14 +278,9 @@ describe("AgentSessionManager — session max age", () => {
       };
     }));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
       maxSessionAgeMs: 999999999,
-      fetch: fetchSpy,
     });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-young" });
@@ -338,14 +303,8 @@ describe("AgentSessionManager — suspended session revival", () => {
     const mockSession = makeMockCopilotSession("idle");
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     const sessionId = manager.startSession({ boundChannelId: "ch-revive" });
     await wait(50); // session idles and suspends
@@ -378,14 +337,8 @@ describe("AgentSessionManager — suspended session revival", () => {
     mockSession.send.mockImplementation(async () => "msg-id");
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     const sessionId = manager.startSession({ boundChannelId: "ch-explicit-stop" });
     await waitForPhysicalSession(manager);
@@ -419,13 +372,8 @@ describe("AgentSessionManager — binding persistence", () => {
   it("persists suspended session bindings (including copilotSessionId) and restores on new manager", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -443,8 +391,6 @@ describe("AgentSessionManager — binding persistence", () => {
     // Create a new manager from the same persist file — simulates agent restart
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
     const manager2 = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -463,13 +409,8 @@ describe("AgentSessionManager — binding persistence", () => {
     mockSession.send.mockImplementation(async () => "msg-id");
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -513,14 +454,9 @@ describe("AgentSessionManager — stale deferred resume", () => {
   it("saves copilotSessionId, notifies channel, and returns flushed on stale timeout", async () => {
     installClientMock(vi.fn().mockImplementation(async () => makeStuckSession("sdk-stale-id")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
       staleTimeoutMs: 1,
-      fetch: fetchSpy,
     });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-stale-defer" });
@@ -546,26 +482,21 @@ describe("AgentSessionManager — stale deferred resume", () => {
     expect(manager.hasActiveSessionForChannel("ch-stale-defer")).toBe(false);
 
     // Must have notified the channel of the timeout
-    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
-      ([url]) => (url as string).includes("/messages") && !(url as string).includes("pending"),
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const notifyCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
-    const body = JSON.parse(notifyCalls[0]![1].body as string) as { sender: string; message: string };
-    expect(body.sender).toBe("agent");
-    expect(body.message).toContain("timed out");
+    expect(notifyCalls[0]![0].sender).toBe("agent");
+    expect(notifyCalls[0]![0].message).toContain("timed out");
   });
 
   it("does not suspend session when oldestInputId is undefined (nothing pending - stale check)", async () => {
     installClientMock(vi.fn().mockImplementation(async () => makeStuckSession("sdk-noop-id")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
       staleTimeoutMs: 1,
-      fetch: fetchSpy,
     });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-nopending" });
@@ -598,14 +529,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
-
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-assistant-msg" });
     await waitForPhysicalSession(manager);
@@ -613,13 +537,13 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
     mockSession.emit("assistant.message", { data: { content: "Hello from assistant" } });
     await wait(10);
 
-    const messageCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
-      ([url, opts]) => (url as string).includes("/messages") && !(url as string).includes("pending") && opts.method === "POST",
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const messageCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(messageCalls).toHaveLength(1);
-    const body = JSON.parse(messageCalls[0]![1].body as string) as { sender: string; message: string };
-    expect(body.sender).toBe("agent");
-    expect(body.message).toBe("Hello from assistant");
+    expect(messageCalls[0]![0].sender).toBe("agent");
+    expect(messageCalls[0]![0].message).toBe("Hello from assistant");
 
     mockSession.emit("session.idle");
     await wait(30);
@@ -632,14 +556,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
-
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-empty-msg" });
     await waitForPhysicalSession(manager);
@@ -647,8 +564,9 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
     mockSession.emit("assistant.message", { data: { content: "" } });
     await wait(10);
 
-    const messageCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
-      ([url, opts]) => (url as string).includes("/messages") && !(url as string).includes("pending") && opts.method === "POST",
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const messageCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(messageCalls).toHaveLength(0);
 
@@ -669,14 +587,8 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-usage" });
     await waitForPhysicalSession(manager);
@@ -701,14 +613,8 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-quota" });
     await waitForPhysicalSession(manager);
@@ -730,14 +636,8 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-noquota" });
     await waitForPhysicalSession(manager);
@@ -762,7 +662,6 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
   async function setupWithHookCapture(): Promise<{
     mockSession: ReturnType<typeof makeMockCopilotSession>;
     createSessionSpy: ReturnType<typeof vi.fn>;
-    fetchSpy: ReturnType<typeof vi.fn>;
     manager: AgentSessionManager;
   }> {
     const mockSession = makeMockCopilotSession("idle");
@@ -772,19 +671,12 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
     installClientMock(createSessionSpy);
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
-
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-reminder" });
     await waitForPhysicalSession(manager);
 
-    return { mockSession, createSessionSpy, fetchSpy, manager };
+    return { mockSession, createSessionSpy, manager };
   }
 
   it("sets needsReminder when context usage crosses 10% threshold", async () => {
@@ -916,14 +808,8 @@ describe("AgentSessionManager — custom agents configuration", () => {
     const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
     installClientMock(createSessionSpy);
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-agents" });
     await waitForPhysicalSession(manager);
@@ -968,14 +854,8 @@ describe("AgentSessionManager — subagent completion notification", () => {
     const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
     installClientMock(createSessionSpy);
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-sub-notify" });
     await waitForPhysicalSession(manager);
@@ -1008,14 +888,8 @@ describe("AgentSessionManager — subagent completion notification", () => {
     const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
     installClientMock(createSessionSpy);
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-sub-fail" });
     await waitForPhysicalSession(manager);
@@ -1046,14 +920,8 @@ describe("AgentSessionManager — session failure backoff", () => {
     // createSession rejects immediately — rapid failure
     installClientMock(vi.fn().mockRejectedValue(new Error("auth failed")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-backoff" });
     await wait(50);
@@ -1063,14 +931,8 @@ describe("AgentSessionManager — session failure backoff", () => {
   });
 
   it("does not backoff for channels without prior failure", () => {
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     expect(manager.isChannelInBackoff("ch-no-failure")).toBe(false);
   });
@@ -1078,14 +940,8 @@ describe("AgentSessionManager — session failure backoff", () => {
   it("backoff expires after the backoff duration", async () => {
     installClientMock(vi.fn().mockRejectedValue(new Error("auth failed")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-backoff-expiry" });
     await wait(50);
@@ -1112,50 +968,37 @@ describe("AgentSessionManager — error detail in channel notification", () => {
   it("includes error reason in stopped notification when session throws", async () => {
     installClientMock(vi.fn().mockRejectedValue(new Error("model resolution failed")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-error-detail" });
     await wait(50);
 
-    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
-      ([url]) => (url as string).includes("/messages"),
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const notifyCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
-    const body = JSON.parse(notifyCalls[0]![1].body as string) as { message: string };
-    expect(body.message).toContain("stopped unexpectedly");
-    expect(body.message).toContain("model resolution failed");
+    expect(notifyCalls[0]![0].message).toContain("stopped unexpectedly");
+    expect(notifyCalls[0]![0].message).toContain("model resolution failed");
   });
 
   it("omits error detail when session ends normally (idle)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
-
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-idle-no-detail" });
     await wait(50);
 
-    const notifyCalls = (fetchSpy.mock.calls as Array<[string, RequestInit]>).filter(
-      ([url]) => (url as string).includes("/messages"),
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const notifyCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(notifyCalls.length).toBeGreaterThanOrEqual(1);
-    const body = JSON.parse(notifyCalls[0]![1].body as string) as { message: string };
-    expect(body.message).toContain("stopped unexpectedly.");
+    expect(notifyCalls[0]![0].message).toContain("stopped unexpectedly.");
     // No ": reason" appended for idle exit — message ends with "unexpectedly."
-    expect(body.message).not.toContain("unexpectedly:");
+    expect(notifyCalls[0]![0].message).not.toContain("unexpectedly:");
   });
 });
 
@@ -1179,13 +1022,8 @@ describe("AgentSessionManager — cumulative token history across physical sessi
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -1213,13 +1051,8 @@ describe("AgentSessionManager — cumulative token history across physical sessi
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -1242,13 +1075,8 @@ describe("AgentSessionManager — cumulative token history across physical sessi
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -1262,8 +1090,6 @@ describe("AgentSessionManager — cumulative token history across physical sessi
     // Create new manager — simulates agent restart
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
     const manager2 = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -1294,14 +1120,8 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-hist" });
     await waitForPhysicalSession(manager);
@@ -1329,14 +1149,8 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
-    const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
-    });
+    const manager = new AgentSessionManager({});
 
     manager.startSession({ boundChannelId: "ch-link" });
     await waitForPhysicalSession(manager);
@@ -1357,13 +1171,8 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -1383,8 +1192,6 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
     // Create new manager — simulates agent restart
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
     const manager2 = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:9999",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -1412,14 +1219,9 @@ describe("AgentSessionManager — stopAll suspends channel-bound sessions", () =
     const mockSession = makeMockCopilotSession("idle");
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true, status: 204, json: async () => null, text: async () => "null",
-    } as Response);
 
     const persistPath = join(tmpDir, "bindings.json");
     const manager = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:1234",
-      fetch: fetchSpy,
       persistPath,
     });
 
@@ -1445,8 +1247,6 @@ describe("AgentSessionManager — stopAll suspends channel-bound sessions", () =
     // Verify a new manager restores the session
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
     const manager2 = new AgentSessionManager({
-      gatewayBaseUrl: "http://localhost:1234",
-      fetch: fetchSpy,
       persistPath,
     });
 

@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.33.0 | Token estimate: ~2200 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.35.0 | Token estimate: ~2200 -->
 
 # Architecture
 
@@ -6,20 +6,19 @@
 
 ```
 ┌─────────────┐  HTTP   ┌─────────────┐  IPC (.sock)  ┌─────────────────────────────┐
-│   Browser    │◄──────►│   Gateway    │─────────────►│           Agent             │
-│  (dashboard) │        │  (daemon)    │               │  ┌───────────────────────┐  │
-└─────────────┘        └──────┬──────┘               │  │ AgentSessionManager   │  │
-                              │                       │  │  sessions: sessId→…   │  │
-                              │ HTTP poll             │  │  bindings: chId→sessId│  │
-                              │◄──────────────────────│  └───────────────────────┘  │
-                              │                       └────────────┬────────────────┘
+│   Browser    │◄──────►│   Gateway    │◄────────────►│           Agent             │
+│  (dashboard) │        │  (daemon)    │  (stream +    │  ┌───────────────────────┐  │
+└─────────────┘        └─────────────┘   short-lived) │  │ AgentSessionManager   │  │
+                                                       │  │  sessions: sessId→…   │  │
+                                                       │  │  bindings: chId→sessId│  │
+                                                       └──┴───────────────────────┴──┘
                                                                    │
                                                             Copilot SDK
                                                             (mocked in tests)
 ```
 
 - **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, zeroPremium, debugMockCopilotUnsafeTools, stateDir, workspaceRoot, auth.github, otel) via /api/status; proxies Copilot quota and models from agent via /api/quota and /api/models; serves recent logs via /api/logs (ring buffer); hosts observability infrastructure (session event store, system prompt snapshots, status page, events page); initializes OTel at startup (logs + metrics export via OTLP HTTP) and shuts down on exit
-- **Agent**: single process, manages agent sessions independently of channels; receives OTel config from gateway via /api/status and initializes its own OTel setup independently
+- **Agent**: single process, manages agent sessions independently of channels; communicates with gateway exclusively via IPC (stream for push-based messaging, short-lived connections for status/stop/quota/models); receives OTel config from gateway via IPC stream config push and initializes its own OTel setup independently
 - **Agent Session**: wraps a Copilot SDK session with its own sessionId, optionally bound to a channel
 - **ChannelProvider**: plugin interface for chat mediums (built-in chat, Discord, Telegram, etc.); providers handle medium-specific routes and receive message notifications
 - **BuiltinChatChannel**: default ChannelProvider — serves dashboard UI at "/", SSE at "/api/events", broadcasts via SseBroadcaster
@@ -62,9 +61,9 @@ Environment variables:
 - Force-restart flow: ensureAgent returns old bootId on force-restart → daemon calls waitForNewAgent to poll until different bootId appears before proceeding
 - Gateway stop → gateway only (agent process NOT stopped)
 - Gateway restart → POST /api/stop, wait for port free, then start (restart.ts)
-- Agent → Gateway: HTTP API poll (pending counts, drain pending, post messages, peek/flush)
-- Agent process manages agent sessions: polls gateway for pending, starts session when found
-- User message POST does NOT trigger agent process ensure (agent polls on its own)
+- Agent ↔ Gateway: IPC stream (v0.35.0) — persistent bidirectional connection; gateway pushes config and pending_notify; agent pushes channel messages, session events, system prompts; agent sends request-response for drain/peek/flush/list_messages
+- Agent process manages agent sessions: listens for pending_notify push from gateway via IPC stream, starts session when notified
+- User message POST triggers gateway notifyPending via IPC stream (push-based, no polling)
 
 ## Session Keepalive
 
@@ -111,8 +110,8 @@ Environment variables:
 ## Observability (v0.28.0, SQLite v0.29.0)
 
 - **SessionEventStore**: SQLite-based event storage (session-events.db in data dir, WAL mode); table: session_events (sessionId, type, timestamp, data as JSON, parentId; indexed by sessionId, sessionId+timestamp, type); stores system prompt snapshots as JSON files in `{{stateDir}}/data/prompts/`; enforces configurable storage cap by row count (default 100k events) by deleting oldest rows every 500 inserts
-- **Event Forwarding**: agent registers SDK event listeners (session.idle, session.error, tool.execution_start/complete, subagent.started/completed/failed, assistant.message/usage/turn_start/turn_end, session.compaction_start/complete, session.usage_info, session.model_change, session.title_changed) and forwards them to gateway via fire-and-forget POST to /api/session-events
-- **System Prompt Capture**: agent uses registerTransformCallbacks("*") on CopilotSession to intercept the original system prompt from the SDK; captured prompt forwarded to gateway as both original prompt (per-model, /api/system-prompts/original) and session prompt (per-session, /api/system-prompts/session)
+- **Event Forwarding**: agent registers SDK event listeners (session.idle, session.error, tool.execution_start/complete, subagent.started/completed/failed, assistant.message/usage/turn_start/turn_end, session.compaction_start/complete, session.usage_info, session.model_change, session.title_changed) and forwards them to gateway via fire-and-forget IPC stream push (type "session_event")
+- **System Prompt Capture**: agent uses registerTransformCallbacks("*") on CopilotSession to intercept the original system prompt from the SDK; captured prompt forwarded to gateway via IPC stream push as both original prompt (type "system_prompt_original", per-model) and session prompt (type "system_prompt_session", per-session)
 - **React SPA Frontend (v0.32.0)**: Vite + React + TypeScript SPA in `packages/gateway/frontend/`; routes: `/` (DashboardPage), `/status` (StatusPage), `/sessions` (SessionsListPage), `/sessions/:sessionId/events` (SessionEventsPage); hooks: useAutoScroll (position-based scroll follow), usePolling (generic interval polling); API client: `api.ts` with typed fetch wrappers for all gateway endpoints; built to `frontend-dist/` via `build:frontend` script; server serves SPA with fallback to old server-rendered HTML pages (observability-pages.ts) when `frontend-dist/` not present
 - **Status Page** (`/status`): shows gateway, agent, sessions (with elapsed time helper), config, and original system prompts; auto-refreshes every 5s; links to session event pages and session prompt viewer; shows stopped session history per session (v0.30.0)
 - **Events Page** (`/sessions/:id/events`): shows session events with event count in heading, flat event list and auto-scroll; auto-refreshes every 2s; "Back to System Status" and "Back to Sessions" links (latter uses ?focus= param targeting parent abstract session)
@@ -124,14 +123,14 @@ Environment variables:
 - Gateway and agent are independent processes (gateway stop does NOT stop agent)
 - Startup direction: always gateway → agent (agent never starts gateway)
 - Agent process ensure: gateway start time only (NOT on user message POST)
-- Agent session ensure: agent process responsibility (polls gateway for pending)
+- Agent session ensure: agent process responsibility (listens for pending_notify via IPC stream)
 - Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION exported from agent-manager.ts) at start; force-restart on mismatch; checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel; LogBuffer optionally writes structured JSON lines to file via enableFileOutput() (gateway.log); agent spawned with stderr redirected to agent.log; agent process initializes its own StructuredLogger writing to agent.log
 - Structured logging: StructuredLogger (intentionally duplicated in gateway and agent packages) writes JSON Lines (StructuredLogEntry: ts, level, component, msg, data?) to file via appendFileSync; bridges to OpenTelemetry via optional OtelLoggerBridge parameter (emits log records to OTel LoggerProvider when configured)
-- OpenTelemetry: OTel setup module (otel.ts, intentionally duplicated in gateway and agent) initializes OTLP HTTP exporters for logs and metrics; gateway additionally defines application-level metrics (otel-metrics.ts: session count gauges, token usage counters); endpoints configured via config.otel.endpoints (empty = noop export); agent receives OTel config from gateway /api/status and initializes independently with serviceName "copilotclaw-agent"
+- OpenTelemetry: OTel setup module (otel.ts, intentionally duplicated in gateway and agent) initializes OTLP HTTP exporters for logs and metrics; gateway additionally defines application-level metrics (otel-metrics.ts: session count gauges, token usage counters); endpoints configured via config.otel.endpoints (empty = noop export); agent receives OTel config from gateway via IPC stream config push and initializes independently with serviceName "copilotclaw-agent"
 - Channel backoff: AgentSessionManager tracks channelBackoff map; recordBackoffIfRapidFailure() sets backoff when session fails within rapid-failure threshold; isChannelInBackoff() checked in polling loop to skip channels in backoff (prevents retry storms); notifyChannelSessionStopped() includes error reason in system message when available
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (309 tests: 84 agent + 203 gateway + 22 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (346 tests: 91 agent + 226 gateway + 29 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
 - Frontend tests: vitest + jsdom + @testing-library/react for React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, useAutoScroll)
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal

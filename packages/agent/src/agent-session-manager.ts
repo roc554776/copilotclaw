@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
+import { requestFromGateway, sendToGateway } from "./ipc-server.js";
 import { createChannelTools, type SubagentCompletionInfo } from "./tools/channel.js";
 
 // The only tool exclusive to the channel-operator (parent agent).
@@ -150,10 +151,8 @@ interface AgentSessionEntry {
 }
 
 export interface AgentSessionManagerOptions {
-  gatewayBaseUrl: string;
   staleTimeoutMs?: number;
   maxSessionAgeMs?: number;
-  fetch?: typeof globalThis.fetch;
   model?: string;
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
@@ -195,10 +194,8 @@ const BACKOFF_DURATION_MS = 60_000; // wait 60s before retrying
 export class AgentSessionManager {
   private readonly sessions = new Map<string, AgentSessionEntry>();
   private readonly channelBindings = new Map<string, string>(); // channelId → sessionId
-  private readonly gatewayBaseUrl: string;
   private readonly staleTimeoutMs: number;
   private readonly maxSessionAgeMs: number;
-  private readonly fetchFn: typeof globalThis.fetch;
   private readonly model: string | undefined;
   private readonly zeroPremium: boolean;
   private readonly debugMockCopilotUnsafeTools: boolean;
@@ -213,10 +210,8 @@ export class AgentSessionManager {
   private readonly channelBackoff = new Map<string, number>();
 
   constructor(options: AgentSessionManagerOptions) {
-    this.gatewayBaseUrl = options.gatewayBaseUrl;
     this.staleTimeoutMs = options.staleTimeoutMs ?? DEFAULT_STALE_TIMEOUT_MS;
     this.maxSessionAgeMs = options.maxSessionAgeMs ?? DEFAULT_MAX_SESSION_AGE_MS;
-    this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.model = options.model;
     this.zeroPremium = options.zeroPremium ?? false;
     this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
@@ -496,10 +491,8 @@ export class AgentSessionManager {
     const subagentCompletionQueue: SubagentCompletionInfo[] = [];
 
     const { sendMessage, wait, listMessages } = createChannelTools({
-      gatewayBaseUrl: this.gatewayBaseUrl,
       channelId,
       abortSignal: entry.abortController.signal,
-      fetch: this.fetchFn,
       onStatusChange: (status) => {
         entry.info.status = status;
         if (status === "processing") {
@@ -513,7 +506,6 @@ export class AgentSessionManager {
       },
     });
 
-    const gatewayBaseUrl = this.gatewayBaseUrl;
     const signal = entry.abortController.signal;
 
     // State for periodic system prompt reinforcement via onPostToolUse additionalContext.
@@ -550,11 +542,14 @@ export class AgentSessionManager {
               reminderState.lastReminderPercent = reminderState.currentUsagePercent;
             }
 
-            // Check for pending user messages
-            const fetchOpts: RequestInit = { signal };
-            const res = await this.fetchFn(`${gatewayBaseUrl}/api/channels/${channelId}/messages/pending/peek`, fetchOpts);
-            if (res.status === 200) {
-              parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
+            // Check for pending user messages via IPC
+            try {
+              const peekResult = await requestFromGateway({ type: "peek_pending", channelId });
+              if (peekResult !== null && peekResult !== undefined) {
+                parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
+              }
+            } catch {
+              // IPC error — skip notification (non-fatal)
             }
 
             // Peek (don't drain) subagent completions — wait is the sole drain point
@@ -649,12 +644,14 @@ export class AgentSessionManager {
     const postCapturedPrompt = () => {
       const combined = Object.values(capturedSections).filter(Boolean).join("\n\n");
       if (combined.length > 0) {
-        this.postToGateway("/api/system-prompts/original", {
+        this.postToGateway({
+          type: "system_prompt_original",
           model: resolvedModel,
           prompt: combined,
           capturedAt: new Date().toISOString(),
         });
-        this.postToGateway("/api/system-prompts/session", {
+        this.postToGateway({
+          type: "system_prompt_session",
           sessionId: session.sessionId,
           model: resolvedModel,
           prompt: combined,
@@ -677,14 +674,14 @@ export class AgentSessionManager {
     entry.info.status = "waiting";
 
     // Forward all session events to gateway for observability
-    const forwardEvent = (type: string, event?: { timestamp?: string; data?: unknown }) => {
-      const payload: Record<string, unknown> = {
+    const forwardEvent = (eventType: string, event?: { timestamp?: string; data?: unknown }) => {
+      this.postToGateway({
+        type: "session_event",
         sessionId: session.sessionId,
-        type,
+        eventType,
         timestamp: event?.timestamp ?? new Date().toISOString(),
         data: (typeof event?.data === "object" && event.data !== null) ? event.data : {},
-      };
-      this.postToGateway("/api/session-events", payload);
+      });
     };
 
     // Subscribe to key SDK events and forward them
@@ -1058,25 +1055,13 @@ export class AgentSessionManager {
     this.postChannelMessage(channelId, message);
   }
 
-  /** Fire-and-forget POST to a gateway endpoint. */
-  private postToGateway(path: string, body: Record<string, unknown>): void {
-    this.fetchFn(`${this.gatewayBaseUrl}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).catch(() => {
-      // Non-fatal — event store unavailable or gateway not reachable
-    });
+  /** Fire-and-forget send to gateway via IPC stream. */
+  private postToGateway(msg: Record<string, unknown>): void {
+    sendToGateway(msg);
   }
 
   private postChannelMessage(channelId: string, message: string): void {
-    this.fetchFn(`${this.gatewayBaseUrl}/api/channels/${channelId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sender: "agent", message }),
-    }).catch((err: unknown) => {
-      console.error(`[agent] failed to notify channel ${channelId}:`, err);
-    });
+    sendToGateway({ type: "channel_message", channelId, sender: "agent", message });
   }
 
   /** Check if session has exceeded max age. If so, save state and stop (deferred resume).

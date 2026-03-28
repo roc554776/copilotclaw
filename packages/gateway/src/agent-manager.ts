@@ -3,11 +3,11 @@ import { openSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type AgentStatusResponse, getAgentModels, getAgentQuota, getAgentSessionMessages, getAgentStatus, stopAgent } from "./ipc-client.js";
+import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAgentModels, getAgentQuota, getAgentSessionMessages, getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.3.0";
+export const MIN_AGENT_VERSION = "0.35.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -21,18 +21,29 @@ export function semverSatisfies(version: string, minVersion: string): boolean {
 }
 
 export interface AgentManagerOptions {
-  gatewayPort: number;
   agentScript?: string;
 }
 
+export interface StreamMessageHandler {
+  onChannelMessage?: (channelId: string, sender: string, message: string) => void;
+  onSessionEvent?: (sessionId: string, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
+  onSystemPromptOriginal?: (model: string, prompt: string, capturedAt: string) => void;
+  onSystemPromptSession?: (sessionId: string, model: string, prompt: string) => void;
+  onDrainPending?: (channelId: string) => unknown[];
+  onPeekPending?: (channelId: string) => unknown | null;
+  onFlushPending?: (channelId: string) => number;
+  onListMessages?: (channelId: string, limit: number) => unknown[];
+}
+
 export class AgentManager {
-  private readonly gatewayPort: number;
   private readonly agentScript: string;
   private spawning = false;
   private spawningTimer: ReturnType<typeof setTimeout> | undefined;
+  private stream: IpcStream | null = null;
+  private streamMessageHandler: StreamMessageHandler | null = null;
+  private configToSend: Record<string, unknown> | null = null;
 
-  constructor(options: AgentManagerOptions) {
-    this.gatewayPort = options.gatewayPort;
+  constructor(options?: AgentManagerOptions) {
     const require = createRequire(import.meta.url);
     let defaultAgentScript: string;
     try {
@@ -43,7 +54,122 @@ export class AgentManager {
       const thisDir = dirname(fileURLToPath(import.meta.url));
       defaultAgentScript = join(thisDir, "..", "..", "agent", "dist", "index.js");
     }
-    this.agentScript = options.agentScript ?? defaultAgentScript;
+    this.agentScript = options?.agentScript ?? defaultAgentScript;
+  }
+
+  /** Set the handler for stream messages from the agent. */
+  setStreamMessageHandler(handler: StreamMessageHandler): void {
+    this.streamMessageHandler = handler;
+  }
+
+  /** Set the config to send to the agent when the stream connects. */
+  setConfigToSend(config: Record<string, unknown>): void {
+    this.configToSend = config;
+    // If stream is already connected, send immediately
+    if (this.stream !== null && this.stream.isConnected() && this.configToSend !== null) {
+      this.stream.send({ type: "config", config: this.configToSend });
+    }
+  }
+
+  /** Establish a persistent IPC stream connection to the agent. */
+  connectStream(): void {
+    if (this.stream !== null) return;
+    const socketPath = getAgentSocketPath();
+    this.stream = createStreamConnection(socketPath);
+
+    this.stream.on("connected", () => {
+      console.error("[gateway] IPC stream connected to agent");
+      // Push config immediately on connect
+      if (this.configToSend !== null) {
+        this.stream!.send({ type: "config", config: this.configToSend });
+      }
+    });
+
+    this.stream.on("disconnected", () => {
+      console.error("[gateway] IPC stream disconnected from agent");
+    });
+
+    this.stream.on("message", (msg: Record<string, unknown>) => {
+      this.handleAgentMessage(msg);
+    });
+  }
+
+  /** Handle an incoming message from the agent on the stream. */
+  private handleAgentMessage(msg: Record<string, unknown>): void {
+    const type = msg["type"] as string | undefined;
+    const handler = this.streamMessageHandler;
+    if (type === undefined || handler === null) return;
+
+    switch (type) {
+      case "channel_message": {
+        const channelId = msg["channelId"] as string;
+        const sender = msg["sender"] as string;
+        const message = msg["message"] as string;
+        handler.onChannelMessage?.(channelId, sender, message);
+        break;
+      }
+      case "session_event": {
+        const sessionId = msg["sessionId"] as string;
+        const eventType = (msg["eventType"] as string) ?? "unknown";
+        const timestamp = (msg["timestamp"] as string) ?? new Date().toISOString();
+        const data = (typeof msg["data"] === "object" && msg["data"] !== null ? msg["data"] : {}) as Record<string, unknown>;
+        const parentId = typeof msg["parentId"] === "string" ? msg["parentId"] as string : undefined;
+        handler.onSessionEvent?.(sessionId, eventType, timestamp, data, parentId);
+        break;
+      }
+      case "system_prompt_original": {
+        const model = msg["model"] as string;
+        const prompt = msg["prompt"] as string;
+        const capturedAt = (msg["capturedAt"] as string) ?? new Date().toISOString();
+        handler.onSystemPromptOriginal?.(model, prompt, capturedAt);
+        break;
+      }
+      case "system_prompt_session": {
+        const sessionId = msg["sessionId"] as string;
+        const model = msg["model"] as string;
+        const prompt = msg["prompt"] as string;
+        handler.onSystemPromptSession?.(sessionId, model, prompt);
+        break;
+      }
+      case "drain_pending": {
+        const channelId = msg["channelId"] as string;
+        const id = msg["id"] as string;
+        const data = handler.onDrainPending?.(channelId) ?? [];
+        this.stream?.send({ type: "response", id, data });
+        break;
+      }
+      case "peek_pending": {
+        const channelId = msg["channelId"] as string;
+        const id = msg["id"] as string;
+        const data = handler.onPeekPending?.(channelId) ?? null;
+        this.stream?.send({ type: "response", id, data });
+        break;
+      }
+      case "flush_pending": {
+        const channelId = msg["channelId"] as string;
+        const id = msg["id"] as string;
+        const flushed = handler.onFlushPending?.(channelId) ?? 0;
+        this.stream?.send({ type: "response", id, data: { flushed } });
+        break;
+      }
+      case "list_messages": {
+        const channelId = msg["channelId"] as string;
+        const id = msg["id"] as string;
+        const limit = typeof msg["limit"] === "number" ? msg["limit"] as number : 5;
+        const data = handler.onListMessages?.(channelId, limit) ?? [];
+        this.stream?.send({ type: "response", id, data });
+        break;
+      }
+      default:
+        // Unknown message type — ignore
+        break;
+    }
+  }
+
+  /** Send a pending_notify to the agent via the stream. */
+  notifyPending(channelId: string, count: number): void {
+    if (this.stream === null || !this.stream.isConnected()) return;
+    this.stream.send({ type: "pending_notify", channelId, count });
   }
 
   /** Ensure agent process is running and compatible.
@@ -121,7 +247,7 @@ export class AgentManager {
       stdio: ["ignore", "ignore", stderrFd],
       env: {
         ...process.env,
-        COPILOTCLAW_GATEWAY_URL: `http://localhost:${this.gatewayPort}`,
+        // COPILOTCLAW_GATEWAY_URL is no longer set — agent uses IPC stream for all communication
       },
     });
     child.unref();
@@ -164,5 +290,13 @@ export class AgentManager {
   async stopAgent(): Promise<void> {
     const socketPath = getAgentSocketPath();
     await stopAgent(socketPath);
+  }
+
+  /** Close the stream connection (for shutdown). */
+  closeStream(): void {
+    if (this.stream !== null) {
+      this.stream.close();
+      this.stream = null;
+    }
   }
 }

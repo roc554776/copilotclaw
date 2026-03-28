@@ -32,39 +32,47 @@ IPC ソケット上で改行区切り JSON を送受信する。
 | `session_status` (params: `{ sessionId }`) | `AgentSessionInfo` | 個別 agent session の状態を取得 |
 | `stop` | `{ ok: true }` | graceful shutdown |
 
-### Gateway-Agent 間通信の IPC 統一（未実現）
+### Gateway-Agent 間通信の IPC 統一
 
-現在 agent process は gateway の HTTP API にアクセスしている（pending poll、メッセージ送信、イベント転送、プロンプト保存、config 取得）。これを全て IPC に移行し、agent process が gateway の HTTP server の存在を知らない構成にする。
+agent process は gateway の HTTP API にアクセスしない。全通信は IPC stream 経由で行う。
 
-**移行対象（現在 agent → gateway HTTP）:**
+**IPC Stream プロトコル:**
 
-| 現在の HTTP 通信 | IPC 化後 |
-| :--- | :--- |
-| `GET /api/status`（config 取得） | IPC 接続時に gateway が config を push |
-| `GET /api/channels/pending`（定期ポーリング） | gateway が pending 発生時に IPC で push |
-| `GET /api/channels/{{id}}/messages/pending/peek` | gateway が IPC で通知 |
-| `POST /api/channels/{{id}}/messages/pending/flush` | agent が IPC で flush 要求 |
-| `POST /api/channels/{{id}}/messages`（メッセージ送信） | agent が IPC でメッセージ送信 |
-| `POST /api/session-events`（イベント転送） | agent が IPC でイベント送信 |
-| `POST /api/system-prompts/original`（プロンプト保存） | agent が IPC でプロンプト送信 |
-| `POST /api/system-prompts/session`（同上） | agent が IPC でプロンプト送信 |
+gateway が agent の IPC socket に `{"method": "stream"}\n` を送ると、agent は `{"ok": true}\n` を返し、その接続は永続的な双方向チャネルになる。stream 接続は同時に 1 本のみ。既存の短命 IPC 接続（status, stop, quota, models, session_messages）はそのまま動作する。
 
-**通信方向の変更:**
-- 現在: gateway が agent の IPC socket に接続（一方向リクエスト/レスポンス）
-- 移行後: 同じ接続上で双方向通信。gateway → agent（status 取得、pending 通知、config push）と agent → gateway（メッセージ送信、イベント転送）の両方を 1 本の IPC 接続で行う
+メッセージは改行区切り JSON で `type` フィールドを持つ:
+- Fire-and-forget: `{"type": "...", ...}\n`
+- Request-response: `{"type": "...", "id": "uuid", ...}\n` → `{"type": "response", "id": "uuid", "data": ...}\n`
 
-**除去対象:**
+**gateway → agent push:**
+- `config` — stream 確立時に即送信。agent 起動時の設定取得に使う
+- `pending_notify` — 新規 user message 到着時に通知。agent のポーリングを置き換え
+
+**agent → gateway push (fire-and-forget):**
+- `channel_message` — channel へのメッセージ送信
+- `session_event` — SDK イベントの転送
+- `system_prompt_original` — オリジナルシステムプロンプトの保存
+- `system_prompt_session` — セッションシステムプロンプトの保存
+
+**agent → gateway request-response:**
+- `drain_pending` — pending messages の取得（旧 `POST /api/channels/{{id}}/messages/pending`）
+- `peek_pending` — 最古 pending のピーク（旧 `GET /api/channels/{{id}}/messages/pending/peek`）
+- `flush_pending` — pending の flush（旧 `POST /api/channels/{{id}}/messages/pending/flush`）
+
+**除去済み:**
 - agent process から `COPILOTCLAW_GATEWAY_URL` 環境変数の参照
 - `gatewayBaseUrl` の設定・保持
 - agent 内の全 HTTP fetch 呼び出し（`fetchPendingCounts`, `peekOldestPending`, `flushPending`, `fetchGatewayConfig`, `postToGateway`, `postChannelMessage`、channel.ts 内の `pollNextInputs` の HTTP 部分）
 
-**影響範囲:**
-- `packages/agent/src/index.ts` — ポーリングループを IPC push 受信に変更
-- `packages/agent/src/agent-session-manager.ts` — `gatewayBaseUrl` と `postToGateway`/`postChannelMessage` を IPC メッセージに変更
-- `packages/agent/src/tools/channel.ts` — `pollNextInputs` の HTTP fetch を IPC 受信に変更
-- `packages/agent/src/ipc-server.ts` — 双方向通信プロトコルの追加
-- `packages/gateway/src/agent-manager.ts` — IPC 接続の永続化と双方向通信の追加
-- `packages/gateway/src/server.ts` — agent 向け HTTP API は維持（dashboard/外部ツール向け）
+**変更箇所:**
+- `packages/agent/src/ipc-server.ts` — stream 接続の検出・永続化、双方向メッセージハンドリング、`sendToGateway` / `requestFromGateway` エクスポート
+- `packages/agent/src/index.ts` — HTTP ポーリングを IPC イベント駆動に置き換え
+- `packages/agent/src/agent-session-manager.ts` — `gatewayBaseUrl` / `fetchFn` を除去し、IPC 送信に置き換え
+- `packages/agent/src/tools/channel.ts` — HTTP fetch を IPC に置き換え
+- `packages/gateway/src/ipc-client.ts` — `IpcStream` クラスの追加（永続接続、自動再接続）
+- `packages/gateway/src/agent-manager.ts` — stream 接続の確立、メッセージルーティング
+- `packages/gateway/src/server.ts` — user message POST 時の `pending_notify` 送信
+- `packages/gateway/src/daemon.ts` — stream 接続の確立
 
 AgentSessionInfo:
 

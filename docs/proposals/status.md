@@ -97,6 +97,8 @@
 
 - OpenTelemetry 導入（@opentelemetry/api + sdk-logs + sdk-metrics。StructuredLogger への OTel ログブリッジ統合、config.json `otel.endpoints` 設定、config migration v2→v3、copilotclaw.sessions.active/suspended ゲージ + copilotclaw.tokens.input/output カウンター、console.error の構造化ログ移行）
 
+- Gateway-Agent 間通信の IPC 統一（agent → gateway の全 HTTP 通信を IPC stream に移行。`COPILOTCLAW_GATEWAY_URL` / `gatewayBaseUrl` / agent 内 HTTP fetch を除去。IPC stream プロトコルによる双方向メッセージング。MIN_AGENT_VERSION を 0.35.0 に引き上げ）
+
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）

@@ -1,44 +1,36 @@
-import { describe, expect, it, vi } from "vitest";
-import { createChannelTools } from "../../src/tools/channel.js";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
-function createMockFetch(responses: Array<{ status: number; body: unknown }>) {
-  let callIndex = 0;
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-
-  const fetchFn = async (url: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    const resp = responses[callIndex] ?? { status: 204, body: null };
-    callIndex++;
-    return {
-      status: resp.status,
-      ok: resp.status >= 200 && resp.status < 300,
-      json: async () => resp.body,
-      text: async () => JSON.stringify(resp.body),
-    } as Response;
+// Mock the IPC server module before importing channel tools
+vi.mock("../../src/ipc-server.js", async () => {
+  const { EventEmitter } = await import("node:events");
+  return {
+    sendToGateway: vi.fn(),
+    requestFromGateway: vi.fn().mockResolvedValue(null),
+    streamEvents: new EventEmitter(),
+    hasStream: vi.fn().mockReturnValue(true),
+    getStreamSocket: vi.fn().mockReturnValue(null),
+    setStreamSocket: vi.fn(),
   };
+});
 
-  return { fetchFn, calls };
-}
+import { createChannelTools } from "../../src/tools/channel.js";
+import { sendToGateway, requestFromGateway, streamEvents } from "../../src/ipc-server.js";
 
 const WAIT_INSTRUCTION = "copilotclaw_wait";
 const KEEPALIVE_MARKER = "keepalive cycle";
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 describe("channel tools — abort signal", () => {
   it("aborts polling when abort signal fires", async () => {
     const controller = new AbortController();
-    let fetchCallCount = 0;
-
-    const fetchFn = async (_url: string | URL | Request, init?: RequestInit) => {
-      fetchCallCount++;
-      if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      return { status: 204, ok: true, json: async () => null, text: async () => "null" } as Response;
-    };
+    // requestFromGateway returns empty array (no pending)
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const { wait } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
-      pollIntervalMs: 10,
-      fetch: fetchFn as typeof globalThis.fetch,
       abortSignal: controller.signal,
     });
 
@@ -49,20 +41,14 @@ describe("channel tools — abort signal", () => {
     // wait NEVER throws — even on abort, it returns keepalive response
     const result = await wait.handler({}, invocation) as { userMessage: string };
     expect(result.userMessage).toContain("copilotclaw_wait");
-
-    expect(fetchCallCount).toBeGreaterThanOrEqual(1);
   });
 
-  it("never throws on fetch network error — returns keepalive response", async () => {
-    const fetchFn = async () => {
-      throw new Error("network unreachable");
-    };
+  it("never throws on IPC error — returns keepalive response", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("IPC error"));
 
     const { wait } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-err",
-      pollIntervalMs: 10,
-      fetch: fetchFn as typeof globalThis.fetch,
+      keepaliveTimeoutMs: 50,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
@@ -72,41 +58,31 @@ describe("channel tools — abort signal", () => {
     const result = await wait.handler({}, invocation) as { userMessage: string };
     expect(result.userMessage).toContain("copilotclaw_wait");
 
-    // Error was logged to system log
-    const logged = errSpy.mock.calls.some(
-      (c) => String(c[0]).includes("wait internal error"),
-    );
-    expect(logged).toBe(true);
-
     errSpy.mockRestore();
   });
 });
 
 describe("copilotclaw_send_message", () => {
-  it("posts message to channel and returns immediately", async () => {
-    const { fetchFn, calls } = createMockFetch([
-      { status: 201, body: { id: "msg-1", sender: "agent", message: "hello" } },
-    ]);
-
+  it("sends message via IPC and returns immediately", async () => {
     const { sendMessage } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
-      fetch: fetchFn as typeof globalThis.fetch,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await sendMessage.handler({ message: "hello" }, invocation) as { status: string };
 
     expect(result.status).toBe("sent");
-    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages");
-    const body = JSON.parse(calls[0]!.init?.body as string) as { sender: string; message: string };
-    expect(body.sender).toBe("agent");
-    expect(body.message).toBe("hello");
+    const sendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    expect(sendSpy).toHaveBeenCalledWith({
+      type: "channel_message",
+      channelId: "ch-abc",
+      sender: "agent",
+      message: "hello",
+    });
   });
 
   it("has correct tool name", () => {
     const { sendMessage } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
     });
     expect(sendMessage.name).toBe("copilotclaw_send_message");
@@ -114,42 +90,30 @@ describe("copilotclaw_send_message", () => {
 });
 
 describe("copilotclaw_wait", () => {
-  it("polls until 200 and returns combined messages", async () => {
-    const { fetchFn, calls } = createMockFetch([
-      { status: 204, body: null },
-      { status: 200, body: [
-        { id: "input-1", message: "hello" },
-        { id: "input-2", message: "how are you" },
-      ] },
+  it("drains immediately when messages available", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "input-1", message: "hello" },
+      { id: "input-2", message: "how are you" },
     ]);
 
     const { wait } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
-      pollIntervalMs: 1,
-      fetch: fetchFn as typeof globalThis.fetch,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await wait.handler({}, invocation) as { userMessage: string };
 
-    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages/pending");
     expect(result.userMessage).toContain("hello");
     expect(result.userMessage).toContain("how are you");
     expect(result.userMessage).toContain(WAIT_INSTRUCTION);
   });
 
-  it("returns keepalive instruction on timeout", async () => {
-    const { fetchFn } = createMockFetch(
-      Array.from({ length: 100 }, () => ({ status: 204, body: null })),
-    );
+  it("returns keepalive instruction on timeout (no messages, no notify)", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const { wait } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
-      pollIntervalMs: 1,
       keepaliveTimeoutMs: 20,
-      fetch: fetchFn as typeof globalThis.fetch,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
@@ -159,71 +123,75 @@ describe("copilotclaw_wait", () => {
     expect(result.userMessage).toContain(WAIT_INSTRUCTION);
   });
 
-  it("does not trigger keepalive when input arrives within timeout", async () => {
-    const { fetchFn } = createMockFetch([
-      { status: 204, body: null },
-      { status: 200, body: [{ id: "input-1", message: "arrived in time" }] },
-    ]);
+  it("drains after pending_notify push", async () => {
+    let callCount = 0;
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) return []; // First drain: empty
+      return [{ id: "input-1", message: "arrived via notify" }]; // Second drain after notify
+    });
 
     const { wait } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
-      pollIntervalMs: 1,
+      channelId: "ch-notify",
       keepaliveTimeoutMs: 5000,
-      fetch: fetchFn as typeof globalThis.fetch,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+
+    // Emit pending_notify shortly after wait starts polling
+    setTimeout(() => {
+      streamEvents.emit("pending_notify", { channelId: "ch-notify", count: 1 });
+    }, 30);
+
     const result = await wait.handler({}, invocation) as { userMessage: string };
 
-    expect(result.userMessage).toContain("arrived in time");
+    expect(result.userMessage).toContain("arrived via notify");
     expect(result.userMessage).not.toContain(KEEPALIVE_MARKER);
   });
 });
 
 describe("copilotclaw_list_messages", () => {
-  it("fetches messages from gateway with default limit", async () => {
+  it("fetches messages via IPC with default limit", async () => {
     const mockMessages = [
       { id: "m1", channelId: "ch-abc", sender: "user", message: "hi", createdAt: "2026-01-01T00:00:00Z" },
       { id: "m2", channelId: "ch-abc", sender: "agent", message: "hello", createdAt: "2026-01-01T00:00:01Z" },
     ];
-    const { fetchFn, calls } = createMockFetch([
-      { status: 200, body: mockMessages },
-    ]);
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue(mockMessages);
 
     const { listMessages } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
-      fetch: fetchFn as typeof globalThis.fetch,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await listMessages.handler({}, invocation) as { messages: unknown[] };
 
-    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages?limit=5");
     expect(result.messages).toHaveLength(2);
+    expect(requestFromGateway).toHaveBeenCalledWith({
+      type: "list_messages",
+      channelId: "ch-abc",
+      limit: 5,
+    });
   });
 
   it("passes custom limit", async () => {
-    const { fetchFn, calls } = createMockFetch([
-      { status: 200, body: [] },
-    ]);
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const { listMessages } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
-      fetch: fetchFn as typeof globalThis.fetch,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     await listMessages.handler({ limit: 10 }, invocation);
 
-    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages?limit=10");
+    expect(requestFromGateway).toHaveBeenCalledWith({
+      type: "list_messages",
+      channelId: "ch-abc",
+      limit: 10,
+    });
   });
 
   it("has correct tool name", () => {
     const { listMessages } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
       channelId: "ch-abc",
     });
     expect(listMessages.name).toBe("copilotclaw_list_messages");

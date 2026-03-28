@@ -1,13 +1,12 @@
 import { join } from "node:path";
 import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
-import { listenIpc } from "./ipc-server.js";
+import { listenIpc, streamEvents, requestFromGateway } from "./ipc-server.js";
 import { initOtel, getLogger, shutdownOtel } from "./otel.js";
 import { StructuredLogger } from "./structured-logger.js";
 import { type AuthConfig, resolveToken } from "./token-resolver.js";
 
-const GATEWAY_URL = process.env["COPILOTCLAW_GATEWAY_URL"] ?? "http://localhost:19741";
-const POLL_INTERVAL_MS = 5000;
+const STALE_CHECK_INTERVAL_MS = 30_000; // 30 seconds
 
 interface OtelConfig {
   endpoints?: string[];
@@ -35,50 +34,66 @@ function logError(message: string): void {
   structuredLogger?.error(message);
 }
 
-async function fetchGatewayConfig(gatewayUrl: string): Promise<GatewayConfig> {
-  try {
-    const res = await fetch(`${gatewayUrl}/api/status`);
-    if (res.ok) {
-      const data = await res.json() as { config?: GatewayConfig };
-      if (data.config !== undefined) return data.config;
+/** Wait for the gateway to establish a stream connection and push config.
+ *  Returns the config data, or a default config after timeout. */
+function waitForConfig(timeoutMs = 30_000): Promise<GatewayConfig> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (config: GatewayConfig) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(config);
+    };
+
+    const timer = setTimeout(() => {
+      log("config push not received within timeout, using defaults");
+      settle({ model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null, otel: null });
+    }, timeoutMs);
+    timer.unref();
+
+    const onConfig = (msg: Record<string, unknown>) => {
+      const config = msg["config"] as GatewayConfig | undefined;
+      if (config !== undefined) {
+        settle(config);
+      }
+    };
+
+    streamEvents.on("config", onConfig);
+
+    function cleanup(): void {
+      clearTimeout(timer);
+      streamEvents.removeListener("config", onConfig);
     }
-  } catch (err: unknown) {
-    log(`failed to fetch gateway config: ${String(err)}`);
-  }
-  return { model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null, otel: null };
-}
-
-async function fetchPendingCounts(gatewayUrl: string): Promise<Record<string, number>> {
-  try {
-    const res = await fetch(`${gatewayUrl}/api/channels/pending`);
-    if (res.ok) return await res.json() as Record<string, number>;
-  } catch {}
-  return {};
-}
-
-async function peekOldestPending(gatewayUrl: string, channelId: string): Promise<string | undefined> {
-  try {
-    const res = await fetch(`${gatewayUrl}/api/channels/${channelId}/messages/pending/peek`);
-    if (res.status === 200) {
-      const data = await res.json() as { id: string };
-      return data.id;
-    }
-  } catch {}
-  return undefined;
-}
-
-async function flushPending(gatewayUrl: string, channelId: string): Promise<void> {
-  try {
-    await fetch(`${gatewayUrl}/api/channels/${channelId}/messages/pending/flush`, { method: "POST" });
-  } catch {}
+  });
 }
 
 async function main(): Promise<void> {
   const socketPath = getAgentSocketPath();
   let stopRequested = false;
 
-  // Fetch config from gateway
-  const config = await fetchGatewayConfig(GATEWAY_URL);
+  // Start IPC server first — gateway will connect with a stream
+  // We create the session manager after receiving config from gateway
+  const result = await listenIpc(
+    socketPath,
+    () => { stopRequested = true; },
+    null, // sessionManager set later via listenIpc's design — but we need it for IPC methods
+  );
+
+  if (result.kind === "already-running") {
+    log("agent is already running");
+    process.exit(0);
+  }
+
+  const ipc = result.handle;
+  log(`IPC listening on ${socketPath}`);
+
+  process.once("SIGTERM", () => { stopRequested = true; });
+  process.once("SIGINT", () => { stopRequested = true; });
+
+  // Wait for gateway stream connection and config push
+  log("waiting for gateway stream connection and config...");
+  const config = await waitForConfig();
   log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, debugMockCopilotUnsafeTools=${config.debugMockCopilotUnsafeTools}`);
 
   // Initialize OpenTelemetry (before structured logger, so bridge is available)
@@ -87,8 +102,6 @@ async function main(): Promise<void> {
   const otelLoggerRaw = getLogger("agent");
 
   // Initialize structured logger if state dir is available.
-  // When stateDir is null (gateway unreachable at startup), structured
-  // file logging is unavailable — stderr redirect from gateway is the fallback.
   if (config.stateDir !== null) {
     const dataDir = join(config.stateDir, "data");
     const agentLogPath = join(dataDir, "agent.log");
@@ -108,7 +121,6 @@ async function main(): Promise<void> {
   }
 
   const managerOpts: AgentSessionManagerOptions = {
-    gatewayBaseUrl: GATEWAY_URL,
     zeroPremium: config.zeroPremium,
     debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
   };
@@ -122,61 +134,71 @@ async function main(): Promise<void> {
   }
   const sessionManager = new AgentSessionManager(managerOpts);
 
-  const result = await listenIpc(
-    socketPath,
-    () => { stopRequested = true; },
-    sessionManager,
-  );
+  // Listen for pending_notify push messages from gateway — start sessions as needed
+  const pendingHandler = (msg: Record<string, unknown>) => {
+    const channelId = msg["channelId"] as string | undefined;
+    const count = typeof msg["count"] === "number" ? msg["count"] as number : 1;
+    if (channelId === undefined || count <= 0) return;
 
-  if (result.kind === "already-running") {
-    log("agent is already running");
-    process.exit(0);
-  }
+    if (!sessionManager.hasActiveSessionForChannel(channelId)) {
+      if (sessionManager.isChannelInBackoff(channelId)) return;
+      log(`starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
+      sessionManager.startSession({ boundChannelId: channelId });
+    }
+  };
+  streamEvents.on("pending_notify", pendingHandler);
 
-  const ipc = result.handle;
-  log(`IPC listening on ${socketPath}`);
-
-  process.once("SIGTERM", () => { stopRequested = true; });
-  process.once("SIGINT", () => { stopRequested = true; });
-
-  // Main polling loop: check gateway for pending inputs across all channels
-  while (!stopRequested) {
+  // Periodic stale session and max-age checks (still interval-based)
+  const staleCheckTimer = setInterval(async () => {
+    if (stopRequested) return;
     try {
-      const pending = await fetchPendingCounts(GATEWAY_URL);
-
-      for (const [channelId, count] of Object.entries(pending)) {
-        if (count > 0 && !sessionManager.hasActiveSessionForChannel(channelId)) {
-          // Skip channels in backoff (recent session failure — avoid retry storm)
-          if (sessionManager.isChannelInBackoff(channelId)) continue;
-          // startSession will revive a suspended session (with its saved copilotSessionId)
-          // or create a new one if no abstract session exists for this channel.
-          log(`starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
-          sessionManager.startSession({ boundChannelId: channelId });
-        }
-      }
-
-      // Check for stale sessions and max age
       const sessionStatuses = sessionManager.getSessionStatuses();
       for (const [sessionId, info] of Object.entries(sessionStatuses)) {
-        // Check max age (2 days default) — save state and stop on expiry (deferred resume on next pending)
         if (sessionManager.checkSessionMaxAge(sessionId)) continue;
 
         const channelId = info.boundChannelId;
         if (channelId === undefined) continue;
-        const oldestPendingId = await peekOldestPending(GATEWAY_URL, channelId);
+
+        let oldestPendingId: string | undefined;
+        try {
+          const peekResult = await requestFromGateway({ type: "peek_pending", channelId });
+          if (peekResult !== null && peekResult !== undefined && typeof peekResult === "object" && "id" in (peekResult as object)) {
+            oldestPendingId = (peekResult as { id: string }).id;
+          }
+        } catch {
+          // IPC error — skip
+        }
+
         const action = await sessionManager.checkStaleAndHandle(sessionId, oldestPendingId);
         if (action === "flushed") {
-          await flushPending(GATEWAY_URL, channelId);
+          try {
+            await requestFromGateway({ type: "flush_pending", channelId });
+          } catch {
+            // IPC error — non-fatal
+          }
         }
       }
     } catch (err: unknown) {
-      logError(`poll error: ${String(err)}`);
+      logError(`stale check error: ${String(err)}`);
     }
+  }, STALE_CHECK_INTERVAL_MS);
+  staleCheckTimer.unref();
 
-    await new Promise((r) => { setTimeout(r, POLL_INTERVAL_MS); });
-  }
+  // Wait for stop signal
+  await new Promise<void>((resolve) => {
+    if (stopRequested) { resolve(); return; }
+    const check = setInterval(() => {
+      if (stopRequested) {
+        clearInterval(check);
+        resolve();
+      }
+    }, 500);
+    check.unref();
+  });
 
   log("shutting down");
+  streamEvents.removeListener("pending_notify", pendingHandler);
+  clearInterval(staleCheckTimer);
   await sessionManager.stopAll();
   await ipc.close();
   await shutdownOtel();

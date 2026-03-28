@@ -1,13 +1,13 @@
 import { join } from "node:path";
 import { AgentManager } from "./agent-manager.js";
-import { getProfileName, loadConfig, resolvePort } from "./config.js";
+import { getProfileName, getStateDir, loadConfig, resolvePort } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
 import { initOtel, shutdownOtel } from "./otel.js";
 import { initMetrics } from "./otel-metrics.js";
 import { startServer } from "./server.js";
 import { SessionEventStore } from "./session-event-store.js";
 import { Store } from "./store.js";
-import { ensureWorkspace, getDataDir, getStoreDbPath, getStoreFilePath } from "./workspace.js";
+import { ensureWorkspace, getDataDir, getStoreDbPath, getStoreFilePath, getWorkspaceRoot } from "./workspace.js";
 
 const AGENT_MONITOR_INTERVAL_MS = 30_000; // 30 seconds
 const AGENT_MONITOR_ERROR_THRESHOLD = 3;
@@ -27,7 +27,61 @@ async function main(): Promise<void> {
   initMetrics();
   const store = new Store({ persistPath: getStoreDbPath(getProfileName()), legacyJsonPath: getStoreFilePath(getProfileName()) });
   const port = resolvePort(getProfileName());
-  const agentManager = new AgentManager({ gatewayPort: port });
+  const agentManager = new AgentManager();
+
+  const sessionEventStore = new SessionEventStore(getDataDir(getProfileName()));
+
+  // Set up IPC stream message handlers before connecting
+  agentManager.setStreamMessageHandler({
+    onChannelMessage: (channelId, sender, message) => {
+      const senderType = sender === "user" ? "user" as const : "agent" as const;
+      store.addMessage(channelId, senderType, message);
+      // Broadcast to SSE clients (serverHandle.sseBroadcaster set after startServer)
+      serverHandle?.sseBroadcaster?.broadcast({
+        type: "new_message",
+        channelId,
+        data: { sender: senderType, message },
+      });
+    },
+    onSessionEvent: (sessionId, eventType, timestamp, data, parentId) => {
+      const event: { type: string; timestamp: string; data: Record<string, unknown>; parentId?: string } = {
+        type: eventType,
+        timestamp,
+        data,
+      };
+      if (parentId !== undefined) event.parentId = parentId;
+      sessionEventStore.appendEvent(sessionId, event);
+    },
+    onSystemPromptOriginal: (model, prompt, capturedAt) => {
+      sessionEventStore.saveOriginalPrompt({ model, prompt, capturedAt });
+    },
+    onSystemPromptSession: (sessionId, model, prompt) => {
+      sessionEventStore.saveSessionPrompt(sessionId, prompt, model);
+    },
+    onDrainPending: (channelId) => {
+      return store.drainPending(channelId);
+    },
+    onPeekPending: (channelId) => {
+      return store.peekOldestPending(channelId) ?? null;
+    },
+    onFlushPending: (channelId) => {
+      return store.flushPending(channelId);
+    },
+    onListMessages: (channelId, limit) => {
+      return store.listMessages(channelId, limit);
+    },
+  });
+
+  // Set config to push to agent when stream connects
+  agentManager.setConfigToSend({
+    model: config.model ?? null,
+    zeroPremium: config.zeroPremium ?? false,
+    debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
+    stateDir: getStateDir(getProfileName()),
+    workspaceRoot: getWorkspaceRoot(getProfileName()),
+    auth: config.auth?.github ?? null,
+    otel: config.otel ?? null,
+  });
 
   // Always ensure agent process on gateway start (version check + spawn if absent)
   try {
@@ -46,8 +100,12 @@ async function main(): Promise<void> {
     console.error("[gateway] agent ensure failed:", err);
   }
 
-  const sessionEventStore = new SessionEventStore(getDataDir(getProfileName()));
-  await startServer({ port, store, agentManager, logBuffer, sessionEventStore });
+  // Establish IPC stream connection to agent (after agent is ensured)
+  agentManager.connectStream();
+
+  // Need to capture serverHandle for SSE broadcaster access in stream handler
+  let serverHandle: Awaited<ReturnType<typeof startServer>> | undefined;
+  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore });
 
   // Periodic agent process monitoring
   let consecutiveFailures = 0;
@@ -71,6 +129,7 @@ async function main(): Promise<void> {
 
   // Graceful OTel shutdown on process exit
   const gracefulShutdown = async (): Promise<void> => {
+    agentManager.closeStream();
     await shutdownOtel();
     process.exit(0);
   };

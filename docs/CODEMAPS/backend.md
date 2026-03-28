@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Files scanned: 41 | Version: 0.34.0 | Token estimate: ~3800 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Files scanned: 42 | Version: 0.35.0 | Token estimate: ~4000 -->
 
 # Backend
 
@@ -42,7 +42,7 @@ src/server.ts              — HTTP server, route handler, startServer(), GATEWA
 src/frontend-dist.ts       — frontend build output utilities: FRONTEND_DIST_DIR (resolved path to frontend-dist/), FRONTEND_INDEX_HTML (path to index.html within it), hasFrontendDist() (checks existence of frontend-dist/ directory), isWithinFrontendDist() (validates a path is within the frontend-dist/ directory)
 src/config.ts              — config file module: loadConfig, loadFileConfig, saveConfig, ensureConfigFile, resolvePort, getConfigFilePath, getStateDir, CONFIG_ENV_VARS, parseBool helper; profile-aware ({{stateDir}}/config.json where {{stateDir}}=~/.copilotclaw/ or ~/.copilotclaw-{{profile}}/); getStateDir() returns state dir base path (used by workspace.ts for workspace/ and data/ subdirs); env vars (COPILOTCLAW_PORT, COPILOTCLAW_UPSTREAM, COPILOTCLAW_MODEL, COPILOTCLAW_ZERO_PREMIUM, COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS) take precedence over file values; CopilotclawConfig includes configVersion, model, zeroPremium, debugMockCopilotUnsafeTools, auth, otel fields; OtelConfig interface (endpoints?: string[]); AuthContainerConfig wraps AuthConfig as `github` field (v0.25.0); AuthConfig interface defines auth configuration (type: "gh-cli"|"pat"|"command", plus type-specific fields); CopilotclawConfig.auth is AuthContainerConfig (not AuthConfig); loadConfig applies migrateConfig and writes back if migrated, passes through auth and otel from file config; saveConfig stamps LATEST_CONFIG_VERSION; ensureConfigFile includes configVersion; LATEST_CONFIG_VERSION = 3; MIGRATIONS registry for sequential schema migration (v1→v2: moves auth.* into auth.github.*; v2→v3: configVersion bump, no schema changes — otel is optional); migrateConfig(raw) applies migrations from current version to LATEST_CONFIG_VERSION, returns { config, migrated }
 src/config-cli.ts          — `copilotclaw config` CLI: configGet (resolve + display, notes env var override), configSet (validate + save, warns if env var shadows); valid keys: upstream, port, model, zeroPremium, debugMockCopilotUnsafeTools; BOOLEAN_KEYS handling for zeroPremium/debugMockCopilotUnsafeTools
-src/daemon.ts              — daemon entry point (ensureWorkspace creates data/ + workspace/ dirs + Store init with SQLite persistPath=getStoreDbPath() and legacyJsonPath=getStoreFilePath() for one-time JSON migration + LogBuffer creation + enableFileOutput to {{stateDir}}/data/gateway.log + console intercept + OTel init (initOtel with config.otel.endpoints, initMetrics) + creates SessionEventStore(dataDir) + passes to startServer on resolvePort() + periodic agent monitor every 30s, max 3 retries + graceful OTel shutdown via shutdownOtel on process exit)
+src/daemon.ts              — daemon entry point (ensureWorkspace + Store init + LogBuffer + OTel init + creates SessionEventStore + passes to startServer + periodic agent monitor every 30s); sets up IPC stream: agentManager.setStreamMessageHandler() routes agent messages (channel_message → store + SSE, session_event → SessionEventStore, system prompts → SessionEventStore, drain/peek/flush/list_messages → Store), agentManager.setConfigToSend() prepares config push, agentManager.connectStream() after agent ensure; graceful shutdown calls agentManager.closeStream()
 src/index.ts               — CLI entry point (health check on resolvePort() → detached spawn → exit); reads GATEWAY_VERSION from package.json, shows version in all CLI log messages; parses --profile before command routing (sets COPILOTCLAW_PROFILE env var); after daemon healthy, checks /api/status agentCompatibility and exits 1 on incompatible; checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart)
 src/log-buffer.ts          — LogBuffer class (ring buffer for recent log lines), interceptConsole() to capture stdout/stderr; enableFileOutput(logFilePath) delegates structured writes to StructuredLogger
 src/otel.ts                — OpenTelemetry setup: initOtel(endpoints, serviceName, serviceVersion), getLogger(component), getMeter(component), severityFromLevel(), shutdownOtel(); initializes LoggerProvider + MeterProvider with OTLP HTTP exporters; noop when no endpoints configured; metrics export interval 30s
@@ -62,8 +62,8 @@ src/dashboard.ts           — HTML renderer (status bar with compatibility labe
 src/sse-broadcaster.ts                  — SseBroadcaster: SSE event broadcasting to connected clients
 frontend/                  — Vite + React + TypeScript SPA (v0.32.0); see Frontend section below
 src/doctor.ts              — `copilotclaw doctor` CLI: checkWorkspace, checkConfig, checkGateway, checkAgent, checkZeroPremium, checkAuth diagnostics; checkWorkspace uses checkWorkspaceHealth from setup.ts to verify workspace files and git init; checkConfig validates configVersion (warns if missing or unexpected); checkAuth reads config.auth?.github (v0.25.0); runDoctor orchestrates checks and optional --fix (fixWorkspace calls ensureWorkspaceReady, fixConfig, fixStaleSocket); exits 1 on failures
-src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); uses createRequire to resolve @copilotclaw/agent package path; ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods; getQuota(), getModels(), and getSessionMessages() proxy to agent IPC; MIN_AGENT_VERSION exported; semverSatisfies exported (used by doctor); agent stderr redirected to {{stateDir}}/data/agent.log on spawn (openSync append mode)
-src/ipc-client.ts          — IPC client (status/stop/quota/models/session_messages to agent process); AgentStatusResponse includes bootId field; AgentSessionStatusResponse status includes "suspended" (v0.27.0 fix), cumulativeInputTokens, cumulativeOutputTokens (v0.27.0), physicalSessionHistory (PhysicalSessionSummary[], v0.30.0); PhysicalSessionSummary type (includes totalInputTokens, totalOutputTokens, latestQuotaSnapshots); SubagentInfo type; getAgentQuota(), getAgentModels(), and getAgentSessionMessages() functions
+src/agent-manager.ts       — IPC-based agent process ensure at gateway start (spawn, version check, force-restart); uses createRequire to resolve @copilotclaw/agent package path; ensureAgent returns old bootId on force-restart; waitForNewAgent polls until different bootId appears; checkCompatibility() and getMinAgentVersion() methods; getQuota(), getModels(), and getSessionMessages() proxy to agent IPC; MIN_AGENT_VERSION exported (0.35.0); semverSatisfies exported (used by doctor); agent stderr redirected to {{stateDir}}/data/agent.log on spawn (openSync append mode); COPILOTCLAW_GATEWAY_URL no longer set in spawn env (v0.35.0); IPC stream management: connectStream(), setStreamMessageHandler(), setConfigToSend(), notifyPending(), closeStream(); StreamMessageHandler interface for routing agent messages (channel_message → store + SSE, session_event → SessionEventStore, system prompts → SessionEventStore, drain/peek/flush/list_messages → Store)
+src/ipc-client.ts          — IPC client (status/stop/quota/models/session_messages to agent process via short-lived connections); AgentStatusResponse includes bootId field; AgentSessionStatusResponse status includes "suspended" (v0.27.0 fix), cumulativeInputTokens, cumulativeOutputTokens (v0.27.0), physicalSessionHistory (PhysicalSessionSummary[], v0.30.0); PhysicalSessionSummary type (includes totalInputTokens, totalOutputTokens, latestQuotaSnapshots); SubagentInfo type; getAgentQuota(), getAgentModels(), and getAgentSessionMessages() functions; IpcStream class (v0.35.0): persistent bidirectional connection to agent socket via {"method":"stream"} handshake, auto-reconnect on disconnect, send() for fire-and-forget, request() for id-correlated request-response; createStreamConnection() factory
 src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.sock or copilotclaw-agent-{{profile}}.sock in tmpdir)
 ```
 
@@ -121,6 +121,40 @@ src/ipc-paths.ts           — socket path: profile-aware (copilotclaw-agent.soc
 
 → {"method":"session_messages","params":{"sessionId":"copilot-sess-id"}}
 ← [ ...message objects ] | {"error":"session not found"} | {"error":"missing sessionId"}
+
+→ {"method":"stream"}
+← {"ok":true}  → connection upgrades to persistent bidirectional stream (newline-delimited JSON)
+```
+
+**IPC Stream Protocol (v0.35.0)** — persistent bidirectional channel alongside short-lived connections:
+
+Gateway → Agent push:
+```
+{"type":"config","config":{...}}                — sent immediately when stream opens
+{"type":"pending_notify","channelId":"...","count":N}  — new pending user message
+```
+
+Agent → Gateway push (fire-and-forget):
+```
+{"type":"channel_message","channelId":"...","sender":"agent","message":"..."}
+{"type":"session_event","sessionId":"...","eventType":"...","timestamp":"...","data":{...}}
+{"type":"system_prompt_original","model":"...","prompt":"...","capturedAt":"..."}
+{"type":"system_prompt_session","sessionId":"...","model":"...","prompt":"..."}
+```
+
+Agent → Gateway request-response (id-correlated):
+```
+→ {"type":"drain_pending","id":"uuid","channelId":"..."}
+← {"type":"response","id":"uuid","data":[...messages]}
+
+→ {"type":"peek_pending","id":"uuid","channelId":"..."}
+← {"type":"response","id":"uuid","data":{...}|null}
+
+→ {"type":"flush_pending","id":"uuid","channelId":"..."}
+← {"type":"response","id":"uuid","data":{"flushed":N}}
+
+→ {"type":"list_messages","id":"uuid","channelId":"...","limit":N}
+← {"type":"response","id":"uuid","data":[...messages]}
 ```
 
 **Status values (v0.18.0)**:
@@ -152,17 +186,17 @@ Tool availability:
 ### Key Files
 
 ```
-src/index.ts                    — singleton entry, fetches config from gateway /api/status (GatewayConfig includes stateDir and otel), resolves auth token from config via token-resolver, polls gateway for pending inputs; initializes OTel from gateway config (initOtel with config.otel.endpoints, getLogger for OTel log bridge to StructuredLogger); uses hasActiveSessionForChannel to avoid starting duplicate sessions; startSession auto-revives suspended sessions (with saved copilotSessionId) or creates new; per-cycle: max-age check (checkSessionMaxAge suspends on expiry), then stale detection (checkStaleAndHandle suspends after 10m+ processing with pending, flushes inputs); passes persistPath to AgentSessionManager: {{stateDir}}/data/agent-bindings.json (uses stateDir, not workspaceRoot); passes resolved githubToken to AgentSessionManager; initializes StructuredLogger writing to {{stateDir}}/data/agent.log (uses stateDir, with optional OTel logger bridge); skips channels in backoff via isChannelInBackoff check in polling loop
-src/agent-session-manager.ts    — per-session lifecycle with abstract/physical session separation (v0.18.0); PARENT_ONLY_TOOL constant ("copilotclaw_wait"); channel binding persistence (v0.19.0): AgentSessionManagerOptions accepts persistPath and githubToken; createClient() method creates CopilotClient with githubToken when provided; loadBindings() in constructor (line 192) restores suspended sessions from agent-bindings.json, recreating entries in suspended state with preserved copilotSessionId, boundChannelId, and cumulative token data; saveBindings() called on suspendSession and stopSession to persist/update agent-bindings.json via atomic write (tmp → rename); SessionSnapshot and BindingSnapshot types define persist format; SessionSnapshot includes cumulativeInputTokens/cumulativeOutputTokens (v0.27.0), physicalSessionHistory (v0.30.0); AgentSessionInfo has cumulativeInputTokens/cumulativeOutputTokens fields (v0.27.0) and physicalSessionHistory (PhysicalSessionSummary[], v0.30.0, persisted in SessionSnapshot); AgentSessionStatus: "starting"|"waiting"|"processing"|"suspended"|"stopped"; startSession auto-detects suspended sessions via hasActiveSessionForChannel and revives via reviveSession; suspendSession transitions to "suspended", accumulates token usage from physical session into cumulative totals, pushes physical session to physicalSessionHistory (capped at 10) before clearing physicalSession, preserves copilotSessionId for later revival; reviveSession launches new physical session, reusing abstract sessionId and copilotSessionId; stopSession fully removes abstract session and channel binding (explicit termination); checkSessionMaxAge suspends when "waiting" exceeds 2-day max (or configurable maxSessionAgeMs); checkStaleAndHandle suspends when "processing" >10min with pending inputs (staleTimeoutMs), posts timeout notification, returns "flushed" to trigger input flush; PhysicalSessionSummary (totalInputTokens, totalOutputTokens, latestQuotaSnapshots); getQuota/getModels methods proxy Copilot SDK account API; getSessionMessages retrieves CopilotSession conversation history; resolveModel handles zeroPremium override; debugMockCopilotUnsafeTools restricts availableTools; custom agents (v0.16.0+): CHANNEL_OPERATOR_CONFIG (infer:false, deadlock prevention with workspace structure description and session startup section reading SOUL.md/USER.md/memory files) and WORKER_CONFIG (infer:true); private ensureWorkspaceReady() called at runSession start — creates dir, git init, bootstrap files (SOUL.md/USER.md/TOOLS.md/MEMORY.md/memory/.gitkeep with minimal templates), initial commit (idempotent); systemMessage config in createSession uses { mode: "customize", sections: { ... } } with pass-through transform callbacks per known section to capture system prompt; combined prompt posted to gateway on assistant.turn_start event via postToGateway (original + session prompts); SDK event listeners (session.idle/error/usage_info/model_change/compaction_start/complete/title_changed, tool.execution_start/complete, subagent.started/completed/failed, assistant.message/usage/turn_start/turn_end) forward events to gateway /api/session-events via postToGateway; postToGateway(path, body) is fire-and-forget POST (non-fatal on failure); onPostToolUse hook gates on copilotclaw_wait, injects: (1) pending message notifications, (2) subagent completion notifications [SUBAGENT COMPLETED], (3) periodic system prompt reminders on context usage 10% increments; channel notifications (stopped, timed-out) via postChannelMessage; channelBackoff map tracks rapid-failure backoff per channel; isChannelInBackoff(channelId) checks if channel is in backoff period; recordBackoffIfRapidFailure() sets backoff when session fails within rapid-failure threshold; notifyChannelSessionStopped() accepts optional error reason string for system message detail
+src/index.ts                    — singleton entry; waits for gateway IPC stream connection and config push (replaces HTTP fetch of /api/status); resolves auth token from config via token-resolver; listens for pending_notify IPC push messages to start sessions (replaces HTTP polling); initializes OTel from gateway config; uses hasActiveSessionForChannel to avoid starting duplicate sessions; startSession auto-revives suspended sessions; periodic stale/max-age checks via setInterval (peek_pending and flush_pending via IPC request-response); passes persistPath to AgentSessionManager; no COPILOTCLAW_GATEWAY_URL or gatewayBaseUrl (v0.35.0)
+src/agent-session-manager.ts    — per-session lifecycle with abstract/physical session separation (v0.18.0); PARENT_ONLY_TOOL constant ("copilotclaw_wait"); channel binding persistence (v0.19.0): AgentSessionManagerOptions accepts persistPath and githubToken (no gatewayBaseUrl or fetch since v0.35.0); all gateway communication via IPC: postToGateway(msg) calls sendToGateway, postChannelMessage calls sendToGateway with type "channel_message", onPostToolUse peek uses requestFromGateway; SDK event forwarding uses postToGateway with type "session_event" (eventType field for inner event type), system prompts via "system_prompt_original"/"system_prompt_session"; createClient() method creates CopilotClient with githubToken when provided; loadBindings/saveBindings for agent-bindings.json persistence; SessionSnapshot includes cumulativeInputTokens/cumulativeOutputTokens (v0.27.0), physicalSessionHistory (v0.30.0); startSession auto-revives suspended sessions; checkSessionMaxAge/checkStaleAndHandle for lifecycle management; resolveModel handles zeroPremium override; custom agents: CHANNEL_OPERATOR_CONFIG + WORKER_CONFIG; ensureWorkspaceReady() called at runSession start; channelBackoff map tracks rapid-failure backoff
 src/token-resolver.ts           — resolves GitHub tokens from auth config; supports gh-cli (gh auth token), PAT (via env var or file), and custom command strategies
 src/otel.ts                     — OpenTelemetry setup for agent process: initOtel(endpoints, serviceName, serviceVersion), getLogger(component), shutdownOtel(); intentionally duplicated from gateway (self-contained, no shared dependency); uses serviceName "copilotclaw-agent"
 src/structured-logger.ts        — StructuredLogger class: writes JSON Lines (StructuredLogEntry) to file via appendFileSync; info()/error() methods; OtelLoggerBridge interface for optional OTel log bridging (constructor accepts optional otelLogger parameter); intentionally duplicated in gateway package
-src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop/quota/models/session_messages)
+src/ipc-server.ts               — Unix domain socket IPC server (status/session_status/stop/quota/models/session_messages); IPC stream support (v0.35.0): detects {"method":"stream"} to upgrade connection to persistent bidirectional channel; module-level stream socket with sendToGateway() (fire-and-forget), requestFromGateway() (id-correlated request-response with 15s timeout), streamEvents EventEmitter for push message handlers; handleStreamMessage routes incoming messages (response correlation, type-based event emission)
 src/ipc-paths.ts                — socket path generation (profile-aware)
 src/session-loop.ts             — session idle loop (subscribe/send/disconnect); supports both createSession and resumeSession
 src/copilot-session-adapter.ts  — CopilotSession → SessionLike adapter
 src/stop.ts                     — CLI stop command (IPC stop)
-src/tools/channel.ts            — WAIT_TOOL_NAME constant ("copilotclaw_wait"), wait variable (defineTool); send_message, wait (drains subagent completions; try-catch swallows ALL exceptions → keepalive response, console.error only), list_messages; exports SubagentCompletionInfo
+src/tools/channel.ts            — WAIT_TOOL_NAME constant ("copilotclaw_wait"), wait variable (defineTool); send_message (via sendToGateway IPC), wait (drains pending via requestFromGateway IPC, waits for pending_notify push; try-catch swallows ALL exceptions → keepalive response, console.error only), list_messages (via requestFromGateway IPC); no HTTP fetch (v0.35.0); exports SubagentCompletionInfo
 ```
 
 ## Frontend SPA (packages/gateway/frontend, v0.32.0)
@@ -216,11 +250,11 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (317 total: 309 vitest + 8 Playwright)
+### Test Suites (354 total: 346 vitest + 8 Playwright)
 
 ```
-Gateway vitest (203 tests)   — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store tests)
-Agent vitest (84 tests)      — unit tests with mock Copilot SDK session (includes structured-logger, token-resolver tests)
-Frontend vitest (22 tests)   — React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, useAutoScroll) via jsdom + @testing-library/react
+Gateway vitest (226 tests)   — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store tests)
+Agent vitest (91 tests)      — unit tests with mock Copilot SDK session + IPC stream tests (includes structured-logger, token-resolver, ipc-stream tests)
+Frontend vitest (29 tests)   — React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, useAutoScroll) via jsdom + @testing-library/react
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```
