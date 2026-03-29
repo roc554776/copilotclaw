@@ -60,3 +60,12 @@
 
 - `copilotclaw_receive_input` tool の実装を変更して、subagent が停止したときに、tool としては subagent が停止した event 情報を返すようにする
 - 親 agent もまだ動いているときに、subagent が停止した場合は、tool の posthook 等の additional context にねじ込むことで、比較的リアルタイムに通知する
+
+<!-- 2026-03-29 -->
+## subagent 停止通知の改修
+
+- subagent が停止したことを wait している agent に通知する仕組みが必要です。
+- この通知で wait が解除され、その通知をみた agent が次の行動を取れるようになります。
+- ※ subagent call はネストされることがあります。直接呼び出した subagent の停止（成功失敗両方）のみを通知してください。
+- ※ session event を使うことになるかと思います。 parent tool call の id を使えば、直接呼び出しか判定できるかと思います。
+- 以前要望を出して完了報告も受けましたが機能してないみたいです。

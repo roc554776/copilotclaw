@@ -631,22 +631,33 @@ channel-operator の `prompt` フィールドに以下を含める:
 
 LLM は最初と最後の情報に重みを置く傾向があるため、この説明はシステムプロンプトの末尾付近に配置する。
 
-### Subagent 完了通知
+### Subagent 完了通知（未実現 — wait のブロック解除が機能していない）
 
 subagent の完了・失敗を親 agent にリアルタイムに通知する仕組み。subagent は親 agent から非同期的に dispatch されるため、完了を知覚する手段がないと、親は subagent の結果を活用できない。
+
+subagent call はネストされることがある。直接呼び出した subagent の停止（成功・失敗両方）のみを通知する。session event の `parentToolCallId` で直接呼び出しかどうかを判定できる。
 
 通知手段は2つ:
 
 **手段: copilotclaw_wait での通知（親が待機中の場合）**
 
-親 agent が subagent を dispatch した後、ほとんどの場合 `copilotclaw_wait` で待機する。subagent が完了/失敗したとき、`copilotclaw_wait` の内部で保持している subagent 完了イベントキューをチェックし、user message の到着と同様に tool の戻り値として subagent 停止情報を返す。
+親 agent が subagent を dispatch した後、ほとんどの場合 `copilotclaw_wait` で待機する。subagent が完了/失敗したとき、`copilotclaw_wait` のブロックを即座に解除し、subagent 停止情報を返す。
+
+**現状の問題:**
+- `subagentCompletionQueue` にイベントは積まれるが、`pollNextInputs` のブロック（`waitForPendingNotify` の25分タイムアウト待ち）を解除する仕組みがない
+- subagent 完了後、最大25分間 wait が解除されない
+
+**対応方針:**
+- subagent completion イベント発生時に、`waitForPendingNotify` のブロックを解除する signal を送る
+- `waitForPendingNotify` が `pending_notify` だけでなく、subagent completion signal でも解除されるようにする
+- または `pollNextInputs` 自体を、subagent completion queue を監視するように変更する
 
 ```
 copilotclaw_wait 実行中
   → subagent.completed or subagent.failed イベント発生
-  → イベントキューに蓄積
-  → ポーリングサイクルでキューをチェック
-  → キューにイベントあり → tool result として subagent 停止情報を返す
+  → イベントキューに蓄積 + wait ブロック解除 signal
+  → wait が即座に解除される
+  → tool result として subagent 停止情報を返す
     （user message が同時にあれば、それも一緒に返す）
 ```
 

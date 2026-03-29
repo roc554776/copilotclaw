@@ -24,10 +24,11 @@ Copilot SDK の Custom Agent 機能を用いて、copilotclaw のシステムプ
 - compaction 完了後（`session.compaction_complete` イベント直後）は即座に 1 回発火する（compaction 後は動作が不安定になりやすいため）
 - システムプロンプトに、`additionalContext` に `<system>` タグ付きの重要指示が差し込まれる可能性があることを記載する
 
-### Req: Subagent 完了の親 Agent への通知
+### Req: Subagent 完了の親 Agent への通知（未実現 — wait のブロック解除が機能していない）
 
 subagent の完了・失敗を親 agent にリアルタイムに通知する。
 
-- `subagent.completed` / `subagent.failed` イベントを利用する
-- 親 agent が `copilotclaw_wait` で待機中の場合: tool の戻り値に subagent 停止情報を含めて返す
+- `subagent.completed` / `subagent.failed` イベントで wait のブロックを即座に解除し、subagent 停止情報を返す
+- subagent call はネストされることがある。直接呼び出した subagent の停止（成功・失敗両方）のみを通知する
 - 親 agent が他の処理中の場合: `onPostToolUse` hook の `additionalContext` で通知する
+- 現状の問題: subagent completion は queue に積まれるが、`copilotclaw_wait` の `pollNextInputs` ブロックを解除する仕組みがない。keepalive タイムアウト（25分）まで気づかない
