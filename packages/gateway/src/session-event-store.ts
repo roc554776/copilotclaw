@@ -3,6 +3,8 @@ import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 
 export interface SessionEvent {
+  /** Database row ID (used as cursor for pagination). */
+  id?: number;
   /** SDK session event type (e.g. "tool.execution_start", "assistant.message"). */
   type: string;
   /** Event timestamp (ISO 8601). */
@@ -71,16 +73,50 @@ export class SessionEventStore {
 
   /** Get all events for a session. */
   getEvents(sessionId: string): SessionEvent[] {
-    const rows = this.db.prepare("SELECT type, timestamp, data, parentId FROM session_events WHERE sessionId = ? ORDER BY id ASC").all(sessionId) as Array<{ type: string; timestamp: string; data: string; parentId: string | null }>;
-    return rows.map((r) => {
-      const event: SessionEvent = {
-        type: r.type,
-        timestamp: r.timestamp,
-        data: JSON.parse(r.data) as Record<string, unknown>,
-      };
-      if (r.parentId !== null) event.parentId = r.parentId;
-      return event;
-    });
+    const rows = this.db.prepare("SELECT id, type, timestamp, data, parentId FROM session_events WHERE sessionId = ? ORDER BY id ASC").all(sessionId) as Array<{ id: number; type: string; timestamp: string; data: string; parentId: string | null }>;
+    return rows.map((r) => this.rowToEvent(r));
+  }
+
+  /** Get paginated events for a session. Returns newest N events when no cursor, or events before/after a cursor. */
+  getEventsPaginated(sessionId: string, limit: number, options?: { before?: number; after?: number }): SessionEvent[] {
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 50;
+    let rows: Array<{ id: number; type: string; timestamp: string; data: string; parentId: string | null }>;
+    if (options?.before !== undefined) {
+      // Older events (ascending order, before cursor)
+      rows = this.db.prepare(
+        "SELECT id, type, timestamp, data, parentId FROM session_events WHERE sessionId = ? AND id < ? ORDER BY id DESC LIMIT ?",
+      ).all(sessionId, options.before, safeLimit) as typeof rows;
+      rows.reverse(); // Return in ascending order
+    } else if (options?.after !== undefined) {
+      // Newer events (after cursor)
+      rows = this.db.prepare(
+        "SELECT id, type, timestamp, data, parentId FROM session_events WHERE sessionId = ? AND id > ? ORDER BY id ASC LIMIT ?",
+      ).all(sessionId, options.after, safeLimit) as typeof rows;
+    } else {
+      // Latest N events
+      rows = this.db.prepare(
+        "SELECT id, type, timestamp, data, parentId FROM session_events WHERE sessionId = ? ORDER BY id DESC LIMIT ?",
+      ).all(sessionId, safeLimit) as typeof rows;
+      rows.reverse(); // Return in ascending order
+    }
+    return rows.map((r) => this.rowToEvent(r));
+  }
+
+  /** Get total event count for a session. */
+  getEventCount(sessionId: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) as c FROM session_events WHERE sessionId = ?").get(sessionId) as { c: number };
+    return row.c;
+  }
+
+  private rowToEvent(r: { id: number; type: string; timestamp: string; data: string; parentId: string | null }): SessionEvent {
+    const event: SessionEvent = {
+      id: r.id,
+      type: r.type,
+      timestamp: r.timestamp,
+      data: JSON.parse(r.data) as Record<string, unknown>,
+    };
+    if (r.parentId !== null) event.parentId = r.parentId;
+    return event;
   }
 
   /** List all session IDs that have events. */

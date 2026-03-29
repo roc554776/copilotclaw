@@ -391,7 +391,18 @@ function createRequestHandler(
       const eventsMatch = /^\/api\/sessions\/([^/]+)\/events$/.exec(fullPathname);
       if (eventsMatch !== null && method === "GET") {
         const sessionId = decodeURIComponent(eventsMatch[1]!);
-        json(res, 200, sessionEventStore.getEvents(sessionId));
+        const limitParam = params.get("limit");
+        const beforeParam = params.get("before");
+        const afterParam = params.get("after");
+        if (limitParam !== null) {
+          const limit = parseInt(limitParam, 10);
+          const options: { before?: number; after?: number } = {};
+          if (beforeParam !== null) options.before = parseInt(beforeParam, 10);
+          if (afterParam !== null) options.after = parseInt(afterParam, 10);
+          json(res, 200, sessionEventStore.getEventsPaginated(sessionId, Number.isFinite(limit) ? limit : 50, options));
+        } else {
+          json(res, 200, sessionEventStore.getEvents(sessionId));
+        }
         return;
       }
 

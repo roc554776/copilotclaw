@@ -15,8 +15,14 @@ export function useAutoScroll<T extends HTMLElement>(
 ) {
   const containerRef = useRef<T>(null);
   const isAtBottomRef = useRef(true);
+  // Guard: when we programmatically set scrollTop, ignore the resulting scroll event
+  const programmaticScrollRef = useRef(false);
 
   const handleScroll = useCallback(() => {
+    if (programmaticScrollRef.current) {
+      programmaticScrollRef.current = false;
+      return;
+    }
     const el = containerRef.current;
     if (!el) return;
     isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < THRESHOLD;
@@ -26,6 +32,7 @@ export function useAutoScroll<T extends HTMLElement>(
     if (isAtBottomRef.current) {
       const el = containerRef.current;
       if (el) {
+        programmaticScrollRef.current = true;
         el.scrollTop = el.scrollHeight;
       }
     }

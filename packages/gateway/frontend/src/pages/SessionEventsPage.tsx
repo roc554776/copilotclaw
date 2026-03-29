@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { fetchSessionEvents, fetchStatus, type SessionEvent } from "../api";
+import { fetchSessionEventsPaginated, fetchStatus, type SessionEvent } from "../api";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import { usePolling } from "../hooks/usePolling";
 import { SESSION_ID_SHORT } from "../utils";
+
+const EVENTS_PAGE_SIZE = 50;
 
 function formatTime(iso: string): string {
   try {
@@ -17,6 +19,11 @@ export function SessionEventsPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [abstractSessionId, setAbstractSessionId] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasOlderEvents, setHasOlderEvents] = useState(true);
+
+  const eventsRef = useRef<SessionEvent[]>([]);
+  eventsRef.current = events;
 
   const { containerRef, handleScroll } =
     useAutoScroll<HTMLDivElement>([events.length]);
@@ -42,7 +49,6 @@ export function SessionEventsPage() {
             }
           }
         }
-        // Not found in any abstract session
         setAbstractSessionId(null);
       })
       .catch(() => {
@@ -51,24 +57,69 @@ export function SessionEventsPage() {
     return () => controller.abort();
   }, [sessionId]);
 
-  const refresh = useCallback(async () => {
+  // Initial load: fetch latest N events
+  useEffect(() => {
     if (!sessionId) return;
+    fetchSessionEventsPaginated(sessionId, EVENTS_PAGE_SIZE)
+      .then((latest) => {
+        setEvents(latest);
+        setHasOlderEvents(latest.length >= EVENTS_PAGE_SIZE);
+      })
+      .catch(() => { /* ignore */ });
+  }, [sessionId]);
+
+  // Auto-refresh: poll for new events (append only)
+  const refreshNewEvents = useCallback(async () => {
+    if (!sessionId) return;
+    const current = eventsRef.current;
+    if (current.length === 0) return;
+    const newestId = current[current.length - 1]!.id;
+    if (newestId === undefined) return;
     try {
-      const allEvents = await fetchSessionEvents(sessionId);
-      setEvents((prev) => {
-        if (allEvents.length === prev.length) return prev;
-        if (allEvents.length > prev.length) {
-          const newSlice = allEvents.slice(prev.length);
-          return [...prev, ...newSlice];
-        }
-        return allEvents;
-      });
+      const newer = await fetchSessionEventsPaginated(sessionId, EVENTS_PAGE_SIZE, { after: newestId });
+      if (newer.length > 0) {
+        setEvents((prev) => {
+          const existingIds = new Set(prev.map((e) => e.id).filter((id) => id !== undefined));
+          const unique = newer.filter((e) => e.id === undefined || !existingIds.has(e.id));
+          return unique.length > 0 ? [...prev, ...unique] : prev;
+        });
+      }
     } catch {
       /* ignore */
     }
   }, [sessionId]);
 
-  usePolling(refresh, 2000);
+  usePolling(refreshNewEvents, 2000);
+
+  // Load older events when scrolling up
+  const loadOlderEvents = useCallback(async () => {
+    if (!sessionId || loadingOlder || !hasOlderEvents) return;
+    const oldest = eventsRef.current[0];
+    if (!oldest?.id) return;
+
+    setLoadingOlder(true);
+    try {
+      const el = containerRef.current;
+      const prevScrollHeight = el?.scrollHeight ?? 0;
+
+      const older = await fetchSessionEventsPaginated(sessionId, EVENTS_PAGE_SIZE, { before: oldest.id });
+      if (older.length === 0) {
+        setHasOlderEvents(false);
+      } else {
+        setEvents((prev) => [...older, ...prev]);
+        setHasOlderEvents(older.length >= EVENTS_PAGE_SIZE);
+        requestAnimationFrame(() => {
+          if (el) {
+            el.scrollTop = el.scrollHeight - prevScrollHeight;
+          }
+        });
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [sessionId, loadingOlder, hasOlderEvents]);
 
   const sessionsLink = abstractSessionId
     ? `/sessions?focus=${encodeURIComponent(abstractSessionId)}`
@@ -99,49 +150,36 @@ export function SessionEventsPage() {
             marginLeft: "1rem",
           }}
         >
-          ({events.length} events)
+          ({events.length} events loaded)
         </span>
       </h1>
 
       <div
-        style={{
-          marginBottom: "1rem",
-          display: "flex",
-          gap: "1rem",
-          alignItems: "center",
-        }}
-      >
-        <button
-          onClick={refresh}
-          style={{
-            background: "#21262d",
-            color: "#c9d1d9",
-            border: "1px solid #30363d",
-            padding: "0.3rem 0.8rem",
-            borderRadius: "0.3rem",
-            cursor: "pointer",
-            fontSize: "0.8rem",
-          }}
-        >
-          Refresh
-        </button>
-      </div>
-
-      <div
         ref={containerRef}
-        onScroll={handleScroll}
+        onScroll={(e) => {
+          handleScroll();
+          const el = e.currentTarget;
+          if (el.scrollTop < 100 && hasOlderEvents && !loadingOlder) {
+            loadOlderEvents();
+          }
+        }}
         data-testid="events-container"
         style={{
-          maxHeight: "calc(100vh - 10rem)",
+          maxHeight: "calc(100dvh - 8rem)",
           overflowY: "auto",
           border: "1px solid #30363d",
           borderRadius: "0.5rem",
           padding: "0.5rem",
         }}
       >
+        {loadingOlder && (
+          <div style={{ color: "#8b949e", textAlign: "center", padding: "0.5rem" }}>
+            Loading older events...
+          </div>
+        )}
         {events.map((e, i) => (
           <div
-            key={`${e.timestamp}-${e.type}-${i}`}
+            key={e.id ?? `${e.timestamp}-${e.type}-${i}`}
             style={{
               padding: "0.3rem 0.5rem",
               borderBottom: "1px solid #21262d",

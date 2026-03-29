@@ -56,6 +56,76 @@ describe("SessionEventStore", () => {
     });
   });
 
+  describe("paginated event retrieval", () => {
+    it("returns latest N events when no cursor", () => {
+      for (let i = 0; i < 10; i++) {
+        store.appendEvent("sess-pg", { type: `event-${i}`, timestamp: `2026-03-30T00:00:${String(i).padStart(2, "0")}Z`, data: { i } });
+      }
+      const events = store.getEventsPaginated("sess-pg", 3);
+      expect(events).toHaveLength(3);
+      // Should be the last 3 events in ascending order
+      expect(events[0]!.type).toBe("event-7");
+      expect(events[2]!.type).toBe("event-9");
+    });
+
+    it("returns events before a cursor", () => {
+      for (let i = 0; i < 10; i++) {
+        store.appendEvent("sess-pg-before", { type: `event-${i}`, timestamp: `2026-03-30T00:00:${String(i).padStart(2, "0")}Z`, data: { i } });
+      }
+      const all = store.getEventsPaginated("sess-pg-before", 10);
+      const pivotId = all[5]!.id!; // event-5
+
+      const older = store.getEventsPaginated("sess-pg-before", 3, { before: pivotId });
+      expect(older).toHaveLength(3);
+      // Should be events 2,3,4 in ascending order
+      expect(older[0]!.type).toBe("event-2");
+      expect(older[2]!.type).toBe("event-4");
+    });
+
+    it("returns events after a cursor", () => {
+      for (let i = 0; i < 10; i++) {
+        store.appendEvent("sess-pg-after", { type: `event-${i}`, timestamp: `2026-03-30T00:00:${String(i).padStart(2, "0")}Z`, data: { i } });
+      }
+      const all = store.getEventsPaginated("sess-pg-after", 10);
+      const pivotId = all[5]!.id!; // event-5
+
+      const newer = store.getEventsPaginated("sess-pg-after", 3, { after: pivotId });
+      expect(newer).toHaveLength(3);
+      // Should be events 6,7,8 in ascending order
+      expect(newer[0]!.type).toBe("event-6");
+      expect(newer[2]!.type).toBe("event-8");
+    });
+
+    it("returns empty when no events before cursor", () => {
+      store.appendEvent("sess-pg-empty", { type: "event-0", timestamp: "2026-03-30T00:00:00Z", data: {} });
+      const all = store.getEventsPaginated("sess-pg-empty", 10);
+      const firstId = all[0]!.id!;
+
+      const older = store.getEventsPaginated("sess-pg-empty", 10, { before: firstId });
+      expect(older).toHaveLength(0);
+    });
+
+    it("includes id field in returned events", () => {
+      store.appendEvent("sess-pg-id", { type: "test", timestamp: "2026-03-30T00:00:00Z", data: {} });
+      const events = store.getEventsPaginated("sess-pg-id", 10);
+      expect(events[0]!.id).toBeDefined();
+      expect(typeof events[0]!.id).toBe("number");
+    });
+  });
+
+  describe("event count", () => {
+    it("returns count for a session", () => {
+      for (let i = 0; i < 5; i++) {
+        store.appendEvent("sess-count", { type: "test", timestamp: "2026-03-30T00:00:00Z", data: {} });
+      }
+      expect(store.getEventCount("sess-count")).toBe(5);
+    });
+
+    it("returns 0 for nonexistent session", () => {
+      expect(store.getEventCount("nonexistent")).toBe(0);
+    });
+  });
+
   describe("storage cap", () => {
     it("enforces storage cap by deleting oldest events", () => {
       const smallStore = new SessionEventStore(tmpDir, 10); // 10 events max

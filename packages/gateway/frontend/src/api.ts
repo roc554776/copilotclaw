@@ -82,6 +82,7 @@ export interface LogEntry {
 }
 
 export interface SessionEvent {
+  id?: number;
   type: string;
   timestamp: string;
   data: Record<string, unknown>;
@@ -177,6 +178,15 @@ export async function fetchLogs(limit = 100): Promise<LogEntry[]> {
 export async function fetchSessionEvents(sessionId: string, signal?: AbortSignal): Promise<SessionEvent[]> {
   const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/events`, signal ? { signal } : undefined);
   if (!res.ok) throw new Error(`session events ${res.status}`);
+  return res.json() as Promise<SessionEvent[]>;
+}
+
+export async function fetchSessionEventsPaginated(sessionId: string, limit: number, options?: { before?: number; after?: number }): Promise<SessionEvent[]> {
+  let url = `/api/sessions/${encodeURIComponent(sessionId)}/events?limit=${limit}`;
+  if (options?.before !== undefined) url += `&before=${options.before}`;
+  if (options?.after !== undefined) url += `&after=${options.after}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`session events paginated ${res.status}`);
   return res.json() as Promise<SessionEvent[]>;
 }
 
