@@ -21,6 +21,7 @@ export function SessionEventsPage() {
   const [abstractSessionId, setAbstractSessionId] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasOlderEvents, setHasOlderEvents] = useState(true);
+  const loadingOlderRef = useRef(false);
 
   const eventsRef = useRef<SessionEvent[]>([]);
   eventsRef.current = events;
@@ -93,10 +94,11 @@ export function SessionEventsPage() {
 
   // Load older events when scrolling up
   const loadOlderEvents = useCallback(async () => {
-    if (!sessionId || loadingOlder || !hasOlderEvents) return;
+    if (!sessionId || loadingOlderRef.current || !hasOlderEvents) return;
     const oldest = eventsRef.current[0];
     if (!oldest?.id) return;
 
+    loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
       const el = containerRef.current;
@@ -117,9 +119,10 @@ export function SessionEventsPage() {
     } catch {
       /* ignore */
     } finally {
+      loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  }, [sessionId, loadingOlder, hasOlderEvents]);
+  }, [sessionId, hasOlderEvents]);
 
   const sessionsLink = abstractSessionId
     ? `/sessions?focus=${encodeURIComponent(abstractSessionId)}`

@@ -44,6 +44,7 @@ export function DashboardPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasOlderMessages, setHasOlderMessages] = useState(true);
+  const loadingOlderRef = useRef(false);
   const [inputText, setInputText] = useState("");
   const [sending, setSending] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
@@ -131,10 +132,11 @@ export function DashboardPage() {
   // Load older messages when scrolling up
   const loadOlderMessages = useCallback(async () => {
     const channelId = activeChannelId;
-    if (!channelId || loadingOlder || !hasOlderMessages) return;
+    if (!channelId || loadingOlderRef.current || !hasOlderMessages) return;
     const oldestMsg = messagesRef.current[0];
     if (!oldestMsg) return;
 
+    loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
       const el = chatRef.current;
@@ -157,9 +159,10 @@ export function DashboardPage() {
     } catch {
       /* ignore */
     } finally {
+      loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  }, [activeChannelId, loadingOlder, hasOlderMessages]);
+  }, [activeChannelId, hasOlderMessages]);
 
   useEffect(() => {
     refreshMessages();

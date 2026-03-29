@@ -5,16 +5,19 @@ import { SessionEventsPage } from "../pages/SessionEventsPage";
 
 const mockEvents = [
   {
+    id: 1,
     type: "session.start",
     timestamp: "2026-03-28T10:00:00Z",
     data: { sessionId: "sess-abc" },
   },
   {
+    id: 2,
     type: "assistant.usage",
     timestamp: "2026-03-28T10:01:00Z",
     data: { model: "gpt-4o", tokens: 100 },
   },
   {
+    id: 3,
     type: "tool.execution",
     timestamp: "2026-03-28T10:02:00Z",
     data: { toolName: "read_file" },
@@ -85,7 +88,7 @@ describe("SessionEventsPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getAllByText("(3 events)").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("(3 events loaded)").length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -98,15 +101,15 @@ describe("SessionEventsPage", () => {
     });
   });
 
-  it("has a refresh button", async () => {
+  it("does not have a refresh button", async () => {
     renderPage();
 
     await waitFor(() => {
       expect(screen.getAllByText("session.start").length).toBeGreaterThanOrEqual(1);
     });
 
-    const refreshBtns = screen.getAllByRole("button", { name: /refresh/i });
-    expect(refreshBtns.length).toBeGreaterThanOrEqual(1);
+    const refreshBtns = screen.queryAllByRole("button", { name: /refresh/i });
+    expect(refreshBtns).toHaveLength(0);
   });
 
   it("renders Back to Sessions link", async () => {
