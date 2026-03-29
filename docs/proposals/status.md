@@ -115,8 +115,10 @@
 
 - デバッグ用ログレベル（config `debug.logLevel` で debug ログ有効化、hooks 呼び出し詳細の debug ログ出力、config migration v3→v4）
 
+- Gateway-Agent 責務の再配置: プロンプト・custom agent 構成を gateway 側 `agent-config.ts` に移動し IPC 経由で送信（v0.40.0）
+
 **未実現:**
-- Gateway-Agent 責務の再配置（システムプロンプト・custom agent 構成等を gateway 側 agent モジュールに移動し IPC 経由で送信、抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理）
+- Gateway-Agent 責務の再配置: 抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
