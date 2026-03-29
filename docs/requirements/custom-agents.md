@@ -28,7 +28,9 @@ Copilot SDK の Custom Agent 機能を用いて、copilotclaw のシステムプ
 
 subagent の完了・失敗を親 agent にリアルタイムに通知する。
 
-- `subagent.completed` / `subagent.failed` イベントで wait のブロックを即座に解除し、subagent 停止情報を返す
+- subagent の停止で `copilotclaw_wait` のブロックを即座に解除し、停止情報を返す
 - subagent call はネストされることがある。直接呼び出した subagent の停止（成功・失敗両方）のみを通知する。ネストされた孫 subagent の停止は通知しない
-- 親 agent が他の処理中の場合: `onPostToolUse` hook の `additionalContext` で通知する
-- 現状の問題: subagent completion は queue に積まれるが、`copilotclaw_wait` の `pollNextInputs` ブロックを解除する仕組みがない。keepalive タイムアウト（25分）まで気づかない
+- フィルタリングロジック（直接呼び出し判定等）は gateway process 側に置く。agent process は通知を受けて wait を解除するだけ
+- wait 中のイベント処理をアドホックに行わない。統一的な通知の仕組みを使う
+- 理由: agent process をミニマルに保ち、gateway の更新だけで最新機能を享受できるコンセプトを維持するため
+- 現状の問題: subagent completion は agent 側の queue に積まれるが wait のブロックを解除する仕組みがない。フィルタリングも agent 側にある

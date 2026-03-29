@@ -69,3 +69,7 @@
 - ※ subagent call はネストされることがあります。直接呼び出した subagent の停止（成功失敗両方）のみを通知してください。
 - ※ session event を使うことになるかと思います。 parent tool call の id を使えば、直接呼び出しか判定できるかと思います。
 - 以前要望を出して完了報告も受けましたが機能してないみたいです。
+- wait 中に色々なイベントやメッセージがやってくるが、それらをアドホックに処理する設計にしない。統一的な仕組みにする。
+- フィルタリングロジックは agent process ではなく gateway process 側に置く。agent process は通知を受けて wait を解除するだけにする。
+- session event を agent → gateway に送り、gateway 側が必要なフィルタリングをして agent に通知する構成にする。
+- 理由: agent process をミニマルに保ち、gateway の更新だけで最新の機能を享受できるようにするコンセプトを維持するため。
