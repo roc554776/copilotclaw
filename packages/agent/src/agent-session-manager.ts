@@ -587,19 +587,29 @@ export class AgentSessionManager {
     // section that has action: "transform". The callbacks above capture each section's
     // content. Post the combined prompt to the gateway for storage and display.
     const postCapturedPrompt = () => {
-      const combined = Object.values(capturedSections).filter(Boolean).join("\n\n");
-      if (combined.length > 0) {
+      // Original system prompt: custom_instructions content is replaced with an
+      // empty tag (the CLI injects workspace files like AGENTS.md into this section,
+      // which is not part of the SDK default prompt).
+      const originalSections = Object.entries(capturedSections)
+        .map(([id, content]) => id === "custom_instructions" ? `<${id}>\n</${id}>` : content)
+        .filter(Boolean);
+      const original = originalSections.join("\n\n");
+      // Effective system prompt includes all sections (what the LLM actually receives).
+      const effective = Object.values(capturedSections).filter(Boolean).join("\n\n");
+      if (original.length > 0) {
         this.postToGateway({
           type: "system_prompt_original",
           model: resolvedModel,
-          prompt: combined,
+          prompt: original,
           capturedAt: new Date().toISOString(),
         });
+      }
+      if (effective.length > 0) {
         this.postToGateway({
           type: "system_prompt_session",
           sessionId: session.sessionId,
           model: resolvedModel,
-          prompt: combined,
+          prompt: effective,
         });
       }
     };
