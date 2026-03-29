@@ -1056,8 +1056,14 @@ export class AgentSessionManager {
       }
     }).catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
-      this.logError(`session ${sessionId.slice(0, 8)} error: ${err instanceof Error ? err.message : String(err)}`);
+      this.logError(`session ${sessionId.slice(0, 8)} error: ${reason}`);
       if (!entry.abortController.signal.aborted) {
+        // Clear copilotSessionId so the next revival creates a fresh session
+        // instead of trying to resume a broken one (e.g. "No tool output found")
+        if (entry.copilotSessionId !== undefined) {
+          this.log(`clearing copilotSessionId ${entry.copilotSessionId.slice(0, 12)} after error`);
+          entry.copilotSessionId = undefined;
+        }
         this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
         this.notifyChannelSessionStopped(boundChannelId, reason);
