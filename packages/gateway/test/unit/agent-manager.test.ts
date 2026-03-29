@@ -132,10 +132,10 @@ describe("AgentManager — stream message handler dispatch", () => {
       type: "system_prompt_session",
       sessionId: "s-1",
       model: "gpt-4.1",
-      prompt: "session prompt",
+      prompt: "effective prompt text",
     });
 
-    expect(onSystemPromptSession).toHaveBeenCalledWith("s-1", "gpt-4.1", "session prompt");
+    expect(onSystemPromptSession).toHaveBeenCalledWith("s-1", "gpt-4.1", "effective prompt text");
   });
 
   it("dispatches drain_pending and sends response via stream", () => {

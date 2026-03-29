@@ -516,7 +516,7 @@ export function StatusPage() {
       {effectivePrompts.map((sp) => (
         <div key={sp.sessionId} style={sectionStyle}>
           <div style={titleStyle}>
-            Session System Prompt ({sp.data.model})
+            Effective System Prompt ({sp.data.model})
           </div>
           <pre style={preStyle}>{sp.data.prompt}</pre>
         </div>
