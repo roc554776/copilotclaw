@@ -81,6 +81,7 @@ async function main(): Promise<void> {
     workspaceRoot: getWorkspaceRoot(getProfileName()),
     auth: config.auth?.github ?? null,
     otel: config.otel ?? null,
+    debug: config.debug ?? null,
   });
 
   // Always ensure agent process on gateway start (version check + spawn if absent)

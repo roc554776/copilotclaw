@@ -113,6 +113,9 @@
 
 - チャンネルのアーカイブ（channels テーブルに `archivedAt` 追加、`PATCH /api/channels/:id` による archive/unarchive、`GET /api/channels?includeArchived=true`、dashboard での表示切替トグル）
 
+**未実現:**
+- デバッグ用ログレベル（config `debug.logLevel` で debug/trace ログを有効化、hooks 呼び出し詳細の debug ログ出力）
+
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
 - Agent process 停止時の全セッション保存（disconnect → 次回起動時に resumeSession）

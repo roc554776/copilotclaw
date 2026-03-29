@@ -12,6 +12,10 @@ interface OtelConfig {
   endpoints?: string[];
 }
 
+interface DebugConfig {
+  logLevel?: "info" | "debug";
+}
+
 interface GatewayConfig {
   model: string | null;
   zeroPremium: boolean;
@@ -20,6 +24,7 @@ interface GatewayConfig {
   workspaceRoot: string | null;
   auth: AuthConfig | null;
   otel: OtelConfig | null;
+  debug: DebugConfig | null;
 }
 
 let structuredLogger: StructuredLogger | undefined;
@@ -54,7 +59,7 @@ function waitForConfig(timeoutMs = 30_000): Promise<GatewayConfig> {
 
     const timer = setTimeout(() => {
       log("config push not received within timeout, using defaults");
-      settle({ model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null, otel: null });
+      settle({ model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null, otel: null, debug: null });
     }, timeoutMs);
     timer.unref();
 
@@ -129,6 +134,7 @@ async function main(): Promise<void> {
   const managerOpts: AgentSessionManagerOptions = {
     zeroPremium: config.zeroPremium,
     debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
+    debugLogLevel: config.debug?.logLevel ?? "info",
     log,
     logError,
   };

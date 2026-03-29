@@ -161,6 +161,8 @@ export interface AgentSessionManagerOptions {
   persistPath?: string;
   /** GitHub token for authentication (from profile auth config). When set, passed to CopilotClient. */
   githubToken?: string;
+  /** Log level: "info" (default) or "debug" (enables verbose hook/internal logging). */
+  debugLogLevel?: "info" | "debug";
   /** Structured log function (info level). Falls back to structured JSON on console.error. */
   log?: (message: string) => void;
   /** Structured log function (error level). Falls back to structured JSON on console.error. */
@@ -206,8 +208,10 @@ export class AgentSessionManager {
   private readonly workingDirectory: string | undefined;
   private readonly persistPath: string | undefined;
   private readonly githubToken: string | undefined;
+  private readonly debugLogLevel: "info" | "debug";
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
+  private readonly debug: (message: string) => void;
   private generationCounter = 0;
   // Backoff tracking: channelId → timestamp when backoff expires.
   // Intentionally in-memory only — not persisted across agent restarts.
@@ -230,8 +234,12 @@ export class AgentSessionManager {
     const defaultLogError = (message: string) => {
       console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
     };
+    this.debugLogLevel = options.debugLogLevel ?? "info";
     this.log = options.log ?? defaultLog;
     this.logError = options.logError ?? defaultLogError;
+    this.debug = this.debugLogLevel === "debug"
+      ? (options.log ?? defaultLog)
+      : () => {};
     this.loadBindings();
   }
 
@@ -545,6 +553,7 @@ export class AgentSessionManager {
             // subagents (worker), and the SDK hook system has no way to distinguish
             // parent vs subagent calls (same sessionId, no parentToolCallId in hooks).
             const isParentAgentTool = input.toolName === PARENT_ONLY_TOOL;
+            this.debug(`postToolUse: tool=${input.toolName} isParent=${isParentAgentTool}`);
             if (!isParentAgentTool) return;
 
             const parts: string[] = [];
@@ -583,6 +592,7 @@ export class AgentSessionManager {
             }
 
             if (parts.length > 0) {
+              this.debug(`postToolUse: returning additionalContext (${parts.length} parts, remind=${shouldRemind})`);
               return { additionalContext: parts.join("\n\n") };
             }
           } catch (err: unknown) {

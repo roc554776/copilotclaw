@@ -32,6 +32,11 @@ export interface OtelConfig {
   endpoints?: string[];
 }
 
+export interface DebugConfig {
+  /** Log level: "info" (default) or "debug" (enables verbose hook/internal logging). */
+  logLevel?: "info" | "debug";
+}
+
 export interface CopilotclawConfig {
   /** Schema version for config migration. Absent in legacy configs (treated as 0). */
   configVersion?: number;
@@ -42,10 +47,11 @@ export interface CopilotclawConfig {
   debugMockCopilotUnsafeTools?: boolean;
   auth?: AuthContainerConfig;
   otel?: OtelConfig;
+  debug?: DebugConfig;
 }
 
 /** Current schema version. Increment when a breaking config change is introduced. */
-export const LATEST_CONFIG_VERSION = 3;
+export const LATEST_CONFIG_VERSION = 4;
 
 /** Migration function type: transforms a raw config object from version N to N+1. */
 type MigrationFn = (config: Record<string, unknown>) => Record<string, unknown>;
@@ -72,6 +78,8 @@ const MIGRATIONS: Record<number, MigrationFn> = {
   },
   // v2 → v3: Add configVersion bump. No schema changes (otel is optional).
   2: (config) => ({ ...config, configVersion: 3 }),
+  // v3 → v4: Add debug namespace. No schema changes (debug is optional).
+  3: (config) => ({ ...config, configVersion: 4 }),
 };
 
 /**
@@ -180,6 +188,9 @@ export function loadConfig(profile?: string): CopilotclawConfig {
 
   // OTel config is file-only (no env var override)
   if (fileConfig.otel !== undefined) result.otel = fileConfig.otel;
+
+  // Debug config is file-only (no env var override)
+  if (fileConfig.debug !== undefined) result.debug = fileConfig.debug;
 
   // Preserve configVersion from migrated file config
   if (fileConfig.configVersion !== undefined) result.configVersion = fileConfig.configVersion;

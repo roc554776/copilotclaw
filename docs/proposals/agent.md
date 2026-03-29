@@ -504,6 +504,25 @@ SDK の `onPostToolUse` hook は subagent の tool 実行でも発火する（su
 
 リマインドと通知は `toolName === "copilotclaw_wait"` の場合にのみ発火する
 
+### デバッグ用ログレベル（未実現）
+
+config ファイルに `debug.logLevel` 設定を追加し、通常は出力されない debug レベルのログを有効化できるようにする。
+
+**config 設計:**
+- 設定キー: `debug.logLevel`（`"info"` | `"debug"`）
+- デフォルト: `"info"`（debug ログは出力されない）
+- config スキーマバージョンのマイグレーション（v3→v4）で `debug` 名前空間を追加
+
+**debug ログの対象:**
+- `onPostToolUse` hook の呼び出し: toolName、実行結果の概要、additionalContext の有無
+- `onPostToolUse` hook のゲート判定: どのツールで発火し、どのツールでスキップされたか
+- その他、調査時に有用な内部状態
+
+**実装方針:**
+- `AgentSessionManagerOptions` に `debugLogLevel` を追加
+- `this.log()` とは別に `this.debug()` メソッドを用意し、`debugLogLevel === "debug"` の場合のみ出力する
+- gateway から agent への config push で `debug` 設定を伝搬する
+
 #### 発火頻度
 
 毎回発火するとコンテキストを浪費するため、以下の条件で制御する:
