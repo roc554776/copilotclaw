@@ -338,23 +338,42 @@ export function StatusPage() {
                             </div>
                             <div style={rowStyle}>
                               <span style={labelStyle}>
-                                System Prompt
+                                Effective Prompt
                               </span>
                               <span>
-                                <a
-                                  href="#"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    loadEffectivePrompt(
-                                      sess.physicalSession!
-                                        .sessionId,
-                                    );
-                                  }}
-                                >
-                                  View &rarr;
-                                </a>
+                                {effectivePrompts.some((sp) => sp.sessionId === sess.physicalSession!.sessionId) ? (
+                                  <a
+                                    href="#"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== sess.physicalSession!.sessionId));
+                                    }}
+                                  >
+                                    Hide
+                                  </a>
+                                ) : (
+                                  <a
+                                    href="#"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      loadEffectivePrompt(
+                                        sess.physicalSession!
+                                          .sessionId,
+                                      );
+                                    }}
+                                  >
+                                    View &rarr;
+                                  </a>
+                                )}
                               </span>
                             </div>
+                            {effectivePrompts
+                              .filter((sp) => sp.sessionId === sess.physicalSession!.sessionId)
+                              .map((sp) => (
+                                <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
+                                  <pre style={preStyle}>{sp.data.prompt}</pre>
+                                </div>
+                              ))}
                           </div>
                         )}
                         <CumulativeTokens sess={sess} />
@@ -513,14 +532,6 @@ export function StatusPage() {
         )}
       </div>
 
-      {effectivePrompts.map((sp) => (
-        <div key={sp.sessionId} style={sectionStyle}>
-          <div style={titleStyle}>
-            Effective System Prompt ({sp.data.model})
-          </div>
-          <pre style={preStyle}>{sp.data.prompt}</pre>
-        </div>
-      ))}
     </div>
   );
 }
