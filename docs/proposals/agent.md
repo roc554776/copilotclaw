@@ -504,7 +504,7 @@ SDK の `onPostToolUse` hook は subagent の tool 実行でも発火する（su
 
 リマインドと通知は `toolName === "copilotclaw_wait"` の場合にのみ発火する
 
-### デバッグ用ログレベル（未実現）
+### デバッグ用ログレベル（v0.39.0 で実現済み）
 
 config ファイルに `debug.logLevel` 設定を追加し、通常は出力されない debug レベルのログを有効化できるようにする。
 
