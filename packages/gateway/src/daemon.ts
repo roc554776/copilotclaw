@@ -114,6 +114,10 @@ async function main(): Promise<void> {
   const cronJobs = config.cron ?? [];
   const cronTimers: ReturnType<typeof setInterval>[] = [];
   for (const job of cronJobs) {
+    if (job.enabled === false) {
+      console.error(`[gateway] cron job '${job.id}' skipped (disabled)`);
+      continue;
+    }
     const timer = setInterval(() => {
       const prefix = `[cron:${job.id}] `;
       if (store.hasPendingCronMessage(job.channelId, prefix)) return;

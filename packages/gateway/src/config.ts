@@ -42,6 +42,7 @@ export interface CronJobConfig {
   channelId: string;
   intervalMs: number;
   message: string;
+  enabled?: boolean;
 }
 
 export interface CopilotclawConfig {
