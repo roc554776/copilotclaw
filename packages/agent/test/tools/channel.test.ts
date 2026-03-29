@@ -173,6 +173,18 @@ describe("copilotclaw_wait", () => {
     expect(result.userMessage).toContain("hello");
     expect(result.userMessage).toContain("[SYSTEM EVENT]");
   });
+
+  it("formats cron messages with [CRON TASK] prefix", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "c-1", sender: "cron", message: "[cron:daily] report task" },
+    ]);
+
+    const { wait } = createChannelTools({ channelId: "ch-cron-fmt", keepaliveTimeoutMs: 100 });
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("[CRON TASK]");
+    expect(result.userMessage).toContain("report task");
+  });
 });
 
 describe("copilotclaw_list_messages", () => {

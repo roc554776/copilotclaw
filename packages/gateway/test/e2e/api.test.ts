@@ -145,6 +145,28 @@ describe("POST /api/channels/:channelId/messages (system message)", () => {
   });
 });
 
+describe("POST /api/channels/:channelId/messages (cron sender)", () => {
+  it("accepts cron sender and triggers agent_notify", async () => {
+    const mockAgentManager = { notifyAgent: vi.fn() } as unknown as import("../../src/agent-manager.js").AgentManager;
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: mockAgentManager });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "cron", message: "[cron:test] task" }),
+    });
+    expect(res.status).toBe(201);
+    const msg = await res.json() as { sender: string };
+    expect(msg.sender).toBe("cron");
+    expect(mockAgentManager.notifyAgent).toHaveBeenCalledWith(chId);
+
+    await freshHandle.close();
+  });
+});
+
 describe("POST /api/channels/:channelId/messages/pending", () => {
   it("returns 204 when no pending messages", async () => {
     const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
