@@ -148,6 +148,31 @@ describe("copilotclaw_wait", () => {
     expect(result.userMessage).toContain("arrived via notify");
     expect(result.userMessage).not.toContain(KEEPALIVE_MARKER);
   });
+
+  it("formats system messages with [SYSTEM EVENT] prefix", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "sys-1", sender: "system", message: "[SUBAGENT COMPLETED] worker completed" },
+    ]);
+
+    const { wait } = createChannelTools({ channelId: "ch-sys", keepaliveTimeoutMs: 100 });
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("[SYSTEM EVENT]");
+    expect(result.userMessage).toContain("SUBAGENT COMPLETED");
+  });
+
+  it("combines user and system messages together", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "u-1", sender: "user", message: "hello" },
+      { id: "sys-1", sender: "system", message: "[SUBAGENT COMPLETED] worker completed" },
+    ]);
+
+    const { wait } = createChannelTools({ channelId: "ch-mixed", keepaliveTimeoutMs: 100 });
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("hello");
+    expect(result.userMessage).toContain("[SYSTEM EVENT]");
+  });
 });
 
 describe("copilotclaw_list_messages", () => {

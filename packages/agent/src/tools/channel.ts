@@ -40,7 +40,7 @@ interface NextInputResponse {
 interface MessageResponse {
   id: string;
   channelId: string;
-  sender: "user" | "agent" | "cron";
+  sender: "user" | "agent" | "cron" | "system";
   message: string;
   createdAt: string;
 }

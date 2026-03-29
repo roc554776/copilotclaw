@@ -290,7 +290,7 @@ function createRequestHandler(
           return;
         }
         const senderRaw = body["sender"];
-        const sender = senderRaw === "user" ? "user" as const : senderRaw === "cron" ? "cron" as const : "agent" as const;
+        const sender = senderRaw === "user" ? "user" as const : senderRaw === "cron" ? "cron" as const : senderRaw === "system" ? "system" as const : "agent" as const;
         const msg = store.addMessage(channelId, sender, body["message"] as string);
         if (msg === undefined) {
           json(res, 404, { error: "channel not found" });

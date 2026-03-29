@@ -228,6 +228,14 @@ describe("Store", () => {
       expect(ch?.id).toBe(channelId);
     });
 
+    it("system messages added to pending queue", () => {
+      store.addMessage(channelId, "system", "[SUBAGENT COMPLETED] worker completed");
+      const pending = store.drainPending(channelId);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]!.sender).toBe("system");
+      expect(pending[0]!.message).toContain("SUBAGENT COMPLETED");
+    });
+
     it("messages on archived channels are preserved", () => {
       store.addMessage(channelId, "user", "hello");
       store.archiveChannel(channelId);
