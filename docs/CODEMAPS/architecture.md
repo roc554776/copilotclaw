@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.42.0 | Token estimate: ~2300 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.43.0 | Token estimate: ~2300 -->
 
 # Architecture
 
@@ -61,9 +61,9 @@ Environment variables:
 - Force-restart flow: ensureAgent returns old bootId on force-restart → daemon calls waitForNewAgent to poll until different bootId appears before proceeding
 - Gateway stop → gateway only (agent process NOT stopped)
 - Gateway restart → POST /api/stop, wait for port free, then start (restart.ts)
-- Agent ↔ Gateway: IPC stream (v0.35.0) — persistent bidirectional connection; gateway pushes config and pending_notify; agent pushes channel messages, session events, system prompts; agent sends request-response for drain/peek/flush/list_messages
-- Agent process manages agent sessions: listens for pending_notify push from gateway via IPC stream, starts session when notified
-- User message POST triggers gateway notifyPending via IPC stream (push-based, no polling)
+- Agent ↔ Gateway: IPC stream (v0.35.0) — persistent bidirectional connection; gateway pushes config and agent_notify; agent pushes channel messages, session events, system prompts; agent sends request-response for drain/peek/flush/list_messages
+- Agent process manages agent sessions: listens for agent_notify push from gateway via IPC stream, starts session when notified
+- User message POST triggers gateway notifyAgent via IPC stream (push-based, no polling)
 
 ## Session Keepalive
 
@@ -86,12 +86,12 @@ Environment variables:
 - **Session Startup**: agent reads workspace bootstrap files in order: SOUL.md (persona), USER.md (user context), memory/YYYY-MM-DD.md files (recent sessions), MEMORY.md (long-term memory)
 - **SYSTEM_REMINDER**: periodic deadlock prevention reinforcement via additionalContext
 
-## Subagent Completion Notification (v0.16.0+)
+## Subagent Completion Notification (v0.16.0+, gateway-handled v0.43.0)
 
-- SDK events `subagent.completed` and `subagent.failed` push completion info (agentName, status, totalTokens, durationMs, error) to a completion queue
-- Queue drained in two places: (1) `copilotclaw_wait` handler returns subagent info alongside user messages, (2) `onPostToolUse` hook injects `[SUBAGENT COMPLETED]` into additionalContext
-- Parent agent can distinguish subagent completions from pending user messages and react accordingly
-- SubagentCompletionInfo type exported from tools/channel.ts
+- SDK events `subagent.completed` and `subagent.failed` forwarded from agent to gateway via IPC stream session_event (with channelId)
+- Gateway detects direct subagent calls (no parentToolCallId in event data) and inserts `[SUBAGENT COMPLETED/FAILED]` system message into the channel's pending queue, then sends agent_notify
+- Agent receives system messages via normal pending drain in `copilotclaw_wait`; combineMessages prefixes system sender with `[SYSTEM EVENT]`
+- Agent-side status tracking retained (subagent session status updated on events) for dashboard display only
 
 ## Session Lifecycle (v0.18.0: Persistent Channel Bindings)
 
@@ -130,7 +130,7 @@ Environment variables:
 - Gateway and agent are independent processes (gateway stop does NOT stop agent)
 - Startup direction: always gateway → agent (agent never starts gateway)
 - Agent process ensure: gateway start time only (NOT on user message POST)
-- Agent session ensure: agent process responsibility (listens for pending_notify via IPC stream)
+- Agent session ensure: agent process responsibility (listens for agent_notify via IPC stream)
 - Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel; LogBuffer optionally writes structured JSON lines to file via enableFileOutput() (gateway.log); agent spawned with stderr redirected to agent.log; agent process initializes its own StructuredLogger writing to agent.log
 - Structured logging: StructuredLogger (intentionally duplicated in gateway and agent packages) writes JSON Lines (StructuredLogEntry: ts, level, component, msg, data?) to file via appendFileSync; bridges to OpenTelemetry via optional OtelLoggerBridge parameter (emits log records to OTel LoggerProvider when configured); agent uses structured JSON fallback pattern (console.error with JSON.stringify) before StructuredLogger is initialized — applies to index.ts module-level log/logError, AgentSessionManager defaultLog/defaultLogError, and channel.ts ChannelToolDeps logError
@@ -138,6 +138,6 @@ Environment variables:
 - Channel backoff: AgentSessionManager tracks channelBackoff map; recordBackoffIfRapidFailure() sets backoff when session fails within rapid-failure threshold (rapidFailureThresholdMs, backoffDurationMs from gateway config); isChannelInBackoff() checked in polling loop to skip channels in backoff (prevents retry storms); notifyChannelSessionStopped() includes error reason in system message when available
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (363 tests: 91 agent + 241 gateway + 31 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (363 tests: 87 agent + 245 gateway + 31 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
 - Frontend tests: vitest + jsdom + @testing-library/react for React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll)
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
