@@ -289,7 +289,8 @@ function createRequestHandler(
           json(res, 400, { error: "missing 'message' field" });
           return;
         }
-        const sender = body["sender"] === "user" ? "user" as const : "agent" as const;
+        const senderRaw = body["sender"];
+        const sender = senderRaw === "user" ? "user" as const : senderRaw === "cron" ? "cron" as const : "agent" as const;
         const msg = store.addMessage(channelId, sender, body["message"] as string);
         if (msg === undefined) {
           json(res, 404, { error: "channel not found" });
@@ -299,8 +300,8 @@ function createRequestHandler(
         for (const provider of channelProviders) {
           provider.onMessage?.(channelId, sender, msg.message);
         }
-        // Notify agent via IPC stream when a user message arrives
-        if (sender === "user" && agentManager !== null) {
+        // Notify agent via IPC stream when a user or cron message arrives
+        if ((sender === "user" || sender === "cron") && agentManager !== null) {
           const pendingCount = store.pendingCounts()[channelId] ?? 0;
           agentManager.notifyPending(channelId, pendingCount);
         }

@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 export interface Message {
   id: string;
   channelId: string;
-  sender: "user" | "agent";
+  sender: "user" | "agent" | "cron";
   message: string;
   createdAt: string;
 }
@@ -53,7 +53,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         channelId TEXT NOT NULL,
-        sender TEXT NOT NULL CHECK(sender IN ('user', 'agent')),
+        sender TEXT NOT NULL CHECK(sender IN ('user', 'agent', 'cron')),
         message TEXT NOT NULL,
         createdAt TEXT NOT NULL,
         FOREIGN KEY (channelId) REFERENCES channels(id)
@@ -68,6 +68,24 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_pending_channel ON pending_queue(channelId);
     `);
+    // Migration: update messages CHECK constraint to include 'cron' sender
+    const checkInfo = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").get() as { sql: string } | undefined;
+    if (checkInfo?.sql && !checkInfo.sql.includes("'cron'")) {
+      this.db.exec(`
+        CREATE TABLE messages_new (
+          id TEXT PRIMARY KEY,
+          channelId TEXT NOT NULL,
+          sender TEXT NOT NULL CHECK(sender IN ('user', 'agent', 'cron')),
+          message TEXT NOT NULL,
+          createdAt TEXT NOT NULL,
+          FOREIGN KEY (channelId) REFERENCES channels(id)
+        );
+        INSERT INTO messages_new SELECT * FROM messages;
+        DROP TABLE messages;
+        ALTER TABLE messages_new RENAME TO messages;
+        CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channelId, createdAt);
+      `);
+    }
     // Migration: add archivedAt column if missing
     const columns = this.db.pragma("table_info(channels)") as Array<{ name: string }>;
     if (!columns.some((c) => c.name === "archivedAt")) {
@@ -146,7 +164,7 @@ export class Store {
     return result.changes > 0;
   }
 
-  addMessage(channelId: string, sender: "user" | "agent", message: string): Message | undefined {
+  addMessage(channelId: string, sender: "user" | "agent" | "cron", message: string): Message | undefined {
     const ch = this.getChannel(channelId);
     if (ch === undefined) return undefined;
     const msg: Message = {
@@ -158,7 +176,7 @@ export class Store {
     };
     this.db.transaction(() => {
       this.db.prepare("INSERT INTO messages (id, channelId, sender, message, createdAt) VALUES (?, ?, ?, ?, ?)").run(msg.id, msg.channelId, msg.sender, msg.message, msg.createdAt);
-      if (sender === "user") {
+      if (sender === "user" || sender === "cron") {
         this.db.prepare("INSERT INTO pending_queue (channelId, messageId) VALUES (?, ?)").run(channelId, msg.id);
       }
     })();
@@ -212,6 +230,14 @@ export class Store {
 
   hasPending(channelId: string): boolean {
     const row = this.db.prepare("SELECT COUNT(*) as cnt FROM pending_queue WHERE channelId = ?").get(channelId) as { cnt: number } | undefined;
+    return row !== undefined && row.cnt > 0;
+  }
+
+  /** Check if a cron message with the given prefix is already pending for a channel. */
+  hasPendingCronMessage(channelId: string, cronIdPrefix: string): boolean {
+    const row = this.db.prepare(
+      "SELECT COUNT(*) as cnt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? AND m.sender = 'cron' AND m.message LIKE ?",
+    ).get(channelId, `${cronIdPrefix}%`) as { cnt: number } | undefined;
     return row !== undefined && row.cnt > 0;
   }
 

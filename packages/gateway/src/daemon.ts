@@ -110,6 +110,24 @@ async function main(): Promise<void> {
   let serverHandle: Awaited<ReturnType<typeof startServer>> | undefined;
   serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore });
 
+  // Cron scheduler: periodically send cron messages to channels
+  const cronJobs = config.cron ?? [];
+  const cronTimers: ReturnType<typeof setInterval>[] = [];
+  for (const job of cronJobs) {
+    const timer = setInterval(() => {
+      const prefix = `[cron:${job.id}] `;
+      if (store.hasPendingCronMessage(job.channelId, prefix)) return;
+      const msg = store.addMessage(job.channelId, "cron", `${prefix}${job.message}`);
+      if (msg !== undefined) {
+        const pendingCount = store.pendingCounts()[job.channelId] ?? 0;
+        agentManager.notifyPending(job.channelId, pendingCount);
+      }
+    }, job.intervalMs);
+    timer.unref();
+    cronTimers.push(timer);
+    console.error(`[gateway] cron job '${job.id}' scheduled for channel ${job.channelId.slice(0, 8)} every ${Math.round(job.intervalMs / 1000)}s`);
+  }
+
   // Periodic agent process monitoring
   let consecutiveFailures = 0;
   const monitor = setInterval(async () => {

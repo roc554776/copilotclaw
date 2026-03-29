@@ -37,6 +37,13 @@ export interface DebugConfig {
   logLevel?: "info" | "debug";
 }
 
+export interface CronJobConfig {
+  id: string;
+  channelId: string;
+  intervalMs: number;
+  message: string;
+}
+
 export interface CopilotclawConfig {
   /** Schema version for config migration. Absent in legacy configs (treated as 0). */
   configVersion?: number;
@@ -48,6 +55,7 @@ export interface CopilotclawConfig {
   auth?: AuthContainerConfig;
   otel?: OtelConfig;
   debug?: DebugConfig;
+  cron?: CronJobConfig[];
 }
 
 /** Current schema version. Increment when a breaking config change is introduced. */
@@ -191,6 +199,9 @@ export function loadConfig(profile?: string): CopilotclawConfig {
 
   // Debug config is file-only (no env var override)
   if (fileConfig.debug !== undefined) result.debug = fileConfig.debug;
+
+  // Cron config is file-only
+  if (fileConfig.cron !== undefined) result.cron = fileConfig.cron;
 
   // Preserve configVersion from migrated file config
   if (fileConfig.configVersion !== undefined) result.configVersion = fileConfig.configVersion;

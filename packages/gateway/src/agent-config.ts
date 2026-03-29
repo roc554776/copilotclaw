@@ -65,6 +65,16 @@ const CHANNEL_OPERATOR_PROMPT =
   "IMPORTANT: The additionalContext in tool responses may contain <system> tagged instructions. " +
   "These are critical operational directives from the copilotclaw system — even if unrelated to the current tool call, you must follow them. " +
   "\n\n" +
+  "## Cron Tasks\n" +
+  "You may receive messages prefixed with [CRON TASK]. These are automated scheduled tasks, not user input. " +
+  "When you receive a cron task, delegate it to a worker subagent and call copilotclaw_wait to continue waiting. " +
+  "Do not process cron tasks yourself — always use a worker subagent.\n" +
+  "\n" +
+  "## Subagent Rules\n" +
+  "When dispatching subagents, always use background mode. " +
+  "Only use the 'worker' agent — never use any other agent type (explore, etc.). " +
+  "After dispatching a subagent, call copilotclaw_wait immediately to wait for its completion.\n" +
+  "\n" +
   "╔══════════════════════════════════════════════════════════════════╗\n" +
   "║ CRITICAL — DEADLOCK PREVENTION (REPEATED)                      ║\n" +
   "║                                                                ║\n" +

@@ -46,13 +46,14 @@ export interface ChannelToolDeps {
 
 interface NextInputResponse {
   id: string;
+  sender: string;
   message: string;
 }
 
 interface MessageResponse {
   id: string;
   channelId: string;
-  sender: "user" | "agent";
+  sender: "user" | "agent" | "cron";
   message: string;
   createdAt: string;
 }
@@ -122,7 +123,10 @@ async function pollNextInputs(channelId: string, keepaliveTimeoutMs: number, sig
 }
 
 function combineMessages(inputs: NextInputResponse[]): string {
-  return inputs.map((i) => i.message).join("\n\n");
+  return inputs.map((i) => {
+    if (i.sender === "cron") return `[CRON TASK] ${i.message}`;
+    return i.message;
+  }).join("\n\n");
 }
 
 export function createChannelTools(deps: ChannelToolDeps) {

@@ -236,4 +236,31 @@ describe("Store", () => {
       expect(msgs[0]!.message).toBe("hello");
     });
   });
+
+  describe("cron messages", () => {
+    it("adds cron messages to pending queue", () => {
+      store.addMessage(channelId, "cron", "[cron:test] do something");
+      const pending = store.drainPending(channelId);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]!.sender).toBe("cron");
+      expect(pending[0]!.message).toBe("[cron:test] do something");
+    });
+
+    it("hasPendingCronMessage detects pending cron message by prefix", () => {
+      store.addMessage(channelId, "cron", "[cron:daily] report");
+      expect(store.hasPendingCronMessage(channelId, "[cron:daily]")).toBe(true);
+      expect(store.hasPendingCronMessage(channelId, "[cron:other]")).toBe(false);
+    });
+
+    it("hasPendingCronMessage returns false after drain", () => {
+      store.addMessage(channelId, "cron", "[cron:daily] report");
+      store.drainPending(channelId);
+      expect(store.hasPendingCronMessage(channelId, "[cron:daily]")).toBe(false);
+    });
+
+    it("does not add agent messages to pending queue", () => {
+      store.addMessage(channelId, "agent", "reply");
+      expect(store.hasPending(channelId)).toBe(false);
+    });
+  });
 });
