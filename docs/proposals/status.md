@@ -117,10 +117,12 @@
 
 - Gateway-Agent 責務の再配置: プロンプト・custom agent 構成を gateway 側 `agent-config.ts` に移動し IPC 経由で送信（v0.40.0）
 
+- Cron 機能（config 定義の定期タスクをチャンネルメッセージとして送信、cron sender、重複排除、セッション起動対応）（v0.41.0）
+
+- chat operator プロンプト修正（cron タスクの worker 委譲、subagent は常に background mode + worker のみ）（v0.41.0）
+
 **未実現:**
 - Gateway-Agent 責務の再配置: 抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理
-- Cron 機能（config 定義の定期タスクをチャンネルメッセージとして送信、cron sender、重複排除、セッション起動対応）
-- chat operator プロンプト修正（cron タスクの worker 委譲、subagent は常に background mode + worker のみ）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
