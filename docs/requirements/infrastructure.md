@@ -24,7 +24,7 @@ API およびダッシュボードで、agent session（論理）と Copilot SDK
 - 詳細: サマリーに加えて現在のコンテキスト内容（システムプロンプト + 会話履歴）
 - ダッシュボードのモーダルでサマリーを表示し、個別セッションをクリックで詳細表示
 
-### Req: 物理セッション currentState の正確な追跡（未実現）
+### Req: 物理セッション currentState の正確な追跡（v0.44.0 で実現済み）
 
 物理セッションの `currentState` が、アプリケーションの実際の状態を正確に反映するようにする。
 
@@ -32,7 +32,7 @@ API およびダッシュボードで、agent session（論理）と Copilot SDK
 - `copilotclaw_wait` がブロック中の間は、ツール完了/再呼び出しの間のギャップでも `tool:copilotclaw_wait` を維持する
 - `status` フィールド（アプリケーションレベル）と `currentState`（SDK レベル）の矛盾を解消する
 
-### Req: postToolUse ログにセッション ID を含める（未実現）
+### Req: postToolUse ログにセッション ID を含める（v0.44.0 で実現済み）
 
 postToolUse ログにセッション ID を含め、複数セッション並走時の診断を可能にする。
 

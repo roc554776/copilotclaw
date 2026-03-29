@@ -826,7 +826,7 @@ PhysicalSessionSummary:
 - 現在のコンテキスト内容（`session.getMessages()` で取得した会話履歴）
 - IPC `session_messages` メソッド → gateway `/api/sessions/{{sessionId}}/messages` で公開
 
-### 物理セッション currentState の正確な追跡（未実現）
+### 物理セッション currentState の正確な追跡（v0.44.0 で実現済み）
 
 `currentState` は SDK の `tool.execution_start` / `tool.execution_complete` イベントに依存しているが、`copilotclaw_wait` の keepalive サイクルにおいてツール完了から次のツール呼び出しまでの間に一瞬 `idle` に遷移し、実際のアプリケーション状態を反映しない。
 
@@ -843,7 +843,7 @@ PhysicalSessionSummary:
 
 - `packages/agent/src/agent-session-manager.ts`: `onStatusChange` コールバック内で `status === "waiting"` の場合に `physicalSession.currentState` も設定
 
-### postToolUse ログのセッション ID 付与（未実現）
+### postToolUse ログのセッション ID 付与（v0.44.0 で実現済み）
 
 postToolUse のログにセッション ID を含め、複数セッション並走時の診断を可能にする。
 

@@ -121,9 +121,10 @@
 
 - chat operator プロンプト修正（cron タスクの worker 委譲、subagent は常に background mode + worker のみ）（v0.41.0）
 
+- 物理セッション currentState の正確な追跡（`onStatusChange("waiting")` で `currentState` を `tool:copilotclaw_wait` に設定。SDK `tool.execution_complete` による idle リセットを上書き）（v0.44.0）
+- postToolUse ログにセッション ID を含める（`postToolUse: [sessionId] tool=toolName` 形式。複数セッション並走時の診断を可能にする）（v0.44.0）
+
 **未実現:**
-- 物理セッション currentState の正確な追跡（`copilotclaw_wait` ブロック中に `idle` と表示される問題の修正）
-- postToolUse ログにセッション ID を含める（複数セッション並走時の診断を可能にする）
 - Gateway-Agent 責務の再配置: 抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理
 - gateway 停止時の物理セッション延命（実装確認済み — copilotclaw_wait のエラー不可侵性により IPC 切断中も keepalive cycle が継続）
 - gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）
