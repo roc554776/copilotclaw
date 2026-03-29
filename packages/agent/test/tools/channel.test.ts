@@ -187,6 +187,157 @@ describe("copilotclaw_wait", () => {
   });
 });
 
+describe("copilotclaw_wait — swallowed message detection", () => {
+  it("returns swallowed-message reminder when wait called twice without send_message", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "input-1", sender: "user", message: "hello" },
+    ]);
+
+    const logErrorSpy = vi.fn();
+    const { wait } = createChannelTools({
+      channelId: "ch-swallow",
+      keepaliveTimeoutMs: 20,
+      logError: logErrorSpy,
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+
+    // First wait: returns user message and sets pendingReplyExpected = true
+    const result1 = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result1.userMessage).toContain("hello");
+
+    // Second wait: send_message was NOT called, so swallowed-message guard fires
+    const result2 = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result2.userMessage).toContain("CRITICAL");
+    expect(result2.userMessage).toContain("copilotclaw_send_message");
+    expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("swallowed message"));
+  });
+
+  it("does NOT trigger swallowed-message after send_message is called", async () => {
+    let callCount = 0;
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) return [{ id: "input-1", sender: "user", message: "hello" }];
+      return [];
+    });
+
+    const { sendMessage, wait } = createChannelTools({
+      channelId: "ch-no-swallow",
+      keepaliveTimeoutMs: 20,
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+
+    // First wait: returns user message
+    await wait.handler({}, invocation);
+
+    // Call send_message — clears pendingReplyExpected
+    await sendMessage.handler({ message: "reply" }, invocation);
+
+    // Second wait: should NOT fire swallowed-message guard
+    const result2 = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result2.userMessage).not.toContain("CRITICAL");
+  });
+});
+
+describe("copilotclaw_wait — onStatusChange callback", () => {
+  it("fires waiting on poll start, processing when messages arrive", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "input-1", sender: "user", message: "hi" },
+    ]);
+
+    const statusChanges: string[] = [];
+    const { wait } = createChannelTools({
+      channelId: "ch-status",
+      keepaliveTimeoutMs: 20,
+      onStatusChange: (status) => { statusChanges.push(status); },
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    await wait.handler({}, invocation);
+
+    expect(statusChanges).toContain("waiting");
+    expect(statusChanges).toContain("processing");
+  });
+
+  it("fires waiting but not processing on keepalive timeout", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const statusChanges: string[] = [];
+    const { wait } = createChannelTools({
+      channelId: "ch-status-timeout",
+      keepaliveTimeoutMs: 20,
+      onStatusChange: (status) => { statusChanges.push(status); },
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    await wait.handler({}, invocation);
+
+    expect(statusChanges).toContain("waiting");
+    expect(statusChanges).not.toContain("processing");
+  });
+});
+
+describe("copilotclaw_wait — IPC returns non-array", () => {
+  it("treats non-array IPC response as no pending messages (keepalive)", async () => {
+    // drainPendingViaIpc checks Array.isArray(data) — non-array means no messages
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue({ unexpected: true });
+
+    const { wait } = createChannelTools({
+      channelId: "ch-nonarray",
+      keepaliveTimeoutMs: 20,
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("keepalive");
+  });
+});
+
+describe("copilotclaw_wait — pre-aborted signal", () => {
+  it("returns keepalive immediately when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(); // Already aborted
+
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const { wait } = createChannelTools({
+      channelId: "ch-pre-abort",
+      abortSignal: controller.signal,
+      keepaliveTimeoutMs: 5000,
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("keepalive");
+  });
+});
+
+describe("copilotclaw_list_messages — error handling", () => {
+  it("throws when IPC request fails", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("IPC down"));
+
+    const { listMessages } = createChannelTools({
+      channelId: "ch-err",
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    await expect(listMessages.handler({}, invocation)).rejects.toThrow("list_messages failed");
+  });
+
+  it("returns empty array when IPC returns non-array", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const { listMessages } = createChannelTools({
+      channelId: "ch-null",
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await listMessages.handler({}, invocation) as { messages: unknown[] };
+    expect(result.messages).toEqual([]);
+  });
+});
+
 describe("copilotclaw_list_messages", () => {
   it("fetches messages via IPC with default limit", async () => {
     const mockMessages = [

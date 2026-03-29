@@ -446,6 +446,125 @@ describe("GET /api/channels?includeArchived", () => {
   });
 });
 
+describe("GET /api/channels/pending", () => {
+  it("returns pending counts for all channels", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    // Add a user message to create pending
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "pending msg" }),
+    });
+
+    const res = await fetch(`${url}/api/channels/pending`);
+    expect(res.status).toBe(200);
+    const counts = await res.json() as Record<string, number>;
+    expect(counts[chId]).toBe(1);
+
+    await freshHandle.close();
+  });
+
+  it("returns 0 for channels with no pending messages", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const res = await fetch(`${url}/api/channels/pending`);
+    const counts = await res.json() as Record<string, number>;
+    expect(counts[chId]).toBe(0);
+
+    await freshHandle.close();
+  });
+});
+
+describe("GET /api/channels/:channelId/messages/pending/peek", () => {
+  it("returns 204 when no pending messages", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages/pending/peek`);
+    expect(res.status).toBe(204);
+
+    await freshHandle.close();
+  });
+
+  it("returns oldest pending message without removing it", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "oldest" }),
+    });
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "newer" }),
+    });
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages/pending/peek`);
+    expect(res.status).toBe(200);
+    const msg = await res.json() as { message: string };
+    expect(msg.message).toBe("oldest");
+
+    // Should still be pending (peek does not remove)
+    const res2 = await fetch(`${url}/api/channels/${chId}/messages/pending/peek`);
+    expect(res2.status).toBe(200);
+
+    await freshHandle.close();
+  });
+});
+
+describe("POST /api/channels/:channelId/messages/pending/flush", () => {
+  it("flushes all pending messages and returns count", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "a" }),
+    });
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "b" }),
+    });
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages/pending/flush`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { flushed: number };
+    expect(body.flushed).toBe(2);
+
+    // Queue should be empty now
+    const res2 = await fetch(`${url}/api/channels/${chId}/messages/pending`, { method: "POST" });
+    expect(res2.status).toBe(204);
+
+    await freshHandle.close();
+  });
+});
+
+describe("unknown channel action", () => {
+  it("returns 404 for unknown action on valid channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/nonexistent`);
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("unknown channel action");
+  });
+});
+
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);

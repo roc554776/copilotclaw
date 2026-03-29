@@ -161,6 +161,23 @@ describe("Store", () => {
     it("returns empty for non-existent channel", () => {
       expect(store.listMessages("nonexistent")).toEqual([]);
     });
+
+    it("uses default limit of 5 when not specified", () => {
+      for (let i = 0; i < 10; i++) {
+        store.addMessage(channelId, "user", `msg-${i}`);
+      }
+      const msgs = store.listMessages(channelId);
+      expect(msgs).toHaveLength(5);
+    });
+
+    it("falls back to 5 for invalid limit values", () => {
+      for (let i = 0; i < 10; i++) {
+        store.addMessage(channelId, "user", `msg-${i}`);
+      }
+      expect(store.listMessages(channelId, NaN)).toHaveLength(5);
+      expect(store.listMessages(channelId, 0)).toHaveLength(5);
+      expect(store.listMessages(channelId, -1)).toHaveLength(5);
+    });
   });
 
   describe("pendingCounts", () => {
