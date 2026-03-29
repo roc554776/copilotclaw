@@ -235,7 +235,7 @@ export class Store {
       ).all(channelId, before, safeLimit) as Message[];
     }
     return this.db.prepare(
-      "SELECT id, channelId, sender, message, createdAt FROM messages WHERE channelId = ? ORDER BY createdAt DESC LIMIT ?",
+      "SELECT id, channelId, sender, message, createdAt FROM messages WHERE channelId = ? ORDER BY rowid DESC LIMIT ?",
     ).all(channelId, safeLimit) as Message[];
   }
 

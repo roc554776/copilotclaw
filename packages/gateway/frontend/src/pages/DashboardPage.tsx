@@ -36,6 +36,8 @@ const modalRowStyle: React.CSSProperties = {
 };
 const modalLabelStyle: React.CSSProperties = { color: "#8b949e" };
 
+const INITIAL_MESSAGE_LIMIT = 50;
+
 export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -84,17 +86,29 @@ export function DashboardPage() {
       .finally(() => setLoading(false));
   }, [showArchived]);
 
-  const INITIAL_MESSAGE_LIMIT = 50;
+  const messagesRef = useRef<Message[]>([]);
+  messagesRef.current = messages;
 
   // H-1: capture activeChannelId in closure
   const refreshMessages = useCallback(async () => {
     const channelId = activeChannelId;
     if (!channelId) return;
     try {
-      const msgs = await fetchMessages(channelId, INITIAL_MESSAGE_LIMIT);
-      // API returns reverse-chronological; reverse for display
-      setMessages(msgs.slice().reverse());
-      setHasOlderMessages(msgs.length >= INITIAL_MESSAGE_LIMIT);
+      const current = messagesRef.current;
+      if (current.length > 0) {
+        // Append only new messages (newer than the newest we have)
+        const newest = current[current.length - 1]!;
+        const fresh = await fetchMessages(channelId, INITIAL_MESSAGE_LIMIT);
+        const freshReversed = fresh.slice().reverse();
+        const newMsgs = freshReversed.filter((m) => m.createdAt > newest.createdAt || (m.createdAt === newest.createdAt && !current.some((c) => c.id === m.id)));
+        if (newMsgs.length > 0) {
+          setMessages((prev) => [...prev, ...newMsgs]);
+        }
+      } else {
+        const msgs = await fetchMessages(channelId, INITIAL_MESSAGE_LIMIT);
+        setMessages(msgs.slice().reverse());
+        setHasOlderMessages(msgs.length >= INITIAL_MESSAGE_LIMIT);
+      }
     } catch {
       /* ignore */
     }
@@ -104,11 +118,14 @@ export function DashboardPage() {
   const loadOlderMessages = useCallback(async () => {
     const channelId = activeChannelId;
     if (!channelId || loadingOlder || !hasOlderMessages) return;
-    const oldestMsg = messages[0];
+    const oldestMsg = messagesRef.current[0];
     if (!oldestMsg) return;
 
     setLoadingOlder(true);
     try {
+      const el = chatRef.current;
+      const prevScrollHeight = el?.scrollHeight ?? 0;
+
       const older = await fetchMessages(channelId, INITIAL_MESSAGE_LIMIT, oldestMsg.id);
       if (older.length === 0) {
         setHasOlderMessages(false);
@@ -116,13 +133,19 @@ export function DashboardPage() {
         // older is reverse-chronological; reverse and prepend
         setMessages((prev) => [...older.slice().reverse(), ...prev]);
         setHasOlderMessages(older.length >= INITIAL_MESSAGE_LIMIT);
+        // Restore scroll position after prepending
+        requestAnimationFrame(() => {
+          if (el) {
+            el.scrollTop = el.scrollHeight - prevScrollHeight;
+          }
+        });
       }
     } catch {
       /* ignore */
     } finally {
       setLoadingOlder(false);
     }
-  }, [activeChannelId, loadingOlder, hasOlderMessages, messages]);
+  }, [activeChannelId, loadingOlder, hasOlderMessages]);
 
   useEffect(() => {
     refreshMessages();
