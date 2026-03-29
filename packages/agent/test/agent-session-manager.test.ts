@@ -1201,3 +1201,135 @@ describe("AgentSessionManager — stopAll suspends channel-bound sessions", () =
     expect(restored?.status).toBe("suspended");
   });
 });
+
+describe("AgentSessionManager — currentState tracking via onStatusChange", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sets physicalSession.currentState to tool:copilotclaw_wait when copilotclaw_wait handler runs", async () => {
+    let capturedConfig: Record<string, unknown> | undefined;
+
+    const createSessionMock = vi.fn().mockImplementation(async (config: Record<string, unknown>) => {
+      capturedConfig = config;
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      return {
+        sessionId: "sdk-state-test",
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          const list = listeners.get(event) ?? [];
+          list.push(cb);
+          listeners.set(event, list);
+        }),
+        send: vi.fn().mockResolvedValue("msg-id"),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+        registerTransformCallbacks: vi.fn(),
+      };
+    });
+
+    (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
+      (this as Record<string, unknown>)["createSession"] = createSessionMock;
+      (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
+      (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["rpc"] = {
+        models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
+        account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+      };
+    });
+
+    // Return empty array so wait enters polling (keepalive path)
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-state" });
+    await waitForPhysicalSession(manager);
+
+    // Before calling wait handler, currentState should be "idle"
+    let statuses = manager.getSessionStatuses();
+    expect(statuses[sessionId]?.physicalSession?.currentState).toBe("idle");
+
+    // Find the copilotclaw_wait tool handler from the tools in capturedConfig
+    const tools = capturedConfig!["tools"] as Array<{ name: string; handler: () => Promise<unknown> }>;
+    const waitTool = tools.find((t) => t.name === "copilotclaw_wait");
+    expect(waitTool).toBeDefined();
+
+    // Call the wait handler. It will call onStatusChange("waiting") synchronously,
+    // then block in pollNextInputs. We abort it quickly via the session's abort controller.
+    const waitPromise = waitTool!.handler();
+
+    // Give the handler a chance to call onStatusChange("waiting")
+    await wait(10);
+
+    // currentState should now be "tool:copilotclaw_wait"
+    statuses = manager.getSessionStatuses();
+    expect(statuses[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+
+    // Stop the session to unblock the wait handler
+    manager.stopSession(sessionId);
+    await waitPromise.catch(() => {});
+  });
+});
+
+describe("AgentSessionManager — postToolUse log includes session ID", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("postToolUse debug log contains session ID in format [sessionId]", async () => {
+    const debugLogs: string[] = [];
+    let capturedConfig: Record<string, unknown> | undefined;
+
+    const createSessionMock = vi.fn().mockImplementation(async (config: Record<string, unknown>) => {
+      capturedConfig = config;
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      return {
+        sessionId: "sdk-log-test",
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          const list = listeners.get(event) ?? [];
+          list.push(cb);
+          listeners.set(event, list);
+        }),
+        send: vi.fn().mockResolvedValue("msg-id"),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+        registerTransformCallbacks: vi.fn(),
+      };
+    });
+
+    (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
+      (this as Record<string, unknown>)["createSession"] = createSessionMock;
+      (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
+      (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["rpc"] = {
+        models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
+        account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+      };
+    });
+
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
+      debugLogLevel: "debug",
+      log: (msg: string) => { debugLogs.push(msg); },
+    });
+
+    const sessionId = manager.startSession({ boundChannelId: "ch-log" });
+    await waitForPhysicalSession(manager);
+
+    // Extract the onPostToolUse hook from the captured config
+    expect(capturedConfig).toBeDefined();
+    const hooks = capturedConfig!["hooks"] as { onPostToolUse: (input: { toolName: string }) => Promise<unknown> };
+    expect(hooks?.onPostToolUse).toBeDefined();
+
+    // Call the hook directly
+    await hooks.onPostToolUse({ toolName: "grep" });
+
+    // The debug log should contain the session ID
+    const postToolUseLogs = debugLogs.filter((l) => l.includes("postToolUse"));
+    expect(postToolUseLogs.length).toBeGreaterThanOrEqual(1);
+    expect(postToolUseLogs[0]).toContain(`[${sessionId}]`);
+    expect(postToolUseLogs[0]).toContain("tool=grep");
+  });
+});

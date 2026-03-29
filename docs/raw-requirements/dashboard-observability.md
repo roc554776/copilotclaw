@@ -75,3 +75,8 @@
 
 - `/status` にある sessions へのリンクの表記は `All sessions →` にすべき
   - 現状: `Sessions All physical sessions →` という表示になっている
+
+<!-- 2026-03-29 -->
+
+- state が idle と表示されています。これは copilotclaw_wait の tool execution 中なので tool:copilotclaw_wait のはずですが。正常？？？
+- （postToolUse のログについて）は？追加すべきなのはセッションIDだろ

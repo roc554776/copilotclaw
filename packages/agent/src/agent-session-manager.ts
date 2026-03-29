@@ -445,6 +445,9 @@ export class AgentSessionManager {
       abortSignal: entry.abortController.signal,
       onStatusChange: (status) => {
         entry.info.status = status;
+        if (status === "waiting" && entry.info.physicalSession !== undefined) {
+          entry.info.physicalSession.currentState = "tool:copilotclaw_wait";
+        }
         if (status === "processing") {
           entry.info.processingStartedAt = new Date().toISOString();
         }
@@ -470,7 +473,7 @@ export class AgentSessionManager {
           try {
             if (signal.aborted) return;
 
-            this.debug(`postToolUse: tool=${input.toolName}`);
+            this.debug(`postToolUse: [${entry.sessionId}] tool=${input.toolName}`);
 
             const parts: string[] = [];
 

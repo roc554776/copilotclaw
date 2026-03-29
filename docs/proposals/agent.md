@@ -796,7 +796,7 @@ PhysicalSessionSummary:
 | `sessionId` | `string` | SDK session ID |
 | `model` | `string` | 使用中のモデル |
 | `startedAt` | `string` | 開始時刻 |
-| `currentState` | `string` | 現在の状態（idle, tool 呼び出し中, etc.） |
+| `currentState` | `string` | 現在の状態（idle, tool 呼び出し中, etc.）。後述の「currentState の正確な追跡」を参照 |
 | `currentTokens` | `number?` | 現在のコンテキストトークン数（`session.usage_info` イベントから取得） |
 | `tokenLimit` | `number?` | 最大コンテキストウィンドウサイズ（`session.usage_info` イベントから取得） |
 | `totalInputTokens` | `number?` | 累計入力トークン数（`assistant.usage` イベントから積算） |
@@ -825,6 +825,36 @@ PhysicalSessionSummary:
 - サマリーの全項目
 - 現在のコンテキスト内容（`session.getMessages()` で取得した会話履歴）
 - IPC `session_messages` メソッド → gateway `/api/sessions/{{sessionId}}/messages` で公開
+
+### 物理セッション currentState の正確な追跡（未実現）
+
+`currentState` は SDK の `tool.execution_start` / `tool.execution_complete` イベントに依存しているが、`copilotclaw_wait` の keepalive サイクルにおいてツール完了から次のツール呼び出しまでの間に一瞬 `idle` に遷移し、実際のアプリケーション状態を反映しない。
+
+**対応方針:**
+
+`onStatusChange` コールバックでアプリケーション側の状態遷移を `currentState` にも反映する:
+
+- `onStatusChange("waiting")` 呼び出し時 → `currentState = "tool:copilotclaw_wait"` に設定
+- `onStatusChange("processing")` 呼び出し時 → `currentState` は変更しない（直後に SDK の `tool.execution_complete` で正しく `idle` になる）
+- SDK の `tool.execution_start` / `tool.execution_complete` イベントは引き続き他のツール（`copilotclaw_send_message`、`grep` 等）の状態追跡に使用する
+- `copilotclaw_wait` に対する `tool.execution_complete` でも `idle` にリセットされるが、直後に `onStatusChange("waiting")` が `tool:copilotclaw_wait` に上書きするため、結果的に正しい状態が維持される
+
+**変更箇所:**
+
+- `packages/agent/src/agent-session-manager.ts`: `onStatusChange` コールバック内で `status === "waiting"` の場合に `physicalSession.currentState` も設定
+
+### postToolUse ログのセッション ID 付与（未実現）
+
+postToolUse のログにセッション ID を含め、複数セッション並走時の診断を可能にする。
+
+**対応方針:**
+
+- `onPostToolUse` hook 内の `this.debug()` 呼び出しに、抽象セッション ID を追加する
+- 形式: `postToolUse: [{{sessionId}}] tool={{toolName}}`
+
+**変更箇所:**
+
+- `packages/agent/src/agent-session-manager.ts`: `onPostToolUse` hook 内のログにセッション ID を付与
 
 ### Dashboard Processing インジケータ
 
