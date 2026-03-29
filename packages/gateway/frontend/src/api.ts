@@ -209,3 +209,19 @@ export async function fetchEffectivePrompt(sessionId: string): Promise<Effective
   return res.json() as Promise<EffectivePrompt>;
 }
 
+export interface TokenUsageEntry {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export async function fetchTokenUsage(hours?: number, from?: string, to?: string): Promise<TokenUsageEntry[]> {
+  const params = new URLSearchParams();
+  if (hours !== undefined) params.set("hours", String(hours));
+  if (from !== undefined) params.set("from", from);
+  if (to !== undefined) params.set("to", to);
+  const res = await fetch(`/api/token-usage?${params.toString()}`);
+  if (!res.ok) return [];
+  return res.json() as Promise<TokenUsageEntry[]>;
+}
+

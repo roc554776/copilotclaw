@@ -132,6 +132,7 @@
 - イベントビューの自動更新と無限スクロール化（Refresh ボタン削除、cursor ベースページネーション、初回最新 N 件 + 上下無限スクロール）（v0.46.0）
 
 **未実現:**
+- トークン消費指数と消費量の閲覧 UI（定義: SUM{models}(MAX(乗数,0.1)*消費量)。直近5h・期間別・モデル別の表示）
 - Gateway-Agent 責務の再配置: 抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理
 - gateway 停止時の物理セッション延命（実装確認済み — copilotclaw_wait のエラー不可侵性により IPC 切断中も keepalive cycle が継続）
 - gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）

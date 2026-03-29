@@ -196,4 +196,71 @@ describe("SessionEventStore", () => {
       expect(store.getEffectivePrompt("unknown")).toBeUndefined();
     });
   });
+
+  describe("token usage aggregation", () => {
+    it("aggregates token usage by model within time range", () => {
+      store.appendEvent("sess-usage", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-5-mini", inputTokens: 100, outputTokens: 20 },
+      });
+      store.appendEvent("sess-usage", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:01:00Z",
+        data: { model: "gpt-5-mini", inputTokens: 200, outputTokens: 30 },
+      });
+      store.appendEvent("sess-usage", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:02:00Z",
+        data: { model: "gpt-4.1", inputTokens: 500, outputTokens: 50 },
+      });
+
+      const usage = store.getTokenUsage("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z");
+      expect(usage).toHaveLength(2);
+      const mini = usage.find((u) => u.model === "gpt-5-mini");
+      expect(mini?.inputTokens).toBe(300);
+      expect(mini?.outputTokens).toBe(50);
+      const gpt4 = usage.find((u) => u.model === "gpt-4.1");
+      expect(gpt4?.inputTokens).toBe(500);
+      expect(gpt4?.outputTokens).toBe(50);
+    });
+
+    it("excludes events outside time range", () => {
+      store.appendEvent("sess-range", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T08:00:00Z",
+        data: { model: "gpt-5-mini", inputTokens: 100, outputTokens: 10 },
+      });
+      store.appendEvent("sess-range", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T12:00:00Z",
+        data: { model: "gpt-5-mini", inputTokens: 200, outputTokens: 20 },
+      });
+
+      const usage = store.getTokenUsage("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z");
+      expect(usage).toHaveLength(0);
+    });
+
+    it("returns empty array when no usage events exist", () => {
+      const usage = store.getTokenUsage("2026-03-30T00:00:00Z", "2026-03-30T23:59:59Z");
+      expect(usage).toEqual([]);
+    });
+
+    it("ignores non-usage events", () => {
+      store.appendEvent("sess-other", {
+        type: "tool.execution_start",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { toolName: "bash" },
+      });
+      store.appendEvent("sess-other", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-5-mini", inputTokens: 100, outputTokens: 10 },
+      });
+
+      const usage = store.getTokenUsage("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z");
+      expect(usage).toHaveLength(1);
+      expect(usage[0]?.model).toBe("gpt-5-mini");
+    });
+  });
 });

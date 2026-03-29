@@ -1,13 +1,21 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type ServerHandle, startServer } from "../../src/server.js";
 import { Store } from "../../src/store.js";
+import { SessionEventStore } from "../../src/session-event-store.js";
 
 let handle: ServerHandle;
 let baseUrl: string;
 let defaultChannelId: string;
+let tmpDir: string;
+let sessionEventStore: SessionEventStore;
 
 beforeAll(async () => {
-  handle = await startServer({ port: 0, store: new Store(), agentManager: null });
+  tmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-e2e-"));
+  sessionEventStore = new SessionEventStore(tmpDir);
+  handle = await startServer({ port: 0, store: new Store(), agentManager: null, sessionEventStore });
   baseUrl = `http://localhost:${handle.port}`;
   const channels = await (await fetch(`${baseUrl}/api/channels`)).json() as Array<{ id: string }>;
   defaultChannelId = channels[0]!.id;
@@ -15,6 +23,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await handle.close();
+  sessionEventStore.close();
+  rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe("GET /healthz", () => {
@@ -592,6 +602,22 @@ describe("GET /api/channels/:channelId/messages with before cursor", () => {
     expect(msgs).toHaveLength(2);
     expect(msgs[0]!.message).toBe("msg-1");
     expect(msgs[1]!.message).toBe("msg-0");
+  });
+});
+
+describe("GET /api/token-usage", () => {
+  it("returns 200 with token usage array", async () => {
+    const res = await fetch(`${baseUrl}/api/token-usage?hours=5`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as Array<{ model: string; inputTokens: number; outputTokens: number }>;
+    expect(Array.isArray(data)).toBe(true);
+  });
+
+  it("accepts from and to params", async () => {
+    const res = await fetch(`${baseUrl}/api/token-usage?from=2026-01-01T00:00:00Z&to=2026-12-31T23:59:59Z`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as unknown[];
+    expect(Array.isArray(data)).toBe(true);
   });
 });
 

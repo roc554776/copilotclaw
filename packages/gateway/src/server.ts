@@ -412,6 +412,18 @@ function createRequestHandler(
         return;
       }
 
+      // GET /api/token-usage — aggregate token usage by model for a time range
+      if (fullPathname === "/api/token-usage" && method === "GET") {
+        const hoursParam = params.get("hours");
+        const fromParam = params.get("from");
+        const toParam = params.get("to");
+        const now = new Date();
+        const to = toParam ?? now.toISOString();
+        const from = fromParam ?? new Date(now.getTime() - (Number(hoursParam) || 5) * 3600_000).toISOString();
+        json(res, 200, sessionEventStore.getTokenUsage(from, to));
+        return;
+      }
+
       // POST /api/system-prompts/original — agent posts captured original prompt
       if (fullPathname === "/api/system-prompts/original" && method === "POST") {
         const body = parseJson(await readBody(req));

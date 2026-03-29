@@ -196,6 +196,28 @@ export class SessionEventStore {
     }
   }
 
+  /** Aggregate token usage from assistant.usage events within a time range, grouped by model. */
+  getTokenUsage(from: string, to: string): Array<{ model: string; inputTokens: number; outputTokens: number }> {
+    const rows = this.db.prepare(
+      "SELECT data FROM session_events WHERE type = 'assistant.usage' AND timestamp >= ? AND timestamp <= ? ORDER BY id ASC",
+    ).all(from, to) as Array<{ data: string }>;
+
+    const byModel = new Map<string, { inputTokens: number; outputTokens: number }>();
+    for (const row of rows) {
+      try {
+        const d = JSON.parse(row.data) as { model?: string; inputTokens?: number; outputTokens?: number };
+        const model = d.model ?? "unknown";
+        const entry = byModel.get(model) ?? { inputTokens: 0, outputTokens: 0 };
+        entry.inputTokens += d.inputTokens ?? 0;
+        entry.outputTokens += d.outputTokens ?? 0;
+        byModel.set(model, entry);
+      } catch {
+        // skip malformed
+      }
+    }
+    return Array.from(byModel.entries()).map(([model, usage]) => ({ model, ...usage }));
+  }
+
   /** Close the database connection. */
   close(): void {
     this.db.close();

@@ -1,11 +1,14 @@
 import { useCallback, useRef, useState } from "react";
 import {
+  fetchModels,
   fetchOriginalPrompts,
   fetchEffectivePrompt,
   fetchStatus,
+  fetchTokenUsage,
   type EffectivePrompt,
   type OriginalPrompt,
   type StatusResponse,
+  type TokenUsageEntry,
 } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { elapsed, SESSION_ID_SHORT, SDK_SESSION_ID_SHORT } from "../utils";
@@ -93,6 +96,9 @@ export function StatusPage() {
   const [effectivePrompts, setEffectivePrompts] = useState<
     Array<{ sessionId: string; data: EffectivePrompt }>
   >([]);
+  const [tokenUsage5h, setTokenUsage5h] = useState<TokenUsageEntry[]>([]);
+  const [tokenUsagePeriods, setTokenUsagePeriods] = useState<Array<{ label: string; data: TokenUsageEntry[] }>>([]);
+  const [modelMultipliers, setModelMultipliers] = useState<Record<string, number>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -105,6 +111,44 @@ export function StatusPage() {
     try {
       const prompts = await fetchOriginalPrompts();
       setOriginalPrompts(prompts);
+    } catch {
+      /* ignore */
+    }
+    try {
+      const usage = await fetchTokenUsage(5);
+      setTokenUsage5h(usage);
+    } catch {
+      /* ignore */
+    }
+    try {
+      const models = await fetchModels();
+      if (models) {
+        const m: Record<string, number> = {};
+        for (const model of models.models) {
+          m[model.id] = model.billing?.multiplier ?? 0;
+        }
+        setModelMultipliers(m);
+      }
+    } catch {
+      /* ignore */
+    }
+    // Period breakdown: 1h, 6h, 24h, 7d
+    try {
+      const now = new Date();
+      const periods = [
+        { label: "1h", ms: 3600_000 },
+        { label: "6h", ms: 6 * 3600_000 },
+        { label: "24h", ms: 24 * 3600_000 },
+        { label: "7d", ms: 7 * 24 * 3600_000 },
+      ];
+      const results = await Promise.all(
+        periods.map(async (p) => {
+          const from = new Date(now.getTime() - p.ms).toISOString();
+          const data = await fetchTokenUsage(undefined, from, now.toISOString());
+          return { label: p.label, data };
+        }),
+      );
+      setTokenUsagePeriods(results);
     } catch {
       /* ignore */
     }
@@ -532,6 +576,86 @@ export function StatusPage() {
         )}
       </div>
 
+      {/* Token Consumption */}
+      <div style={sectionStyle}>
+        <div style={titleStyle}>Token Consumption</div>
+
+        <div style={{ marginBottom: "1rem" }}>
+          <div style={{ ...rowStyle, fontWeight: 600, marginBottom: "0.3rem" }}>
+            <span style={labelStyle}>Last 5h — Consumption Index</span>
+            <span>{computeIndex(tokenUsage5h, modelMultipliers).toLocaleString()}</span>
+          </div>
+          {tokenUsage5h.length > 0 ? (
+            <table style={{ width: "100%", fontSize: "0.8rem", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ color: "#8b949e", textAlign: "left" }}>
+                  <th style={{ padding: "0.2rem 0.5rem" }}>Model</th>
+                  <th style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>Input</th>
+                  <th style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>Output</th>
+                  <th style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>Total</th>
+                  <th style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>Multiplier</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tokenUsage5h.map((u) => (
+                  <tr key={u.model} style={{ borderTop: "1px solid #21262d" }}>
+                    <td style={{ padding: "0.2rem 0.5rem", color: "#58a6ff" }}>{u.model}</td>
+                    <td style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>{u.inputTokens.toLocaleString()}</td>
+                    <td style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>{u.outputTokens.toLocaleString()}</td>
+                    <td style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>{(u.inputTokens + u.outputTokens).toLocaleString()}</td>
+                    <td style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>x{Math.max(modelMultipliers[u.model] ?? 0, 0.1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>No token usage data in the last 5 hours.</div>
+          )}
+        </div>
+
+        {tokenUsagePeriods.length > 0 && (
+          <div>
+            <div style={{ ...rowStyle, fontWeight: 600, marginBottom: "0.3rem" }}>
+              <span style={labelStyle}>By Period</span>
+            </div>
+            <table style={{ width: "100%", fontSize: "0.8rem", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ color: "#8b949e", textAlign: "left" }}>
+                  <th style={{ padding: "0.2rem 0.5rem" }}>Period</th>
+                  <th style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>Index</th>
+                  <th style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>Total Tokens</th>
+                  <th style={{ padding: "0.2rem 0.5rem" }}>Models</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tokenUsagePeriods.map((p) => {
+                  const totalTokens = p.data.reduce((s, u) => s + u.inputTokens + u.outputTokens, 0);
+                  return (
+                    <tr key={p.label} style={{ borderTop: "1px solid #21262d" }}>
+                      <td style={{ padding: "0.2rem 0.5rem" }}>{p.label}</td>
+                      <td style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>{computeIndex(p.data, modelMultipliers).toLocaleString()}</td>
+                      <td style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>{totalTokens.toLocaleString()}</td>
+                      <td style={{ padding: "0.2rem 0.5rem", color: "#8b949e" }}>
+                        {p.data.map((u) => `${u.model}: ${(u.inputTokens + u.outputTokens).toLocaleString()}`).join(", ") || "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
     </div>
   );
+}
+
+function computeIndex(usage: TokenUsageEntry[], multipliers: Record<string, number>): number {
+  let index = 0;
+  for (const u of usage) {
+    const mult = Math.max(multipliers[u.model] ?? 0, 0.1);
+    index += mult * (u.inputTokens + u.outputTokens);
+  }
+  return Math.round(index);
 }
