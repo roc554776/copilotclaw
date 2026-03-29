@@ -17,6 +17,11 @@ export interface AgentPromptConfig {
   channelOperator: CustomAgentDef;
   worker: CustomAgentDef;
   systemReminder: string;
+  initialPrompt: string;
+  staleTimeoutMs: number;
+  maxSessionAgeMs: number;
+  rapidFailureThresholdMs: number;
+  backoffDurationMs: number;
 }
 
 const CHANNEL_OPERATOR_PROMPT =
@@ -102,5 +107,10 @@ export function getAgentPromptConfig(): AgentPromptConfig {
       infer: true,
     },
     systemReminder: SYSTEM_REMINDER,
+    initialPrompt: "Call copilotclaw_wait now to receive the first user message.",
+    staleTimeoutMs: 10 * 60 * 1000, // 10 minutes
+    maxSessionAgeMs: 2 * 24 * 60 * 60 * 1000, // 2 days
+    rapidFailureThresholdMs: 30_000, // session lasted < 30s = rapid failure
+    backoffDurationMs: 60_000, // wait 60s before retrying
   };
 }

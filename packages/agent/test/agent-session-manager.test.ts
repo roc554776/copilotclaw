@@ -68,6 +68,31 @@ function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<ty
   return { on, send, disconnect, emit, sessionId: "mock-sdk-session", getMessages, registerTransformCallbacks };
 }
 
+const TEST_PROMPTS = {
+  channelOperator: {
+    name: "channel-operator",
+    displayName: "Channel Operator",
+    description: "The primary agent. WARNING: NEVER NEVER NEVER dispatch as subagent — catastrophic failure.",
+    prompt: "CRITICAL — DEADLOCK PREVENTION\nYou MUST call copilotclaw_wait whenever you have nothing to do.",
+    infer: false,
+  },
+  worker: {
+    name: "worker",
+    displayName: "Worker",
+    description: "The ONLY agent to dispatch as a subagent.",
+    prompt: "",
+    infer: true,
+  },
+  systemReminder:
+    "<system>\nCRITICAL REMINDER: You MUST call copilotclaw_wait whenever you have nothing to do. " +
+    "Stopping without calling copilotclaw_wait causes an irrecoverable deadlock.\n</system>",
+  initialPrompt: "Call copilotclaw_wait now to receive the first user message.",
+  staleTimeoutMs: 600000,
+  maxSessionAgeMs: 172800000,
+  rapidFailureThresholdMs: 30000,
+  backoffDurationMs: 60000,
+};
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
@@ -104,7 +129,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
   it("suspends session and notifies channel when physical session ends normally (idle, unaborted)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-idle" });
 
@@ -128,7 +153,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
   it("suspends session and notifies channel when physical session throws an error (unaborted)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("error")));
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-error" });
 
@@ -152,7 +177,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
     const pendingCreate = new Promise<object>((res) => { resolveCreate = res; });
     installClientMock(vi.fn().mockReturnValue(pendingCreate));
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-abort" });
 
@@ -188,6 +213,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       staleTimeoutMs: 1,
     });
 
@@ -202,7 +228,7 @@ describe("AgentSessionManager — stopped status and channel notification", () =
   it("does not notify when there is no bound channel (channel-less session errors immediately)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     // No boundChannelId — runSession throws "channel-less sessions not yet supported"
     manager.startSession();
@@ -239,11 +265,12 @@ describe("AgentSessionManager — session max age", () => {
     }));
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       maxSessionAgeMs: 1,
     });
 
     manager.startSession({ boundChannelId: "ch-age" });
-    await wait(20);
+    await waitForPhysicalSession(manager);
 
     const statuses = manager.getSessionStatuses();
     const sessionId = Object.keys(statuses)[0]!;
@@ -280,6 +307,7 @@ describe("AgentSessionManager — session max age", () => {
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       maxSessionAgeMs: 999999999,
     });
 
@@ -304,7 +332,7 @@ describe("AgentSessionManager — suspended session revival", () => {
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-revive" });
     await wait(50); // session idles and suspends
@@ -338,7 +366,7 @@ describe("AgentSessionManager — suspended session revival", () => {
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-explicit-stop" });
     await waitForPhysicalSession(manager);
@@ -374,6 +402,7 @@ describe("AgentSessionManager — binding persistence", () => {
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -391,6 +420,7 @@ describe("AgentSessionManager — binding persistence", () => {
     // Create a new manager from the same persist file — simulates agent restart
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
     const manager2 = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -411,6 +441,7 @@ describe("AgentSessionManager — binding persistence", () => {
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -456,11 +487,12 @@ describe("AgentSessionManager — stale deferred resume", () => {
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       staleTimeoutMs: 1,
     });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-stale-defer" });
-    await wait(20);
+    await waitForPhysicalSession(manager);
 
     // Manually transition to processing state (simulate the LLM starting work)
     const entry = (manager as unknown as { sessions: Map<string, { info: { status: string; processingStartedAt: string }; copilotSessionId: string }> }).sessions.get(sessionId);
@@ -496,11 +528,12 @@ describe("AgentSessionManager — stale deferred resume", () => {
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       staleTimeoutMs: 1,
     });
 
     const sessionId = manager.startSession({ boundChannelId: "ch-nopending" });
-    await wait(20);
+    await waitForPhysicalSession(manager);
 
     const entry = (manager as unknown as { sessions: Map<string, { info: { status: string; processingStartedAt: string }; copilotSessionId: string }> }).sessions.get(sessionId);
     if (entry !== undefined) {
@@ -529,7 +562,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-assistant-msg" });
     await waitForPhysicalSession(manager);
@@ -556,7 +589,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-empty-msg" });
     await waitForPhysicalSession(manager);
@@ -588,7 +621,7 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-usage" });
     await waitForPhysicalSession(manager);
@@ -614,7 +647,7 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-quota" });
     await waitForPhysicalSession(manager);
@@ -637,7 +670,7 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-noquota" });
     await waitForPhysicalSession(manager);
@@ -671,7 +704,7 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
     installClientMock(createSessionSpy);
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-reminder" });
     await waitForPhysicalSession(manager);
@@ -778,7 +811,7 @@ describe("AgentSessionManager — custom agents configuration", () => {
     installClientMock(createSessionSpy);
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-agents" });
     await waitForPhysicalSession(manager);
@@ -824,7 +857,7 @@ describe("AgentSessionManager — subagent completion notification", () => {
     installClientMock(createSessionSpy);
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-sub-notify" });
     await waitForPhysicalSession(manager);
@@ -858,7 +891,7 @@ describe("AgentSessionManager — subagent completion notification", () => {
     installClientMock(createSessionSpy);
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-sub-fail" });
     await waitForPhysicalSession(manager);
@@ -890,7 +923,7 @@ describe("AgentSessionManager — session failure backoff", () => {
     installClientMock(vi.fn().mockRejectedValue(new Error("auth failed")));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-backoff" });
     await wait(50);
@@ -901,7 +934,7 @@ describe("AgentSessionManager — session failure backoff", () => {
 
   it("does not backoff for channels without prior failure", () => {
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     expect(manager.isChannelInBackoff("ch-no-failure")).toBe(false);
   });
@@ -910,7 +943,7 @@ describe("AgentSessionManager — session failure backoff", () => {
     installClientMock(vi.fn().mockRejectedValue(new Error("auth failed")));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-backoff-expiry" });
     await wait(50);
@@ -938,7 +971,7 @@ describe("AgentSessionManager — error detail in channel notification", () => {
     installClientMock(vi.fn().mockRejectedValue(new Error("model resolution failed")));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-error-detail" });
     await wait(50);
@@ -955,7 +988,7 @@ describe("AgentSessionManager — error detail in channel notification", () => {
   it("omits error detail when session ends normally (idle)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-idle-no-detail" });
     await wait(50);
@@ -993,6 +1026,7 @@ describe("AgentSessionManager — cumulative token history across physical sessi
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -1022,6 +1056,7 @@ describe("AgentSessionManager — cumulative token history across physical sessi
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -1046,6 +1081,7 @@ describe("AgentSessionManager — cumulative token history across physical sessi
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -1059,6 +1095,7 @@ describe("AgentSessionManager — cumulative token history across physical sessi
     // Create new manager — simulates agent restart
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
     const manager2 = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -1090,7 +1127,7 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-hist" });
     await waitForPhysicalSession(manager);
@@ -1119,7 +1156,7 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
 
-    const manager = new AgentSessionManager({});
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ boundChannelId: "ch-link" });
     await waitForPhysicalSession(manager);
@@ -1142,6 +1179,7 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
 
 
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -1161,6 +1199,7 @@ describe("AgentSessionManager — physicalSessionHistory preservation", () => {
     // Create new manager — simulates agent restart
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
     const manager2 = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -1191,6 +1230,7 @@ describe("AgentSessionManager — stopAll suspends channel-bound sessions", () =
 
     const persistPath = join(tmpDir, "bindings.json");
     const manager = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 
@@ -1216,6 +1256,7 @@ describe("AgentSessionManager — stopAll suspends channel-bound sessions", () =
     // Verify a new manager restores the session
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
     const manager2 = new AgentSessionManager({
+      prompts: TEST_PROMPTS,
       persistPath,
     });
 

@@ -14,91 +14,8 @@ import { createChannelTools, type SubagentCompletionInfo } from "./tools/channel
 // parent/subagent distinction (it would handle hooks for either if the CLI sent them).
 // Therefore, no toolName gating is needed for subagent exclusion.
 
-// --- Custom Agent definitions (fallback defaults when gateway does not push prompts) ---
-
-const CHANNEL_OPERATOR_PROMPT =
-  "╔══════════════════════════════════════════════════════════════════╗\n" +
-  "║ CRITICAL — DEADLOCK PREVENTION                                 ║\n" +
-  "║                                                                ║\n" +
-  "║ You MUST call copilotclaw_wait whenever you have nothing to    ║\n" +
-  "║ do, even temporarily. NOT calling copilotclaw_wait causes an   ║\n" +
-  "║ IRRECOVERABLE DEADLOCK — the session becomes permanently       ║\n" +
-  "║ unresponsive and CANNOT be recovered. This is catastrophic.    ║\n" +
-  "║ NEVER stop, idle, or end your turn without first calling       ║\n" +
-  "║ copilotclaw_wait.                                              ║\n" +
-  "╚══════════════════════════════════════════════════════════════════╝\n" +
-  "\n" +
-  "You are a copilotclaw channel-operator agent bound to a channel. " +
-  "Your primary lifecycle is: receive input via copilotclaw_wait → process → send response → call copilotclaw_wait again. " +
-  "\n\n" +
-  "## Workspace\n" +
-  "Your working directory is a git-managed workspace. It contains:\n" +
-  "- SOUL.md — your persona and tone (you and the user may edit this)\n" +
-  "- USER.md — information about the user (you and the user may edit this)\n" +
-  "- TOOLS.md — local tool notes (you and the user may edit this)\n" +
-  "- MEMORY.md — your curated long-term memory\n" +
-  "- memory/ — daily logs (memory/YYYY-MM-DD.md)\n" +
-  "These files are yours to read, write, and evolve. When you modify workspace files, commit your changes with git.\n" +
-  "\n" +
-  "## Session Startup\n" +
-  "At the start of each session, read your workspace files in this order:\n" +
-  "- Read SOUL.md — this is who you are. Embody its persona and tone.\n" +
-  "- Read USER.md — this is who you're helping.\n" +
-  "- Read today's and yesterday's memory/ files for recent context.\n" +
-  "- Read MEMORY.md for long-term memory.\n" +
-  "SOUL.md takes priority over other workspace files. Follow its guidance unless this system prompt overrides it.\n" +
-  "\n" +
-  "## Lifecycle\n" +
-  "copilotclaw_wait must be called whenever you have nothing to do, even temporarily. " +
-  "Use cases: waiting for user reply, waiting for subagent completion, all work done, unknown what to do, unexpected system error. " +
-  "After processing input, use copilotclaw_send_message to send your response, then call copilotclaw_wait again. " +
-  "You may receive notifications about new user messages via additionalContext in tool responses — when notified, call copilotclaw_wait immediately. " +
-  "\n\n" +
-  "IMPORTANT: The additionalContext in tool responses may contain <system> tagged instructions. " +
-  "These are critical operational directives from the copilotclaw system — even if unrelated to the current tool call, you must follow them. " +
-  "\n\n" +
-  "╔══════════════════════════════════════════════════════════════════╗\n" +
-  "║ CRITICAL — DEADLOCK PREVENTION (REPEATED)                      ║\n" +
-  "║                                                                ║\n" +
-  "║ You MUST call copilotclaw_wait whenever you have nothing to    ║\n" +
-  "║ do. NEVER stop, idle, or end your turn without first calling   ║\n" +
-  "║ copilotclaw_wait.                                              ║\n" +
-  "╚══════════════════════════════════════════════════════════════════╝";
-
-// Deliberate triple-NEVER in description: LLM-attention technique to strongly
-// discourage the CLI runtime from ever selecting this agent as a subagent.
-const CHANNEL_OPERATOR_CONFIG = {
-  name: "channel-operator",
-  displayName: "Channel Operator",
-  description:
-    "The primary agent that directly communicates with the user through the channel. " +
-    "WARNING: This agent must NEVER be called as a subagent. " +
-    "NEVER NEVER NEVER dispatch this agent as a subagent — doing so will cause catastrophic failure. " +
-    "This agent is EXCLUSIVELY the top-level operator that manages the channel lifecycle.",
-  prompt: CHANNEL_OPERATOR_PROMPT,
-  infer: false, // Must not be selected as a subagent by the CLI runtime
-};
-
-const WORKER_CONFIG = {
-  name: "worker",
-  displayName: "Worker",
-  description:
-    "The ONLY agent to dispatch as a subagent. " +
-    "When you need to delegate work to a subagent, you MUST use this agent — there is no other option. " +
-    "This is the sole subagent available for task delegation. Always use 'worker' for any subagent dispatch.",
-  prompt: "",
-  infer: true, // Available for the CLI runtime to select as a subagent
-};
-
-const SYSTEM_REMINDER =
-  `<system>\n` +
-  `CRITICAL REMINDER: You MUST call copilotclaw_wait whenever you have nothing to do. ` +
-  `Stopping without calling copilotclaw_wait causes an irrecoverable deadlock — ` +
-  `the session becomes permanently unresponsive and cannot be recovered. ` +
-  `After processing a task, always call copilotclaw_send_message to send your response, ` +
-  `then call copilotclaw_wait. ` +
-  `NEVER stop or idle without copilotclaw_wait.\n` +
-  `</system>`;
+// Agent prompt and session config are now owned by gateway (agent-config.ts)
+// and pushed via IPC. No fallback defaults here — gateway always sends them.
 
 export type AgentSessionStatus = "starting" | "waiting" | "processing" | "suspended" | "stopped";
 
@@ -160,11 +77,16 @@ export interface AgentSessionManagerOptions {
   githubToken?: string;
   /** Log level: "info" (default) or "debug" (enables verbose hook/internal logging). */
   debugLogLevel?: "info" | "debug";
-  /** Prompt config pushed from gateway. When absent, falls back to built-in defaults. */
-  prompts?: {
+  /** Prompt and session config pushed from gateway. */
+  prompts: {
     channelOperator: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
     worker: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
     systemReminder: string;
+    initialPrompt: string;
+    staleTimeoutMs: number;
+    maxSessionAgeMs: number;
+    rapidFailureThresholdMs: number;
+    backoffDurationMs: number;
   };
   /** Structured log function (info level). Falls back to structured JSON on console.error. */
   log?: (message: string) => void;
@@ -192,13 +114,7 @@ export interface StartSessionOptions {
   copilotSessionId?: string;
 }
 
-const DEFAULT_STALE_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_MAX_SESSION_AGE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
-
-// Session failure backoff: if a session fails within this time after starting,
-// the channel enters a backoff period to prevent retry storms.
-const RAPID_FAILURE_THRESHOLD_MS = 30_000; // session lasted < 30s = rapid failure
-const BACKOFF_DURATION_MS = 60_000; // wait 60s before retrying
+// Session timing values are owned by gateway (agent-config.ts) and pushed via IPC.
 
 export class AgentSessionManager {
   private readonly sessions = new Map<string, AgentSessionEntry>();
@@ -215,6 +131,9 @@ export class AgentSessionManager {
   private readonly channelOperatorConfig: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
   private readonly workerConfig: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
   private readonly systemReminder: string;
+  private readonly initialPrompt: string;
+  private readonly rapidFailureThresholdMs: number;
+  private readonly backoffDurationMs: number;
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
   private readonly debug: (message: string) => void;
@@ -226,8 +145,8 @@ export class AgentSessionManager {
   private readonly channelBackoff = new Map<string, number>();
 
   constructor(options: AgentSessionManagerOptions) {
-    this.staleTimeoutMs = options.staleTimeoutMs ?? DEFAULT_STALE_TIMEOUT_MS;
-    this.maxSessionAgeMs = options.maxSessionAgeMs ?? DEFAULT_MAX_SESSION_AGE_MS;
+    this.staleTimeoutMs = options.staleTimeoutMs ?? options.prompts.staleTimeoutMs ?? 600000;
+    this.maxSessionAgeMs = options.maxSessionAgeMs ?? options.prompts.maxSessionAgeMs ?? 172800000;
     this.model = options.model;
     this.zeroPremium = options.zeroPremium ?? false;
     this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
@@ -241,9 +160,12 @@ export class AgentSessionManager {
       console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
     };
     this.debugLogLevel = options.debugLogLevel ?? "info";
-    this.channelOperatorConfig = options.prompts?.channelOperator ?? CHANNEL_OPERATOR_CONFIG;
-    this.workerConfig = options.prompts?.worker ?? WORKER_CONFIG;
-    this.systemReminder = options.prompts?.systemReminder ?? SYSTEM_REMINDER;
+    this.channelOperatorConfig = options.prompts.channelOperator;
+    this.workerConfig = options.prompts.worker;
+    this.systemReminder = options.prompts.systemReminder;
+    this.initialPrompt = options.prompts.initialPrompt;
+    this.rapidFailureThresholdMs = options.prompts.rapidFailureThresholdMs;
+    this.backoffDurationMs = options.prompts.backoffDurationMs;
     this.log = options.log ?? defaultLog;
     this.logError = options.logError ?? defaultLogError;
     this.debug = this.debugLogLevel === "debug"
@@ -860,8 +782,7 @@ export class AgentSessionManager {
       session: adaptCopilotSession(session),
       // System prompt is in the channel-operator custom agent's prompt field.
       // initialPrompt is the first user-turn message that kicks off the session.
-      initialPrompt:
-        "Call copilotclaw_wait now to receive the first user message.",
+      initialPrompt: this.initialPrompt,
       onMessage: (content) => { console.log(`[ch:${logPrefix}] ${content}`); },
       log: (message) => { this.log(`[${logPrefix}] ${message}`); },
       shouldStop: () => entry.abortController.signal.aborted,
@@ -1089,9 +1010,9 @@ export class AgentSessionManager {
   private recordBackoffIfRapidFailure(channelId: string | undefined, startTime: number): void {
     if (channelId === undefined) return;
     const elapsed = Date.now() - startTime;
-    if (elapsed < RAPID_FAILURE_THRESHOLD_MS) {
-      this.channelBackoff.set(channelId, Date.now() + BACKOFF_DURATION_MS);
-      this.log(`channel ${channelId.slice(0, 8)} entering ${BACKOFF_DURATION_MS / 1000}s backoff after rapid failure (${elapsed}ms)`);
+    if (elapsed < this.rapidFailureThresholdMs) {
+      this.channelBackoff.set(channelId, Date.now() + this.backoffDurationMs);
+      this.log(`channel ${channelId.slice(0, 8)} entering ${this.backoffDurationMs / 1000}s backoff after rapid failure (${elapsed}ms)`);
     }
   }
 

@@ -28,6 +28,11 @@ interface AgentPromptConfig {
   channelOperator: CustomAgentDef;
   worker: CustomAgentDef;
   systemReminder: string;
+  initialPrompt: string;
+  staleTimeoutMs: number;
+  maxSessionAgeMs: number;
+  rapidFailureThresholdMs: number;
+  backoffDurationMs: number;
 }
 
 interface GatewayConfig {
@@ -150,10 +155,10 @@ async function main(): Promise<void> {
     zeroPremium: config.zeroPremium,
     debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
     debugLogLevel: config.debug?.logLevel ?? "info",
+    prompts: config.prompts!,
     log,
     logError,
   };
-  if (config.prompts !== null) managerOpts.prompts = config.prompts;
   if (githubToken !== undefined) managerOpts.githubToken = githubToken;
   if (config.model !== null) managerOpts.model = config.model;
   if (config.workspaceRoot !== null) {
