@@ -38,6 +38,11 @@
 - abstract session の管理は、 gateway process 側の agent モジュールに移動しちゃってください。 agent process は物理セッションだけを管理すれば ok。
 - 理由: gateway process だけ最新版を起動しても、できるだけ最新機能が使えるようにするため。
 
+<!-- 2026-03-29 -->
+## gateway 停止時の物理セッション延命
+
+- gateway を stop している状態でも、 agent process は適切に物理セッションを延命し続ける必要がある。（gateway が停止したことにより agent process が（高価な）物理セッションを壊してしまうような設計は常に許されない）
+
 ## agent プロセスの責務（既存）
 
 - agent プロセスの責務

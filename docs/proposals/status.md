@@ -123,6 +123,7 @@
 
 **未実現:**
 - Gateway-Agent 責務の再配置: 抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理
+- gateway 停止時の物理セッション延命（IPC 切断中も copilotclaw_wait が keepalive cycle を継続し、物理セッションを維持する保証）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
