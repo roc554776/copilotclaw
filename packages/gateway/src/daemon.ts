@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { getAgentPromptConfig } from "./agent-config.js";
 import { AgentManager } from "./agent-manager.js";
 import { getProfileName, getStateDir, loadConfig, resolvePort } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
@@ -82,6 +83,7 @@ async function main(): Promise<void> {
     auth: config.auth?.github ?? null,
     otel: config.otel ?? null,
     debug: config.debug ?? null,
+    prompts: getAgentPromptConfig(),
   });
 
   // Always ensure agent process on gateway start (version check + spawn if absent)

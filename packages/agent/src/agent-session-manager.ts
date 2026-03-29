@@ -14,7 +14,7 @@ import { createChannelTools, type SubagentCompletionInfo } from "./tools/channel
 // parent/subagent distinction (it would handle hooks for either if the CLI sent them).
 // Therefore, no toolName gating is needed for subagent exclusion.
 
-// --- Custom Agent definitions ---
+// --- Custom Agent definitions (fallback defaults when gateway does not push prompts) ---
 
 const CHANNEL_OPERATOR_PROMPT =
   "╔══════════════════════════════════════════════════════════════════╗\n" +
@@ -160,6 +160,12 @@ export interface AgentSessionManagerOptions {
   githubToken?: string;
   /** Log level: "info" (default) or "debug" (enables verbose hook/internal logging). */
   debugLogLevel?: "info" | "debug";
+  /** Prompt config pushed from gateway. When absent, falls back to built-in defaults. */
+  prompts?: {
+    channelOperator: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
+    worker: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
+    systemReminder: string;
+  };
   /** Structured log function (info level). Falls back to structured JSON on console.error. */
   log?: (message: string) => void;
   /** Structured log function (error level). Falls back to structured JSON on console.error. */
@@ -206,6 +212,9 @@ export class AgentSessionManager {
   private readonly persistPath: string | undefined;
   private readonly githubToken: string | undefined;
   private readonly debugLogLevel: "info" | "debug";
+  private readonly channelOperatorConfig: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
+  private readonly workerConfig: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
+  private readonly systemReminder: string;
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
   private readonly debug: (message: string) => void;
@@ -232,6 +241,9 @@ export class AgentSessionManager {
       console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
     };
     this.debugLogLevel = options.debugLogLevel ?? "info";
+    this.channelOperatorConfig = options.prompts?.channelOperator ?? CHANNEL_OPERATOR_CONFIG;
+    this.workerConfig = options.prompts?.worker ?? WORKER_CONFIG;
+    this.systemReminder = options.prompts?.systemReminder ?? SYSTEM_REMINDER;
     this.log = options.log ?? defaultLog;
     this.logError = options.logError ?? defaultLogError;
     this.debug = this.debugLogLevel === "debug"
@@ -578,7 +590,7 @@ export class AgentSessionManager {
             }
 
             if (shouldRemind) {
-              parts.push(SYSTEM_REMINDER);
+              parts.push(this.systemReminder);
             }
 
             if (parts.length > 0) {
@@ -644,10 +656,10 @@ export class AgentSessionManager {
       },
       // Custom agents: channel-operator (parent, infer:false) + worker (subagent, infer:true)
       customAgents: [
-        { ...CHANNEL_OPERATOR_CONFIG, tools: null },
-        { ...WORKER_CONFIG, tools: null },
+        { ...this.channelOperatorConfig, tools: null },
+        { ...this.workerConfig, tools: null },
       ],
-      agent: CHANNEL_OPERATOR_CONFIG.name,
+      agent: this.channelOperatorConfig.name,
     };
     let session: CopilotSession;
     if (entry.copilotSessionId !== undefined) {

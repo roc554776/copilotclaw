@@ -16,6 +16,20 @@ interface DebugConfig {
   logLevel?: "info" | "debug";
 }
 
+interface CustomAgentDef {
+  name: string;
+  displayName: string;
+  description: string;
+  prompt: string;
+  infer: boolean;
+}
+
+interface AgentPromptConfig {
+  channelOperator: CustomAgentDef;
+  worker: CustomAgentDef;
+  systemReminder: string;
+}
+
 interface GatewayConfig {
   model: string | null;
   zeroPremium: boolean;
@@ -25,6 +39,7 @@ interface GatewayConfig {
   auth: AuthConfig | null;
   otel: OtelConfig | null;
   debug: DebugConfig | null;
+  prompts: AgentPromptConfig | null;
 }
 
 let structuredLogger: StructuredLogger | undefined;
@@ -59,7 +74,7 @@ function waitForConfig(timeoutMs = 30_000): Promise<GatewayConfig> {
 
     const timer = setTimeout(() => {
       log("config push not received within timeout, using defaults");
-      settle({ model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null, otel: null, debug: null });
+      settle({ model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null, otel: null, debug: null, prompts: null });
     }, timeoutMs);
     timer.unref();
 
@@ -135,6 +150,7 @@ async function main(): Promise<void> {
     zeroPremium: config.zeroPremium,
     debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
     debugLogLevel: config.debug?.logLevel ?? "info",
+    prompts: config.prompts ?? undefined,
     log,
     logError,
   };
