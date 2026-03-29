@@ -539,9 +539,6 @@ export class AgentSessionManager {
           try {
             if (signal.aborted) return;
 
-            // Temporary: log all hook invocations to determine if subagent tools fire
-            this.log(`postToolUse: tool=${input.toolName} inputKeys=${Object.keys(input).join(",")}`);
-
             // Only fire for the parent agent (channel-operator).
             // copilotclaw_wait is the ONLY tool exclusive to the parent —
             // copilotclaw_send_message and copilotclaw_list_messages are shared with
