@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-29 | Files scanned: 43 | Version: 0.45.0 | Token estimate: ~4200 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-29 | Files scanned: 43 | Version: 0.46.0 | Token estimate: ~4200 -->
 
 # Backend
 
@@ -26,7 +26,7 @@ POST /api/channels/:channelId/messages/pending/flush → 200 { flushed: count }
 GET  /status                               → 200 HTML standalone SystemStatus page (same data as modal)
 GET  /sessions/:sessionId/events          → 200 HTML session events stream page (flat/nested toggle, auto-scroll)
 POST /api/session-events                  → 201 { ok: true } (agent posts SDK session events)
-GET  /api/sessions/:sessionId/events      → 200 SessionEvent[] (events for a session, JSON Lines on disk)
+GET  /api/sessions/:sessionId/events      → 200 SessionEvent[] (events for a session; accepts ?limit=N&before=id&after=id for cursor-based pagination via getEventsPaginated)
 GET  /api/session-events/sessions         → 200 string[] (session IDs with events)
 GET  /api/system-prompts/original         → 200 SystemPromptSnapshot[] (all captured original prompts)
 POST /api/system-prompts/original         → 201 { ok: true } (agent posts captured original system prompt)
@@ -58,7 +58,7 @@ src/workspace.ts           — workspace paths: getWorkspaceRoot() returns {{sta
 src/store.ts               — persistent store (Channel, Message, per-channel pending queue); SQLite via better-sqlite3 (WAL mode, foreign keys); tables: channels (id PK, createdAt, archivedAt nullable), messages (id PK, channelId FK, sender REFERENCES message_senders(sender), message, createdAt; indexed by channelId+createdAt), message_senders (sender TEXT PK; values: "user", "agent", "cron", "system"), pending_queue (autoincrement id, channelId FK, messageId FK; indexed by channelId), store_schema_version (version INTEGER); versioned schema migration: LATEST_STORE_VERSION=2, STORE_MIGRATIONS registry (v0→v1: add archivedAt column to channels, v1→v2: replace CHECK constraint with message_senders FK table + add "cron" and "system" senders); initSchema() creates base tables (version 0) + store_schema_version, reads current version, applies sequential migrations, persists version; Message.sender type is "user"|"agent"|"cron"|"system"; addMessage accepts "cron" and "system" senders, cron and system messages go to pending queue (same as user); listMessages(channelId, limit?, before?) supports cursor-based pagination via optional `before` parameter (rowid-based: WHERE rowid < before); hasPendingCronMessage(channelId) checks for existing pending cron messages (used for dedup by cron scheduler); archiveChannel(id) sets archivedAt timestamp, unarchiveChannel(id) clears it; listChannels({ includeArchived }) filters archived channels by default; StoreOptions accepts persistPath (SQLite file, default :memory:) and legacyJsonPath (one-time migration from store.json when DB is empty); close() method
 src/channel-provider.ts    — ChannelProvider interface (plugin contract for chat mediums)
 src/builtin-chat-channel.ts — BuiltinChatChannel: built-in chat UI provider (dashboard, SSE events, SSE broadcast via SseBroadcaster); passes compatibility info to dashboard; uses hasFrontendDist() from frontend-dist.ts for frontend availability check
-src/session-event-store.ts — SessionEventStore: SQLite-based event storage (session-events.db in dataDir, WAL mode); table: session_events (autoincrement id, sessionId, type, timestamp, data as JSON text, parentId; indexed by sessionId, sessionId+timestamp, type); storage cap by row count (default 100k) enforced every 500 inserts by deleting oldest rows; system prompt snapshots remain as JSON files in {{dataDir}}/prompts/ (original: {{model}}.json, session: session-{{sessionId}}.json); close() method
+src/session-event-store.ts — SessionEventStore: SQLite-based event storage (session-events.db in dataDir, WAL mode); table: session_events (autoincrement id, sessionId, type, timestamp, data as JSON text, parentId; indexed by sessionId, sessionId+timestamp, type); storage cap by row count (default 100k) enforced every 500 inserts by deleting oldest rows; getEventsPaginated(sessionId, limit, {before?, after?}) for cursor-based pagination by autoincrement id; getEventCount(sessionId) returns total event count for a session; system prompt snapshots remain as JSON files in {{dataDir}}/prompts/ (original: {{model}}.json, session: session-{{sessionId}}.json); close() method
 src/observability-pages.ts — renderStatusPage() and renderEventsPage(): standalone HTML pages for system status and session events stream (flat/nested toggle, auto-scroll); status page shows stopped session history per session via <details> element (v0.30.0); renderSessionsListPage() fallback page title/heading: "Sessions" (v0.36.0, changed from "Physical Sessions"); physical session history label: "Physical sessions (N)" (unchanged — correctly describes physical sessions under an abstract session); link text to /sessions: "All sessions →" (v0.36.0, changed from "All physical sessions →")
 src/dashboard.ts           — HTML renderer (status bar with compatibility label, chat bubbles, channel tabs, input form, logs panel toggled via Logs button with stopPropagation to prevent status modal opening); status modal shows physical session details (with elapsed time, accumulated tokens in/out/total), cumulative tokens across physical sessions (v0.27.0), subagent sessions, premium requests, available models; quota display uses /api/quota with fallback to latestQuotaSnapshots from session data; showSessionDetail() fetches and displays copilot session context detail via /api/sessions/:sessionId/messages; modal includes "Open in new tab" link to /status page; physical sessions have "View events" link to /sessions/:id/events; stopped session history shown as collapsed toggle ("Stopped sessions (N) ▸") with model, tokens, started time, and events link per entry (v0.30.0)
 src/sse-broadcaster.ts                  — SseBroadcaster: SSE event broadcasting to connected clients
@@ -210,7 +210,7 @@ Vite + React + TypeScript single-page application. Built to `frontend-dist/` and
 /                              → DashboardPage (chat UI with channels, SSE, status bar, logs panel)
 /status                        → StatusPage (gateway, agent, sessions, config, system prompts; elapsed time helper; 5s auto-refresh)
 /sessions                      → SessionsListPage (abstract sessions from /api/status with physical sessions as children; ?focus= URL param for scroll-to; orphaned physical sessions listed separately)
-/sessions/:sessionId/events    → SessionEventsPage (flat event list with event count in heading, auto-scroll; 2s auto-refresh; "Back to Sessions" link with ?focus= param targeting parent abstract session)
+/sessions/:sessionId/events    → SessionEventsPage (initial load of latest N events, append-only polling for new events, infinite scroll up for older events; auto-scroll; 2s polling; "Back to Sessions" link with ?focus= param targeting parent abstract session)
 ```
 
 ### Key Files
@@ -221,14 +221,14 @@ vite.config.ts                 — Vite config (React plugin, build output to ..
 vitest.config.ts               — Vitest config for frontend tests (jsdom environment)
 src/main.tsx                   — React DOM root mount
 src/App.tsx                    — BrowserRouter with route definitions
-src/global.css                 — Global styles; @media query for mobile responsiveness
-src/api.ts                     — Typed fetch wrappers for all gateway API endpoints (Channel, Message, StatusResponse, SessionEvent, QuotaResponse, ModelsResponse, etc.); Message.sender includes "system" (v0.43.0); archiveChannel(id), unarchiveChannel(id), fetchChannels({ includeArchived }) for channel archiving; fetchMessages(channelId, limit=50, before?) supports cursor-based pagination via optional `before` parameter
-src/hooks/useAutoScroll.ts     — Position-based auto-scroll hook (follows bottom, disengages on scroll-up, re-engages at bottom)
+src/global.css                 — Global styles; @media query for mobile responsiveness; iOS auto-zoom prevention for inputs (font-size >= 16px)
+src/api.ts                     — Typed fetch wrappers for all gateway API endpoints (Channel, Message, StatusResponse, SessionEvent, QuotaResponse, ModelsResponse, etc.); SessionEvent has optional id field; Message.sender includes "system" (v0.43.0); archiveChannel(id), unarchiveChannel(id), fetchChannels({ includeArchived }) for channel archiving; fetchMessages(channelId, limit=50, before?) supports cursor-based pagination via optional `before` parameter; fetchSessionEventsPaginated(sessionId, limit, {before?, after?}) for paginated event fetching
+src/hooks/useAutoScroll.ts     — Position-based auto-scroll hook (follows bottom, disengages on scroll-up, re-engages at bottom); programmaticScrollRef guard prevents scroll events from programmatic scrollTop changes from resetting isAtBottomRef
 src/hooks/usePolling.ts        — Generic polling hook (immediate call + setInterval, cleanup on unmount)
 src/pages/DashboardPage.tsx    — Chat dashboard (channel management, message list, input form, SSE events, status bar, logs panel); showArchived toggle for displaying archived channels; archive/unarchive buttons on channel tabs; mobile responsive (tab overflow-x: auto, flexShrink, modal min/max width); SSE auto-reconnect on error (3s delay); visibilitychange handler for message refresh; infinite scroll (loadOlderMessages on scroll near top, cursor-based pagination via `before` parameter)
 src/pages/StatusPage.tsx       — System status page (gateway/agent/sessions/config display, elapsed time helper, session prompt loading, cumulative tokens, physical session history); sessions link text: "All sessions →" (v0.36.0)
 src/pages/SessionsListPage.tsx — Sessions list: fetches abstract sessions from /api/status, renders each with physical sessions (current + history) as children; orphaned physical sessions (not in any abstract session) listed separately with event counts and model; supports ?focus= URL param to highlight and scroll-to an abstract session
-src/pages/SessionEventsPage.tsx — Session event viewer (flat event list, event count display, auto-scroll via useAutoScroll, 2s polling via usePolling; "Back to Sessions" link with ?focus= param targeting parent abstract session; resolves parent abstract session from /api/status)
+src/pages/SessionEventsPage.tsx — Session event viewer: initial load of latest N events (EVENTS_PAGE_SIZE=50), auto-polling append-only for new events (2s via usePolling, fetches after newest id), infinite scroll up for older events (loads before oldest id, scroll position restoration via requestAnimationFrame); event count display; auto-scroll via useAutoScroll; "Back to Sessions" link with ?focus= param targeting parent abstract session; resolves parent abstract session from /api/status
 src/__tests__/setup.ts         — Test setup (jsdom + @testing-library/jest-dom matchers)
 src/__tests__/*.test.tsx       — Component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll)
 ```
@@ -251,11 +251,11 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (427 total: 419 vitest + 8 Playwright)
+### Test Suites (436 total: 428 vitest + 8 Playwright)
 
 ```
-Gateway vitest (288 tests)   — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store, store tests)
-Agent vitest (100 tests)     — unit tests with mock Copilot SDK session + IPC stream tests (includes structured-logger, token-resolver, ipc-stream tests; currentState tracking via onStatusChange, postToolUse log session ID tests)
-Frontend vitest (31 tests)   — React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll) via jsdom + @testing-library/react
+Gateway vitest (295 tests)   — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store, store tests)
+Agent vitest (101 tests)     — unit tests with mock Copilot SDK session + IPC stream tests (includes structured-logger, token-resolver, ipc-stream tests; currentState tracking via onStatusChange, postToolUse log session ID tests)
+Frontend vitest (32 tests)   — React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll) via jsdom + @testing-library/react
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```
