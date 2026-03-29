@@ -647,10 +647,14 @@ subagent call はネストされることがある。直接呼び出した subag
 - `subagentCompletionQueue` にイベントは積まれるが、`pollNextInputs` のブロック（`waitForPendingNotify` の25分タイムアウト待ち）を解除する仕組みがない
 - subagent 完了後、最大25分間 wait が解除されない
 
+**直接呼び出しの判定:**
+- `subagent.completed` / `subagent.failed` イベントの `data.toolCallId` は、subagent を起動した `task` ツールの `toolCallId` と一致する
+- 親 agent が直接呼び出した `task` ツールの `toolCallId` を記録しておき、イベントの `toolCallId` と照合することで直接呼び出しかどうかを判定する
+- ネストされた孫 subagent の completion イベントは、親 agent が直接呼び出した `toolCallId` と一致しないため、無視する
+
 **対応方針:**
-- subagent completion イベント発生時に、`waitForPendingNotify` のブロックを解除する signal を送る
+- subagent completion イベント発生時に、直接呼び出しかどうかを判定した上で `waitForPendingNotify` のブロックを解除する signal を送る
 - `waitForPendingNotify` が `pending_notify` だけでなく、subagent completion signal でも解除されるようにする
-- または `pollNextInputs` 自体を、subagent completion queue を監視するように変更する
 
 ```
 copilotclaw_wait 実行中
