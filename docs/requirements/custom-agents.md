@@ -24,7 +24,7 @@ Copilot SDK の Custom Agent 機能を用いて、copilotclaw のシステムプ
 - compaction 完了後（`session.compaction_complete` イベント直後）は即座に 1 回発火する（compaction 後は動作が不安定になりやすいため）
 - システムプロンプトに、`additionalContext` に `<system>` タグ付きの重要指示が差し込まれる可能性があることを記載する
 
-### Req: Subagent 完了の親 Agent への通知（未実現 — wait のブロック解除が機能していない）
+### Req: Subagent 完了の親 Agent への通知（v0.43.0 で実現済み — gateway 側 agent_notify 統一方式）
 
 subagent の完了・失敗を親 agent にリアルタイムに通知する。
 

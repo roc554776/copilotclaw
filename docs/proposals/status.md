@@ -127,8 +127,7 @@
 - gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）
 - cron ジョブの enable/disable 切り替え（CronJobConfig に `enabled` フィールド追加）（v0.42.0 で実現済み）
 
-**未実現:**
-- subagent 完了通知による wait ブロック解除（subagent completion 時に copilotclaw_wait を即座に解除する仕組み。現状は completion queue に積まれるだけで wait は25分タイムアウトまで解除されない）
+- subagent 完了通知の gateway 側統一（agent_notify 汎用チャネル、gateway 側で直接呼び出し判定 + system メッセージ挿入 + agent_notify push、agent 側 subagentCompletionQueue 廃止）（v0.43.0）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）

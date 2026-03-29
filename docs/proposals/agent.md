@@ -631,7 +631,7 @@ channel-operator の `prompt` フィールドに以下を含める:
 
 LLM は最初と最後の情報に重みを置く傾向があるため、この説明はシステムプロンプトの末尾付近に配置する。
 
-### Subagent 完了通知（未実現 — wait のブロック解除が機能していない）
+### Subagent 完了通知（v0.43.0 で実現済み — gateway 側 agent_notify 統一方式）
 
 subagent の完了・失敗を親 agent にリアルタイムに通知する仕組み。subagent は親 agent から非同期的に dispatch されるため、完了を知覚する手段がないと、親は subagent の結果を活用できない。
 
