@@ -87,7 +87,7 @@ async function refresh() {
             }
             html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + ' (' + elapsed(ps.startedAt) + ')</span></div>';
             html += '<div class="row"><span class="label">Events</span><span class="value"><a href="/sessions/' + encodeURIComponent(ps.sessionId) + '/events">View events &rarr;</a></span></div>';
-            html += '<div class="row"><span class="label">System Prompt</span><span class="value"><a href="#" onclick="loadSessionPrompt(\\'' + escHtml(ps.sessionId) + '\\');return false;">View &rarr;</a></span></div>';
+            html += '<div class="row"><span class="label">Effective Prompt</span><span class="value"><a href="#" onclick="loadEffectivePrompt(\\'' + escHtml(ps.sessionId) + '\\');return false;">View &rarr;</a></span></div>';
             html += '</div>';
           }
           if (sess.cumulativeInputTokens != null || sess.cumulativeOutputTokens != null) {
@@ -152,17 +152,17 @@ async function refresh() {
   } catch {}
 }
 
-async function loadSessionPrompt(sessionId) {
+async function loadEffectivePrompt(sessionId) {
   try {
-    const res = await fetch('/api/system-prompts/session/' + encodeURIComponent(sessionId));
+    const res = await fetch('/api/system-prompts/effective/' + encodeURIComponent(sessionId));
     if (res.ok) {
       const data = await res.json();
       const el = document.createElement('div');
       el.className = 'section';
-      el.innerHTML = '<div class="section-title">Session System Prompt (' + escHtml(data.model) + ')</div><pre>' + escHtml(data.prompt) + '</pre>';
+      el.innerHTML = '<div class="section-title">Effective System Prompt (' + escHtml(data.model) + ')</div><pre>' + escHtml(data.prompt) + '</pre>';
       document.getElementById('prompts-content').appendChild(el);
     } else {
-      alert('No system prompt captured for this session.');
+      alert('No effective prompt captured for this session.');
     }
   } catch (e) { alert('Error: ' + e); }
 }

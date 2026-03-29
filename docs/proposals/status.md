@@ -84,7 +84,7 @@
 - SystemStatus 別ページ表示（`/status` パス。モーダルからリンク遷移）
 - 物理 Session イベント stream 表示（`/sessions/{{sessionId}}/events` パス。disk 保存、ストレージ上限、フラット/ネスト切替。位置ベースのスクロール追従、差分更新による内部スクロール保持）
 - オリジナルシステムプロンプトの取得・表示（`registerTransformCallbacks` によるキャプチャ、API `/api/system-prompts/original`、dashboard 表示）
-- 物理セッションシステムプロンプトの表示（API `/api/system-prompts/session/{{sessionId}}`、SystemStatus で表示、オリジナルとの区別）
+- Effective system prompt の表示（API `/api/system-prompts/effective/{{sessionId}}`、SystemStatus で表示、original system prompt との区別）
 - Session イベント store（disk ベース JSON Lines、セッション別ファイル、ストレージ上限）
 
 - 永続化戦略のハイブリッド移行（Store: JSON → SQLite、SessionEventStore: JSONL → SQLite。better-sqlite3 + WAL モード。legacy JSON からの自動マイグレーション）

@@ -52,7 +52,7 @@ gateway が agent の IPC socket に `{"method": "stream"}\n` を送ると、age
 - `channel_message` — channel へのメッセージ送信
 - `session_event` — SDK イベントの転送
 - `system_prompt_original` — オリジナルシステムプロンプトの保存
-- `system_prompt_session` — セッションシステムプロンプトの保存
+- `system_prompt_session` — effective system prompt の保存（IPC タイプ名は互換性のため維持）
 
 **agent → gateway request-response:**
 - `drain_pending` — pending messages の取得（旧 `POST /api/channels/{{id}}/messages/pending`）

@@ -134,7 +134,7 @@ export class AgentManager {
         handler.onSystemPromptOriginal?.(model, prompt, capturedAt);
         break;
       }
-      case "system_prompt_session": {
+      case "system_prompt_session": { // IPC type retained for compatibility; internally this is the "effective system prompt"
         const sessionId = msg["sessionId"] as string;
         const model = msg["model"] as string;
         const prompt = msg["prompt"] as string;

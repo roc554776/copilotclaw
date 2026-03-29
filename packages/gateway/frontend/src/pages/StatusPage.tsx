@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 import {
   fetchOriginalPrompts,
-  fetchSessionPrompt,
+  fetchEffectivePrompt,
   fetchStatus,
+  type EffectivePrompt,
   type OriginalPrompt,
-  type SessionPrompt,
   type StatusResponse,
 } from "../api";
 import { usePolling } from "../hooks/usePolling";
@@ -90,8 +90,8 @@ export function StatusPage() {
   const [originalPrompts, setOriginalPrompts] = useState<OriginalPrompt[]>(
     [],
   );
-  const [sessionPrompts, setSessionPrompts] = useState<
-    Array<{ sessionId: string; data: SessionPrompt }>
+  const [effectivePrompts, setEffectivePrompts] = useState<
+    Array<{ sessionId: string; data: EffectivePrompt }>
   >([]);
 
   const refresh = useCallback(async () => {
@@ -113,13 +113,13 @@ export function StatusPage() {
   usePolling(refresh, 5000);
 
   const loadingPromptsRef = useRef(new Set<string>());
-  const loadSessionPrompt = useCallback(async (sessionId: string) => {
+  const loadEffectivePrompt = useCallback(async (sessionId: string) => {
     if (loadingPromptsRef.current.has(sessionId)) return;
     loadingPromptsRef.current.add(sessionId);
     try {
-      const data = await fetchSessionPrompt(sessionId);
+      const data = await fetchEffectivePrompt(sessionId);
       if (data) {
-        setSessionPrompts((prev) => {
+        setEffectivePrompts((prev) => {
           if (prev.some((sp) => sp.sessionId === sessionId)) return prev;
           return [...prev, { sessionId, data }];
         });
@@ -345,7 +345,7 @@ export function StatusPage() {
                                   href="#"
                                   onClick={(e) => {
                                     e.preventDefault();
-                                    loadSessionPrompt(
+                                    loadEffectivePrompt(
                                       sess.physicalSession!
                                         .sessionId,
                                     );
@@ -513,7 +513,7 @@ export function StatusPage() {
         )}
       </div>
 
-      {sessionPrompts.map((sp) => (
+      {effectivePrompts.map((sp) => (
         <div key={sp.sessionId} style={sectionStyle}>
           <div style={titleStyle}>
             Session System Prompt ({sp.data.model})

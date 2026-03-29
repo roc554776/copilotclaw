@@ -160,7 +160,7 @@ export class SessionEventStore {
   listOriginalPrompts(): SystemPromptSnapshot[] {
     try {
       return readdirSync(this.promptDir)
-        .filter((f) => f.endsWith(".json") && !f.startsWith("session-"))
+        .filter((f) => f.endsWith(".json") && !f.startsWith("effective-") && !f.startsWith("session-"))
         .map((f) => {
           try {
             return JSON.parse(readFileSync(join(this.promptDir, f), "utf-8")) as SystemPromptSnapshot;
@@ -174,17 +174,17 @@ export class SessionEventStore {
     }
   }
 
-  /** Save session system prompt (may differ from original in the future). */
-  saveSessionPrompt(sessionId: string, prompt: string, model: string): void {
+  /** Save effective system prompt for a physical session. */
+  saveEffectivePrompt(sessionId: string, prompt: string, model: string): void {
     const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const filePath = join(this.promptDir, `session-${safe}.json`);
+    const filePath = join(this.promptDir, `effective-${safe}.json`);
     writeFileSync(filePath, JSON.stringify({ sessionId, model, prompt, capturedAt: new Date().toISOString() }, null, 2) + "\n", "utf-8");
   }
 
-  /** Get session system prompt. */
-  getSessionPrompt(sessionId: string): { sessionId: string; model: string; prompt: string; capturedAt: string } | undefined {
+  /** Get effective system prompt for a physical session. */
+  getEffectivePrompt(sessionId: string): { sessionId: string; model: string; prompt: string; capturedAt: string } | undefined {
     const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const filePath = join(this.promptDir, `session-${safe}.json`);
+    const filePath = join(this.promptDir, `effective-${safe}.json`);
     if (!existsSync(filePath)) return undefined;
     try {
       return JSON.parse(readFileSync(filePath, "utf-8")) as { sessionId: string; model: string; prompt: string; capturedAt: string };

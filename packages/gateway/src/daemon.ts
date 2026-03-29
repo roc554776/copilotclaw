@@ -71,7 +71,7 @@ async function main(): Promise<void> {
       sessionEventStore.saveOriginalPrompt({ model, prompt, capturedAt });
     },
     onSystemPromptSession: (sessionId, model, prompt) => {
-      sessionEventStore.saveSessionPrompt(sessionId, prompt, model);
+      sessionEventStore.saveEffectivePrompt(sessionId, prompt, model);
     },
     onDrainPending: (channelId) => {
       return store.drainPending(channelId);

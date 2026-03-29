@@ -95,10 +95,11 @@ export interface OriginalPrompt {
   capturedAt: string;
 }
 
-export interface SessionPrompt {
+export interface EffectivePrompt {
   model: string;
   prompt: string;
 }
+
 
 export async function fetchStatus(signal?: AbortSignal): Promise<StatusResponse> {
   const res = await fetch("/api/status", signal ? { signal } : undefined);
@@ -202,9 +203,9 @@ export async function fetchOriginalPrompts(): Promise<OriginalPrompt[]> {
   return res.json() as Promise<OriginalPrompt[]>;
 }
 
-export async function fetchSessionPrompt(sessionId: string): Promise<SessionPrompt | null> {
-  const res = await fetch(`/api/system-prompts/session/${encodeURIComponent(sessionId)}`);
+export async function fetchEffectivePrompt(sessionId: string): Promise<EffectivePrompt | null> {
+  const res = await fetch(`/api/system-prompts/effective/${encodeURIComponent(sessionId)}`);
   if (!res.ok) return null;
-  return res.json() as Promise<SessionPrompt>;
+  return res.json() as Promise<EffectivePrompt>;
 }
 

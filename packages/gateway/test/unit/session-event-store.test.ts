@@ -171,9 +171,9 @@ describe("SessionEventStore", () => {
       expect(list).toHaveLength(2);
     });
 
-    it("excludes session prompts from original prompt listing", () => {
+    it("excludes effective prompts from original prompt listing", () => {
       store.saveOriginalPrompt({ model: "gpt-4.1", prompt: "original", capturedAt: "2026-03-27T00:00:00Z" });
-      store.saveSessionPrompt("sdk-sess-1", "session prompt", "gpt-4.1");
+      store.saveEffectivePrompt("sdk-sess-1", "effective prompt", "gpt-4.1");
 
       const list = store.listOriginalPrompts();
       expect(list).toHaveLength(1);
@@ -181,19 +181,19 @@ describe("SessionEventStore", () => {
     });
   });
 
-  describe("session system prompt", () => {
-    it("saves and retrieves session prompt", () => {
-      store.saveSessionPrompt("sdk-sess-1", "session prompt text", "gpt-4.1");
+  describe("effective system prompt", () => {
+    it("saves and retrieves effective prompt", () => {
+      store.saveEffectivePrompt("sdk-sess-1", "effective prompt text", "gpt-4.1");
 
-      const snap = store.getSessionPrompt("sdk-sess-1");
+      const snap = store.getEffectivePrompt("sdk-sess-1");
       expect(snap).toBeDefined();
       expect(snap!.sessionId).toBe("sdk-sess-1");
-      expect(snap!.prompt).toBe("session prompt text");
+      expect(snap!.prompt).toBe("effective prompt text");
       expect(snap!.model).toBe("gpt-4.1");
     });
 
     it("returns undefined for unknown session", () => {
-      expect(store.getSessionPrompt("unknown")).toBeUndefined();
+      expect(store.getEffectivePrompt("unknown")).toBeUndefined();
     });
   });
 });

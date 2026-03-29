@@ -447,23 +447,23 @@ function createRequestHandler(
         return;
       }
 
-      // POST /api/system-prompts/session — agent posts session prompt
-      if (fullPathname === "/api/system-prompts/session" && method === "POST") {
+      // POST /api/system-prompts/effective — agent posts effective prompt
+      if (fullPathname === "/api/system-prompts/effective" && method === "POST") {
         const body = parseJson(await readBody(req));
         if (!isRecord(body) || typeof body["sessionId"] !== "string" || typeof body["prompt"] !== "string" || typeof body["model"] !== "string") {
           json(res, 400, { error: "missing sessionId, model, or prompt" });
           return;
         }
-        sessionEventStore.saveSessionPrompt(body["sessionId"] as string, body["prompt"] as string, body["model"] as string);
+        sessionEventStore.saveEffectivePrompt(body["sessionId"] as string, body["prompt"] as string, body["model"] as string);
         json(res, 201, { ok: true });
         return;
       }
 
-      // GET /api/system-prompts/session/:sessionId — get session prompt
-      const sessPromptMatch = /^\/api\/system-prompts\/session\/(.+)$/.exec(fullPathname);
+      // GET /api/system-prompts/effective/:sessionId — get effective prompt
+      const sessPromptMatch = /^\/api\/system-prompts\/effective\/(.+)$/.exec(fullPathname);
       if (sessPromptMatch !== null && method === "GET") {
         const sessionId = decodeURIComponent(sessPromptMatch[1]!);
-        const snap = sessionEventStore.getSessionPrompt(sessionId);
+        const snap = sessionEventStore.getEffectivePrompt(sessionId);
         if (snap !== undefined) {
           json(res, 200, snap);
         } else {
