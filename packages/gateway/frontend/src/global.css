@@ -41,9 +41,9 @@ a:hover {
   30% { opacity: 1; transform: translateY(-4px); }
 }
 
-/* Mobile-friendly scrollbar for tab containers */
+/* Mobile: prevent iOS auto-zoom on input focus (requires font-size >= 16px) */
 @media (max-width: 768px) {
-  body {
-    font-size: 14px;
+  input, textarea, select {
+    font-size: 16px !important;
   }
 }
