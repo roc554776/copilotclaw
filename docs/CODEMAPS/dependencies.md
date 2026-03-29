@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Version: 0.39.0 | Token estimate: ~500 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Version: 0.40.0 | Token estimate: ~500 -->
 
 # Dependencies
 

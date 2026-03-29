@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.39.0 | Token estimate: ~2200 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.40.0 | Token estimate: ~2200 -->
 
 # Architecture
 
@@ -77,9 +77,11 @@ Environment variables:
 - **Channel-operator**: parent agent exclusively bound to the channel (infer:false, cannot be used as subagent); receives full system prompts including deadlock prevention warnings; subscribes to `copilotclaw_wait` (WAIT_TOOL_NAME) tool to manage session lifecycle
 - **Worker**: subagent available for task delegation (infer:true); can only access `copilotclaw_send_message` and `copilotclaw_list_messages` (never receives `copilotclaw_wait`); started by parent agent via subagent dispatch
 - Session begins with `agent: "channel-operator"` configuration; custom agent definitions passed to SDK createSession/resumeSession
+- Custom agent definitions (channel-operator, worker) defined in gateway's `agent-config.ts` as AgentPromptConfig and CustomAgentDef interfaces; sent to agent via IPC config push
 
 ## System Prompt (v0.19.0+)
 
+- **Prompt ownership (v0.40.0)**: Gateway owns all agent prompt definitions in `agent-config.ts` and sends them to agent via IPC config push; agent uses gateway-provided prompts when available, falls back to built-in defaults when gateway doesn't send prompts
 - **CHANNEL_OPERATOR_PROMPT**: includes deadlock prevention at start and end, Workspace section describing git-managed workspace files (SOUL.md/USER.md/TOOLS.md/MEMORY.md/memory/) and instructing agent to commit changes, session startup section instructing agent to read SOUL.md (priority), USER.md, memory/ (daily files), and MEMORY.md for context; Lifecycle section with broader wait semantics (copilotclaw_wait use cases: waiting for user reply, subagent completion, all work done, unknown what to do, unexpected system error)
 - **Session Startup**: agent reads workspace bootstrap files in order: SOUL.md (persona), USER.md (user context), memory/YYYY-MM-DD.md files (recent sessions), MEMORY.md (long-term memory)
 - **SYSTEM_REMINDER**: periodic deadlock prevention reinforcement via additionalContext
