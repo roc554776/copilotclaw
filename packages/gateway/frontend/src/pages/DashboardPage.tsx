@@ -112,7 +112,11 @@ export function DashboardPage() {
         const freshReversed = fresh.slice().reverse();
         const newMsgs = freshReversed.filter((m) => m.createdAt > newest.createdAt || (m.createdAt === newest.createdAt && !current.some((c) => c.id === m.id)));
         if (newMsgs.length > 0) {
-          setMessages((prev) => [...prev, ...newMsgs]);
+          setMessages((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const unique = newMsgs.filter((m) => !existingIds.has(m.id));
+            return unique.length > 0 ? [...prev, ...unique] : prev;
+          });
         }
       } else {
         const msgs = await fetchMessages(channelId, INITIAL_MESSAGE_LIMIT);
