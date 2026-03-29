@@ -132,7 +132,10 @@ export function StatusPage() {
     } catch {
       /* ignore */
     }
-    // Period breakdown: 1h, 6h, 24h, 7d
+  }, []);
+
+  // Period breakdown: 1h, 6h, 24h, 7d — polled at 60s (changes slowly)
+  const refreshPeriods = useCallback(async () => {
     try {
       const now = new Date();
       const periods = [
@@ -155,6 +158,7 @@ export function StatusPage() {
   }, []);
 
   usePolling(refresh, 5000);
+  usePolling(refreshPeriods, 60000);
 
   const loadingPromptsRef = useRef(new Set<string>());
   const loadEffectivePrompt = useCallback(async (sessionId: string) => {
@@ -651,6 +655,10 @@ export function StatusPage() {
   );
 }
 
+/**
+ * Token consumption index = SUM over models { MAX(billing.multiplier, 0.1) * totalTokens }
+ * where totalTokens = inputTokens + outputTokens for each model.
+ */
 function computeIndex(usage: TokenUsageEntry[], multipliers: Record<string, number>): number {
   let index = 0;
   for (const u of usage) {

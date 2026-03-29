@@ -38,6 +38,7 @@ export class SessionEventStore {
     this.db.pragma("journal_mode = WAL");
     this.maxEvents = maxEvents ?? DEFAULT_MAX_EVENTS;
     this.initSchema();
+    this.insertStmt = this.db.prepare("INSERT INTO session_events (sessionId, type, timestamp, data, parentId) VALUES (?, ?, ?, ?, ?)");
   }
 
   private initSchema(): void {
@@ -56,10 +57,11 @@ export class SessionEventStore {
     `);
   }
 
+  private readonly insertStmt;
+
   /** Append an event for a session. */
   appendEvent(sessionId: string, event: SessionEvent): void {
-    const stmt = this.db.prepare("INSERT INTO session_events (sessionId, type, timestamp, data, parentId) VALUES (?, ?, ?, ?, ?)");
-    stmt.run(sessionId, event.type, event.timestamp, JSON.stringify(event.data), event.parentId ?? null);
+    this.insertStmt.run(sessionId, event.type, event.timestamp, JSON.stringify(event.data), event.parentId ?? null);
     this.maybeEnforceStorageCap();
   }
 
