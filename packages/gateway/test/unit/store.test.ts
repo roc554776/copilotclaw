@@ -270,5 +270,20 @@ describe("Store", () => {
       store.addMessage(channelId, "agent", "reply");
       expect(store.hasPending(channelId)).toBe(false);
     });
+
+    it("hasPendingCronMessage is not confused by system messages coexisting with cron", () => {
+      store.addMessage(channelId, "system", "[SUBAGENT COMPLETED] worker completed");
+      // System message is pending, but cron dedup should NOT match it
+      expect(store.hasPendingCronMessage(channelId, "[cron:daily]")).toBe(false);
+
+      // Now add an actual cron message — dedup should detect it
+      store.addMessage(channelId, "cron", "[cron:daily] report");
+      expect(store.hasPendingCronMessage(channelId, "[cron:daily]")).toBe(true);
+
+      // Drain and verify both were pending
+      const drained = store.drainPending(channelId);
+      expect(drained).toHaveLength(2);
+      expect(drained.map((m) => m.sender).sort()).toEqual(["cron", "system"]);
+    });
   });
 });

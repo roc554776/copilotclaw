@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type ServerHandle, startServer } from "../../src/server.js";
 import { Store } from "../../src/store.js";
 
@@ -95,6 +95,52 @@ describe("POST /api/channels/:channelId/messages (agent message)", () => {
     const msg = await res.json() as { sender: string; message: string };
     expect(msg.sender).toBe("agent");
     expect(msg.message).toBe("hello from agent");
+    await freshHandle.close();
+  });
+});
+
+describe("POST /api/channels/:channelId/messages (system message)", () => {
+  it("accepts system sender and stores the message", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "system", message: "[SUBAGENT COMPLETED] worker completed" }),
+    });
+    expect(res.status).toBe(201);
+    const msg = await res.json() as { sender: string; message: string };
+    expect(msg.sender).toBe("system");
+    expect(msg.message).toBe("[SUBAGENT COMPLETED] worker completed");
+    await freshHandle.close();
+  });
+
+  it("system sender does NOT trigger agent_notify (only user/cron do)", async () => {
+    const mockAgentManager = { notifyAgent: vi.fn() } as unknown as import("../../src/agent-manager.js").AgentManager;
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: mockAgentManager });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    // System message should NOT trigger notifyAgent
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "system", message: "[SUBAGENT COMPLETED] worker completed" }),
+    });
+    expect(mockAgentManager.notifyAgent).not.toHaveBeenCalled();
+
+    // User message SHOULD trigger notifyAgent
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "hello" }),
+    });
+    expect(mockAgentManager.notifyAgent).toHaveBeenCalledWith(chId);
+
     await freshHandle.close();
   });
 });
