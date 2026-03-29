@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.37.0 | Token estimate: ~2200 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.38.0 | Token estimate: ~2200 -->
 
 # Architecture
 
@@ -99,7 +99,7 @@ Environment variables:
   - "stopped": explicit stopSession() — fully removes abstract session and channel binding
 - **Suspension via checkStaleAndHandle**: if processing >10 min with pending inputs, suspend (abstract survives), notify channel with timeout message, flush inputs; deferred resume on next pending message
 - **Suspension via checkSessionMaxAge**: if "waiting" session exceeds 2 days (default, configurable), suspend and clear copilotSessionId (so next revival creates a new physical session rather than resuming the old one)
-- **Revival via reviveSession**: suspended sessions auto-revive with new physical session when triggered (e.g., user message arrives for the channel); same abstract sessionId reused, copilotSessionId preserved for resumeSession
+- **Revival via reviveSession**: suspended sessions auto-revive with new physical session when triggered (e.g., user message arrives for the channel); same abstract sessionId reused, copilotSessionId preserved for resumeSession; resumeSession wrapped in try/catch — on failure, clears copilotSessionId and falls back to createSession (v0.38.0)
 - **Auto-revival in polling**: startSession auto-detects suspended sessions for a channel via hasActiveSessionForChannel; if suspended, revives with saved copilotSessionId
 - **Binding Persistence (v0.18.0+)**: AgentSessionManager accepts optional `persistPath` option (defaults to {{stateDir}}/data/agent-bindings.json — uses stateDir, not workspaceRoot); suspended sessions with channel bindings persisted to disk via atomic write (tmp → rename); `loadBindings()` called in constructor (line 192) restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries; restores cumulative token data and physicalSessionHistory from snapshots; `saveBindings()` called on suspendSession and stopSession; SessionSnapshot and BindingSnapshot types define persist format; SessionSnapshot includes cumulativeInputTokens/cumulativeOutputTokens, physicalSessionHistory (v0.30.0)
 - **Cumulative Token Tracking (v0.27.0)**: AgentSessionInfo tracks cumulativeInputTokens and cumulativeOutputTokens across physical sessions; suspendSession() accumulates token usage via delta calculation when same physical session is resumed (compares against last history entry to compute delta, preventing double-counting); cumulative totals persisted in SessionSnapshot via saveBindings() and restored via loadBindings(); dashboard shows cumulative tokens; IPC AgentSessionStatusResponse includes cumulative token fields
@@ -117,6 +117,11 @@ Environment variables:
 - **Events Page** (`/sessions/:id/events`): shows session events with event count in heading, flat event list and auto-scroll; auto-refreshes every 2s; "Back to System Status" and "Back to Sessions" links (latter uses ?focus= param targeting parent abstract session)
 - **Sessions List Page** (`/sessions`): fetches abstract sessions from /api/status and renders them with physical sessions (current + history) as children; orphaned physical sessions listed separately; supports ?focus= URL param to highlight and scroll-to a specific abstract session; back link to /status
 - **Dashboard Integration**: status modal includes "Open in new tab" link to /status; sessions section always visible in status modal with empty state when no sessions exist; physical session details include "View events" link to events page; stopped session history shown as collapsed toggle ("Stopped sessions (N) ▸") with model, tokens, started time, and events link per entry (v0.30.0)
+
+## Project Skills (.claude/skills/, v0.38.0)
+
+- `.claude/skills/implement/` — skill for feature implementation, bug fixes, and debugging workflow
+- `.claude/skills/process-requirements/` — skill for processing raw requirements into documentation
 
 ## Key Constraints
 
