@@ -239,24 +239,26 @@ Agent session 起動（session.send を 1 回だけ使用）
 - `copilotclaw_send_message` は即時 return なので、作業を中断せずに状況報告できる
 - 新着 user message は `onPostToolUse` hook の `additionalContext` で LLM に通知される
 
-### Agent Session の意図しない停止とリカバリ
+### 物理セッションの意図しない停止とリカバリ（未実現 — resumeSession フォールバック未実装）
 
-
-LLM が tool を呼ばずに idle になった場合、`session.send()` による停止阻止はしない（コスト最小化の原則）。このとき agent session は意図せず停止する。
+LLM が tool を呼ばずに idle になった場合、`session.send()` による停止阻止はしない（コスト最小化の原則）。このとき物理セッションは停止するが、抽象セッションは suspended 状態で残る。
 
 ```
-Agent session idle（LLM が tool を呼ばなかった）
-  → session.send() は呼ばない → session 停止
-  → session status を "stopped" に設定
-  → channel に紐づく session だった場合
-    → channel に「agent session が意図せず停止した」ことを通知する
-      （例: gateway の messages API にシステムメッセージとして投稿）
-  → session は sessions Map から削除、channel binding も解除
+物理セッション idle（LLM が copilotclaw_wait を呼ばなかった）
+  → session.send() は呼ばない → 物理セッション停止
+  → 抽象セッションは suspended に遷移（チャンネルへの紐づけは維持）
+  → copilotSessionId は保持（resumeSession で会話記憶を復元するため）
+  → channel に紐づく抽象セッションだった場合
+    → channel に物理セッションが意図せず停止したことを通知する
 ```
 
 停止後のリカバリ:
-- channel にアクティブな agent session がない状態になる
-- この channel に新たに user がメッセージを送った場合、gateway は agent process に agent session の新規起動と channel への紐づけを要求する（通常の起動フローと同じ）
+- 抽象セッションは suspended 状態でチャンネルに紐づいたまま残る
+- この channel に新たに user がメッセージを送った場合:
+  - 既存の抽象セッションを revive する（新規作成ではない）
+  - `copilotSessionId` が保存されていれば `resumeSession` を試みる（前回の会話記憶を保持）
+  - `resumeSession` が失敗した場合は `copilotSessionId` をクリアして `createSession` で新しい物理セッションを作成する
+- 現状の問題: `resumeSession` 失敗時の `createSession` フォールバックが未実装であり、`resumeSession` が失敗するとバックオフ→再試行→再失敗のループに陥る
 
 ### Agent Session の実行中タイムアウト（stale session）
 

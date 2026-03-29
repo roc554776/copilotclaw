@@ -539,6 +539,9 @@ export class AgentSessionManager {
           try {
             if (signal.aborted) return;
 
+            // Temporary: log all hook invocations to determine if subagent tools fire
+            this.log(`postToolUse: tool=${input.toolName} inputKeys=${Object.keys(input).join(",")}`);
+
             // Only fire for the parent agent (channel-operator).
             // copilotclaw_wait is the ONLY tool exclusive to the parent —
             // copilotclaw_send_message and copilotclaw_list_messages are shared with
@@ -649,9 +652,18 @@ export class AgentSessionManager {
       ],
       agent: CHANNEL_OPERATOR_CONFIG.name,
     };
-    const session = entry.copilotSessionId !== undefined
-      ? await entry.client.resumeSession(entry.copilotSessionId, baseConfig)
-      : await entry.client.createSession(baseConfig);
+    let session: CopilotSession;
+    if (entry.copilotSessionId !== undefined) {
+      try {
+        session = await entry.client.resumeSession(entry.copilotSessionId, baseConfig);
+      } catch (resumeErr: unknown) {
+        this.log(`resumeSession failed for ${entry.copilotSessionId.slice(0, 12)}, creating new session: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
+        entry.copilotSessionId = undefined;
+        session = await entry.client.createSession(baseConfig);
+      }
+    } else {
+      session = await entry.client.createSession(baseConfig);
+    }
 
     // After session creation, the CLI will call systemMessage.transform RPC for each
     // section that has action: "transform". The callbacks above capture each section's
