@@ -184,8 +184,11 @@ export class SessionEventStore {
   /** Get effective system prompt for a physical session. */
   getEffectivePrompt(sessionId: string): { sessionId: string; model: string; prompt: string; capturedAt: string } | undefined {
     const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const filePath = join(this.promptDir, `effective-${safe}.json`);
-    if (!existsSync(filePath)) return undefined;
+    // Try new naming first, fall back to legacy "session-" prefix
+    const effectivePath = join(this.promptDir, `effective-${safe}.json`);
+    const legacyPath = join(this.promptDir, `session-${safe}.json`);
+    const filePath = existsSync(effectivePath) ? effectivePath : existsSync(legacyPath) ? legacyPath : undefined;
+    if (filePath === undefined) return undefined;
     try {
       return JSON.parse(readFileSync(filePath, "utf-8")) as { sessionId: string; model: string; prompt: string; capturedAt: string };
     } catch {
