@@ -279,7 +279,8 @@ function createRequestHandler(
       if (action === "messages" && method === "GET") {
         const limitParam = params.get("limit");
         const limit = limitParam !== null ? parseInt(limitParam, 10) : 5;
-        json(res, 200, store.listMessages(channelId, Number.isFinite(limit) ? limit : 5));
+        const before = params.get("before") ?? undefined;
+        json(res, 200, store.listMessages(channelId, Number.isFinite(limit) ? limit : 5, before));
         return;
       }
 

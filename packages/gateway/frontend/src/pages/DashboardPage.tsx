@@ -40,6 +40,8 @@ export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasOlderMessages, setHasOlderMessages] = useState(true);
   const [inputText, setInputText] = useState("");
   const [sending, setSending] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
@@ -82,63 +84,120 @@ export function DashboardPage() {
       .finally(() => setLoading(false));
   }, [showArchived]);
 
+  const INITIAL_MESSAGE_LIMIT = 50;
+
   // H-1: capture activeChannelId in closure
   const refreshMessages = useCallback(async () => {
     const channelId = activeChannelId;
     if (!channelId) return;
     try {
-      const msgs = await fetchMessages(channelId, 500);
+      const msgs = await fetchMessages(channelId, INITIAL_MESSAGE_LIMIT);
       // API returns reverse-chronological; reverse for display
       setMessages(msgs.slice().reverse());
+      setHasOlderMessages(msgs.length >= INITIAL_MESSAGE_LIMIT);
     } catch {
       /* ignore */
     }
   }, [activeChannelId]);
 
+  // Load older messages when scrolling up
+  const loadOlderMessages = useCallback(async () => {
+    const channelId = activeChannelId;
+    if (!channelId || loadingOlder || !hasOlderMessages) return;
+    const oldestMsg = messages[0];
+    if (!oldestMsg) return;
+
+    setLoadingOlder(true);
+    try {
+      const older = await fetchMessages(channelId, INITIAL_MESSAGE_LIMIT, oldestMsg.id);
+      if (older.length === 0) {
+        setHasOlderMessages(false);
+      } else {
+        // older is reverse-chronological; reverse and prepend
+        setMessages((prev) => [...older.slice().reverse(), ...prev]);
+        setHasOlderMessages(older.length >= INITIAL_MESSAGE_LIMIT);
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [activeChannelId, loadingOlder, hasOlderMessages, messages]);
+
   useEffect(() => {
     refreshMessages();
   }, [refreshMessages]);
 
-  // SSE connection — H-2: use ref for refreshStatus
+  // SSE connection with auto-reconnect
   useEffect(() => {
     if (!activeChannelId) return;
 
-    const source = new EventSource(
-      `/api/events?channel=${encodeURIComponent(activeChannelId)}`,
-    );
-    evtSourceRef.current = source;
+    let closed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    source.onopen = () => setSseConnected(true);
-    source.onerror = () => setSseConnected(false);
-    source.onmessage = (e) => {
-      try {
-        const event = JSON.parse(e.data as string) as {
-          type: string;
-          data?: Record<string, unknown>;
-        };
-        if (event.type === "new_message") {
-          refreshMessages();
-          refreshStatusRef.current();
-        } else if (event.type === "status_update") {
-          const d = event.data;
-          if (d) {
-            setGatewayVersion(String(d["gatewayVersion"] ?? "--"));
-            setAgentVersion(String(d["agentVersion"] ?? "--"));
-            setSessionStatus(String(d["sessionStatus"] ?? "--"));
-            setCompatibility(String(d["compatibility"] ?? ""));
-          }
+    function connect() {
+      if (closed) return;
+      const source = new EventSource(
+        `/api/events?channel=${encodeURIComponent(activeChannelId)}`,
+      );
+      evtSourceRef.current = source;
+
+      source.onopen = () => setSseConnected(true);
+      source.onerror = () => {
+        setSseConnected(false);
+        source.close();
+        evtSourceRef.current = null;
+        // Auto-reconnect after 3 seconds
+        if (!closed) {
+          reconnectTimer = setTimeout(connect, 3000);
         }
-      } catch {
-        /* ignore parse errors */
-      }
-    };
+      };
+      source.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data as string) as {
+            type: string;
+            data?: Record<string, unknown>;
+          };
+          if (event.type === "new_message") {
+            refreshMessages();
+            refreshStatusRef.current();
+          } else if (event.type === "status_update") {
+            const d = event.data;
+            if (d) {
+              setGatewayVersion(String(d["gatewayVersion"] ?? "--"));
+              setAgentVersion(String(d["agentVersion"] ?? "--"));
+              setSessionStatus(String(d["sessionStatus"] ?? "--"));
+              setCompatibility(String(d["compatibility"] ?? ""));
+            }
+          }
+        } catch {
+          /* ignore parse errors */
+        }
+      };
+    }
+
+    connect();
 
     return () => {
-      source.close();
+      closed = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      evtSourceRef.current?.close();
       evtSourceRef.current = null;
       setSseConnected(false);
     };
   }, [activeChannelId, refreshMessages]);
+
+  // Re-fetch messages when page becomes visible (mobile background recovery)
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        refreshMessages();
+        refreshStatusRef.current();
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [refreshMessages]);
 
   // Poll status every 5 seconds
   const refreshStatus = useCallback(async () => {
@@ -280,7 +339,7 @@ export function DashboardPage() {
   const isProcessing = sessionStatus === "processing";
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", maxWidth: "100vw", overflow: "hidden" }}>
       {/* Status Bar */}
       <div
         style={{
@@ -294,6 +353,7 @@ export function DashboardPage() {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexShrink: 0,
         }}
         onClick={openModal}
       >
@@ -397,8 +457,8 @@ export function DashboardPage() {
               border: "1px solid #30363d",
               borderRadius: "0.75rem",
               padding: "1.5rem",
-              minWidth: 400,
-              maxWidth: 600,
+              minWidth: "min(400px, 90vw)",
+              maxWidth: "min(600px, 95vw)",
               maxHeight: "80vh",
               overflowY: "auto",
               zIndex: 101,
@@ -463,6 +523,9 @@ export function DashboardPage() {
           background: "#161b22",
           borderBottom: "1px solid #30363d",
           alignItems: "center",
+          overflowX: "auto",
+          flexShrink: 0,
+          WebkitOverflowScrolling: "touch",
         }}
       >
         {channels.map((ch) => {
@@ -481,6 +544,8 @@ export function DashboardPage() {
                 border: isActive ? "1px solid #30363d" : "none",
                 borderBottom: isActive ? "1px solid #0d1117" : "none",
                 marginBottom: isActive ? -1 : 0,
+                flexShrink: 0,
+                whiteSpace: "nowrap",
               }}
             >
               <a
@@ -527,6 +592,7 @@ export function DashboardPage() {
             color: "#8b949e",
             cursor: "pointer",
             fontSize: "0.85rem",
+            flexShrink: 0,
           }}
         >
           +
@@ -542,6 +608,7 @@ export function DashboardPage() {
             color: showArchived ? "#58a6ff" : "#8b949e",
             cursor: "pointer",
             fontSize: "0.75rem",
+            flexShrink: 0,
           }}
         >
           {showArchived ? "All" : "Archived"}
@@ -551,7 +618,14 @@ export function DashboardPage() {
       {/* Chat Messages — M-8: loading/error states */}
       <div
         ref={chatRef}
-        onScroll={handleChatScroll}
+        onScroll={(e) => {
+          handleChatScroll(e);
+          // Load older messages when scrolled near top
+          const el = e.currentTarget;
+          if (el.scrollTop < 100 && hasOlderMessages && !loadingOlder) {
+            loadOlderMessages();
+          }
+        }}
         style={{
           flex: 1,
           overflowY: "auto",
@@ -561,6 +635,11 @@ export function DashboardPage() {
           gap: "0.5rem",
         }}
       >
+        {loadingOlder && (
+          <div style={{ color: "#8b949e", textAlign: "center", padding: "0.5rem" }}>
+            Loading older messages...
+          </div>
+        )}
         {loading && (
           <div
             style={{
@@ -602,7 +681,7 @@ export function DashboardPage() {
               style={{
                 display: "flex",
                 flexDirection: "column",
-                maxWidth: "70%",
+                maxWidth: "min(70%, 90vw)",
                 alignSelf: isUser ? "flex-end" : "flex-start",
                 alignItems: isUser ? "flex-end" : "flex-start",
               }}

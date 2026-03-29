@@ -225,9 +225,15 @@ export class Store {
     return msg;
   }
 
-  listMessages(channelId: string, limit = 5): Message[] {
+  listMessages(channelId: string, limit = 5, before?: string): Message[] {
     const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 5;
-    // Return newest N messages in reverse chronological order
+    // Return newest N messages in reverse chronological order.
+    // When `before` is specified, return messages older than the given message ID (cursor-based pagination).
+    if (before !== undefined) {
+      return this.db.prepare(
+        "SELECT id, channelId, sender, message, createdAt FROM messages WHERE channelId = ? AND rowid < (SELECT rowid FROM messages WHERE id = ?) ORDER BY rowid DESC LIMIT ?",
+      ).all(channelId, before, safeLimit) as Message[];
+    }
     return this.db.prepare(
       "SELECT id, channelId, sender, message, createdAt FROM messages WHERE channelId = ? ORDER BY createdAt DESC LIMIT ?",
     ).all(channelId, safeLimit) as Message[];

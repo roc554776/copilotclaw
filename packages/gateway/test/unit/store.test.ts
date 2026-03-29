@@ -178,6 +178,38 @@ describe("Store", () => {
       expect(store.listMessages(channelId, 0)).toHaveLength(5);
       expect(store.listMessages(channelId, -1)).toHaveLength(5);
     });
+
+    it("returns messages before a given cursor message ID", () => {
+      store.addMessage(channelId, "user", "msg-1");
+      store.addMessage(channelId, "user", "msg-2");
+      const pivot = store.addMessage(channelId, "user", "msg-3")!;
+      store.addMessage(channelId, "user", "msg-4");
+      store.addMessage(channelId, "user", "msg-5");
+
+      const msgs = store.listMessages(channelId, 10, pivot.id);
+      expect(msgs).toHaveLength(2);
+      expect(msgs[0]?.message).toBe("msg-2");
+      expect(msgs[1]?.message).toBe("msg-1");
+    });
+
+    it("returns empty when before cursor has no older messages", () => {
+      const first = store.addMessage(channelId, "user", "msg-1")!;
+      store.addMessage(channelId, "user", "msg-2");
+
+      const msgs = store.listMessages(channelId, 10, first.id);
+      expect(msgs).toHaveLength(0);
+    });
+
+    it("respects limit with before cursor", () => {
+      for (let i = 0; i < 10; i++) {
+        store.addMessage(channelId, "user", `msg-${i}`);
+      }
+      const allMsgs = store.listMessages(channelId, 10);
+      // allMsgs[4] is the 5th newest — 5 messages are older
+      const pivotId = allMsgs[4]!.id;
+      const msgs = store.listMessages(channelId, 3, pivotId);
+      expect(msgs).toHaveLength(3);
+    });
   });
 
   describe("pendingCounts", () => {

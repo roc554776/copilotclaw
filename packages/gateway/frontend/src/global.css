@@ -40,3 +40,10 @@ a:hover {
   0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-4px); }
 }
+
+/* Mobile-friendly scrollbar for tab containers */
+@media (max-width: 768px) {
+  body {
+    font-size: 14px;
+  }
+}

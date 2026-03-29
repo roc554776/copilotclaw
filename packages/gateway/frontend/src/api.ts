@@ -132,8 +132,10 @@ export async function unarchiveChannel(channelId: string): Promise<Channel> {
   return res.json() as Promise<Channel>;
 }
 
-export async function fetchMessages(channelId: string, limit = 500): Promise<Message[]> {
-  const res = await fetch(`/api/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}`);
+export async function fetchMessages(channelId: string, limit = 50, before?: string): Promise<Message[]> {
+  let url = `/api/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}`;
+  if (before !== undefined) url += `&before=${encodeURIComponent(before)}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`messages ${res.status}`);
   return res.json() as Promise<Message[]>;
 }

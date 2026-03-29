@@ -565,6 +565,36 @@ describe("unknown channel action", () => {
   });
 });
 
+describe("GET /api/channels/:channelId/messages with before cursor", () => {
+  it("returns messages older than cursor", async () => {
+    const url = baseUrl;
+    const chRes = await fetch(`${url}/api/channels`, { method: "POST" });
+    const ch = await chRes.json() as { id: string };
+    const chId = ch.id;
+
+    // Add 5 messages
+    const msgIds: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await fetch(`${url}/api/channels/${chId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sender: "user", message: `msg-${i}` }),
+      });
+      const m = await r.json() as { id: string };
+      msgIds.push(m.id);
+    }
+
+    // Fetch messages before the 3rd message (index 2)
+    const res = await fetch(`${url}/api/channels/${chId}/messages?limit=10&before=${msgIds[2]}`);
+    expect(res.status).toBe(200);
+    const msgs = await res.json() as Array<{ message: string }>;
+    // Should return msg-1 and msg-0 (older than msg-2)
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]!.message).toBe("msg-1");
+    expect(msgs[1]!.message).toBe("msg-0");
+  });
+});
+
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);
