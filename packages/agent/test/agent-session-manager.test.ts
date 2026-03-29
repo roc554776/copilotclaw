@@ -1269,6 +1269,67 @@ describe("AgentSessionManager — currentState tracking via onStatusChange", () 
     manager.stopSession(sessionId);
     await waitPromise.catch(() => {});
   });
+
+  it("overrides idle after tool.execution_complete when wait handler re-enters", async () => {
+    let capturedConfig: Record<string, unknown> | undefined;
+    let mockSessionEmit: (event: string, ...args: unknown[]) => void;
+
+    const createSessionMock = vi.fn().mockImplementation(async (config: Record<string, unknown>) => {
+      capturedConfig = config;
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+
+      mockSessionEmit = (event: string, ...args: unknown[]) => {
+        for (const cb of listeners.get(event) ?? []) cb(...args);
+      };
+
+      return {
+        sessionId: "sdk-override-test",
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          const list = listeners.get(event) ?? [];
+          list.push(cb);
+          listeners.set(event, list);
+        }),
+        send: vi.fn().mockResolvedValue("msg-id"),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+        registerTransformCallbacks: vi.fn(),
+      };
+    });
+
+    (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
+      (this as Record<string, unknown>)["createSession"] = createSessionMock;
+      (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
+      (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["rpc"] = {
+        models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
+        account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+      };
+    });
+
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const sessionId = manager.startSession({ boundChannelId: "ch-override" });
+    await waitForPhysicalSession(manager);
+
+    // Simulate SDK tool.execution_complete resetting currentState to idle
+    mockSessionEmit!("tool.execution_complete");
+    let statuses = manager.getSessionStatuses();
+    expect(statuses[sessionId]?.physicalSession?.currentState).toBe("idle");
+
+    // Now call the wait handler — onStatusChange("waiting") should override idle
+    const tools = capturedConfig!["tools"] as Array<{ name: string; handler: () => Promise<unknown> }>;
+    const waitTool = tools.find((t) => t.name === "copilotclaw_wait")!;
+    const waitPromise = waitTool.handler();
+    await wait(10);
+
+    // currentState should be overridden back to tool:copilotclaw_wait
+    statuses = manager.getSessionStatuses();
+    expect(statuses[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+
+    manager.stopSession(sessionId);
+    await waitPromise.catch(() => {});
+  });
 });
 
 describe("AgentSessionManager — postToolUse log includes session ID", () => {
