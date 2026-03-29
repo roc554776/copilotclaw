@@ -50,10 +50,14 @@ export class Store {
         id TEXT PRIMARY KEY,
         createdAt TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS message_senders (
+        sender TEXT PRIMARY KEY
+      );
+      INSERT OR IGNORE INTO message_senders (sender) VALUES ('user'), ('agent'), ('cron');
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         channelId TEXT NOT NULL,
-        sender TEXT NOT NULL CHECK(sender IN ('user', 'agent', 'cron')),
+        sender TEXT NOT NULL REFERENCES message_senders(sender),
         message TEXT NOT NULL,
         createdAt TEXT NOT NULL,
         FOREIGN KEY (channelId) REFERENCES channels(id)
@@ -68,22 +72,24 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_pending_channel ON pending_queue(channelId);
     `);
-    // Migration: update messages CHECK constraint to include 'cron' sender
+    // Migration: remove CHECK constraint on messages.sender (replaced by message_senders FK)
     const checkInfo = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").get() as { sql: string } | undefined;
-    if (checkInfo?.sql && !checkInfo.sql.includes("'cron'")) {
+    if (checkInfo?.sql && checkInfo.sql.includes("CHECK")) {
       this.db.exec(`
-        CREATE TABLE messages_new (
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE messages_migrated (
           id TEXT PRIMARY KEY,
           channelId TEXT NOT NULL,
-          sender TEXT NOT NULL CHECK(sender IN ('user', 'agent', 'cron')),
+          sender TEXT NOT NULL REFERENCES message_senders(sender),
           message TEXT NOT NULL,
           createdAt TEXT NOT NULL,
           FOREIGN KEY (channelId) REFERENCES channels(id)
         );
-        INSERT INTO messages_new SELECT * FROM messages;
+        INSERT INTO messages_migrated SELECT * FROM messages;
         DROP TABLE messages;
-        ALTER TABLE messages_new RENAME TO messages;
+        ALTER TABLE messages_migrated RENAME TO messages;
         CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channelId, createdAt);
+        PRAGMA foreign_keys = ON;
       `);
     }
     // Migration: add archivedAt column if missing
