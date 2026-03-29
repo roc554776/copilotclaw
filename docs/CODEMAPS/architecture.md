@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.43.0 | Token estimate: ~2300 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-29 | Packages: 3 (cli, gateway, agent) | Version: 0.44.0 | Token estimate: ~2300 -->
 
 # Architecture
 
@@ -138,6 +138,6 @@ Environment variables:
 - Channel backoff: AgentSessionManager tracks channelBackoff map; recordBackoffIfRapidFailure() sets backoff when session fails within rapid-failure threshold (rapidFailureThresholdMs, backoffDurationMs from gateway config); isChannelInBackoff() checked in polling loop to skip channels in backoff (prevents retry storms); notifyChannelSessionStopped() includes error reason in system message when available
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (363 tests: 87 agent + 245 gateway + 31 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (415 tests: 100 agent + 284 gateway + 31 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
 - Frontend tests: vitest + jsdom + @testing-library/react for React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll)
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
