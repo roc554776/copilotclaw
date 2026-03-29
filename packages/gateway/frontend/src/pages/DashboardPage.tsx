@@ -372,7 +372,7 @@ export function DashboardPage() {
   const isProcessing = sessionStatus === "processing";
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", maxWidth: "100vw", overflow: "hidden" }}>
+    <div style={{ height: "100dvh", display: "flex", flexDirection: "column", maxWidth: "100vw", overflow: "hidden" }}>
       {/* Status Bar */}
       <div
         style={{
