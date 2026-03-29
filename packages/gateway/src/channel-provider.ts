@@ -27,7 +27,7 @@ export interface ChannelProvider {
   handleRequest(req: IncomingMessage, res: ServerResponse, params: URLSearchParams): Promise<boolean>;
 
   /** Called when a new message is added to any channel managed by this provider */
-  onMessage?(channelId: string, sender: "user" | "agent", message: string): void;
+  onMessage?(channelId: string, sender: "user" | "agent" | "cron", message: string): void;
 
   /** Called on server shutdown */
   close?(): void;

@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   // Set up IPC stream message handlers before connecting
   agentManager.setStreamMessageHandler({
     onChannelMessage: (channelId, sender, message) => {
-      const senderType = sender === "user" ? "user" as const : "agent" as const;
+      const senderType = sender === "user" ? "user" as const : sender === "cron" ? "cron" as const : "agent" as const;
       store.addMessage(channelId, senderType, message);
       // Broadcast to SSE clients (serverHandle.sseBroadcaster set after startServer)
       serverHandle?.sseBroadcaster?.broadcast({
