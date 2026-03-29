@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.41.0 | Token estimate: ~2300 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.42.0 | Token estimate: ~2300 -->
 
 # Architecture
 
