@@ -668,10 +668,11 @@ agent process
 - ネストされた孫 subagent の completion イベントは、親 agent が直接呼び出した `toolCallId` と一致しないため、通知しない
 
 **agent 側の統一的な wait 解除:**
-- `copilotclaw_wait` のブロック解除は、gateway からの push 通知に統一する
-- 現在: `pending_notify`（user/cron メッセージ到着時）
-- 追加: subagent completion 通知
-- agent 側は通知の種類を区別せず、ブロックを解除してイベントを処理するだけ
+- gateway からの push 通知を1つの汎用チャネル（例: `agent_notify`）に統一する
+- agent 側は通知の種類を一切区別しない。「通知が来たら wait を解除して drain する」だけ
+- 通知の種類（メッセージ到着、subagent 完了、将来の新機能）は全て gateway 側が決定し、gateway が agent_notify を push する
+- これにより、新しい通知種類を追加する際に agent process のコードを変更する必要がない（gateway の更新だけで対応できる）
+- 現在の `pending_notify` もこの汎用チャネルに統合する
 
 **親が作業中の場合の通知:**
 - 親 agent がまだ他の tool を実行中に subagent が完了した場合、`onPostToolUse` hook の `additionalContext` で通知する（既存の仕組みを流用）
