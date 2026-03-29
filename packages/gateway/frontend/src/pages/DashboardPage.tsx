@@ -88,6 +88,16 @@ export function DashboardPage() {
 
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
+  const activeChannelRef = useRef(activeChannelId);
+
+  // Reset messages when channel changes
+  useEffect(() => {
+    if (activeChannelRef.current !== activeChannelId) {
+      setMessages([]);
+      setHasOlderMessages(true);
+      activeChannelRef.current = activeChannelId;
+    }
+  }, [activeChannelId]);
 
   // H-1: capture activeChannelId in closure
   const refreshMessages = useCallback(async () => {
@@ -95,7 +105,7 @@ export function DashboardPage() {
     if (!channelId) return;
     try {
       const current = messagesRef.current;
-      if (current.length > 0) {
+      if (current.length > 0 && current[0]!.channelId === channelId) {
         // Append only new messages (newer than the newest we have)
         const newest = current[current.length - 1]!;
         const fresh = await fetchMessages(channelId, INITIAL_MESSAGE_LIMIT);
