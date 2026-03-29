@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.40.0 | Token estimate: ~2200 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-28 | Packages: 3 (cli, gateway, agent) | Version: 0.41.0 | Token estimate: ~2300 -->
 
 # Architecture
 
@@ -82,7 +82,7 @@ Environment variables:
 ## System Prompt (v0.19.0+)
 
 - **Prompt ownership (v0.40.0)**: Gateway owns all agent prompt definitions and session timing config in `agent-config.ts` and sends them to agent via IPC config push; agent requires gateway-provided config (no fallback defaults)
-- **CHANNEL_OPERATOR_PROMPT**: includes deadlock prevention at start and end, Workspace section describing git-managed workspace files (SOUL.md/USER.md/TOOLS.md/MEMORY.md/memory/) and instructing agent to commit changes, session startup section instructing agent to read SOUL.md (priority), USER.md, memory/ (daily files), and MEMORY.md for context; Lifecycle section with broader wait semantics (copilotclaw_wait use cases: waiting for user reply, subagent completion, all work done, unknown what to do, unexpected system error)
+- **CHANNEL_OPERATOR_PROMPT**: includes deadlock prevention at start and end, Workspace section describing git-managed workspace files (SOUL.md/USER.md/TOOLS.md/MEMORY.md/memory/) and instructing agent to commit changes, session startup section instructing agent to read SOUL.md (priority), USER.md, memory/ (daily files), and MEMORY.md for context; Lifecycle section with broader wait semantics (copilotclaw_wait use cases: waiting for user reply, subagent completion, all work done, unknown what to do, unexpected system error); Cron Tasks section describing cron-triggered messages and expected handling; Subagent Rules section
 - **Session Startup**: agent reads workspace bootstrap files in order: SOUL.md (persona), USER.md (user context), memory/YYYY-MM-DD.md files (recent sessions), MEMORY.md (long-term memory)
 - **SYSTEM_REMINDER**: periodic deadlock prevention reinforcement via additionalContext
 
