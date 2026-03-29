@@ -182,6 +182,22 @@ function migrate_v0_to_v1(config: Record<string, unknown>): Record<string, unkno
 - **Phase A**: messages + pending queue → SQLite（書き込み増幅解消、効果最大）
 - **Phase B**: session events → SQLite（イベントクエリ高速化、type/timestamp フィルタ）
 
+### NFR: SQLite スキーマの段階的マイグレーション
+
+SQLite のスキーマ変更を、バージョン番号で管理する段階的マイグレーション方式にする。config.json の `configVersion` と同じパターン。
+
+**現状の問題:**
+- `initSchema()` に CREATE TABLE と migration を混在させている
+- migration の適用済み判定がアドホック（CHECK 文字列の有無、カラムの存在チェック等）
+- migration が増えるとどれが新規スキーマでどれが既存 DB の修正か判別困難
+
+**方針:**
+- `store_schema_version` テーブルを導入し、現在のスキーマバージョンを記録する
+- `initSchema()` は最初のテーブル作成（version 0）のみ担当
+- migration は `STORE_MIGRATIONS` レジストリに登録し、version N → N+1 を順次適用する
+- config.ts の `migrateConfig` と同じ構造
+- down migration は不要（up のみ）
+
 ### NFR: セキュリティ
 <!-- TODO: 未実装 — ツール実行時のパーミッション制御 -->
 

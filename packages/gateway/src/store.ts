@@ -44,8 +44,50 @@ export class Store {
     }
   }
 
+  private static readonly LATEST_STORE_VERSION = 2;
+
+  private static readonly STORE_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
+    // v0 → v1: Add archivedAt column to channels
+    0: (db) => {
+      const columns = db.pragma("table_info(channels)") as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === "archivedAt")) {
+        db.exec("ALTER TABLE channels ADD COLUMN archivedAt TEXT");
+      }
+    },
+    // v1 → v2: Replace CHECK constraint with message_senders FK table, add 'cron' sender
+    1: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS message_senders (sender TEXT PRIMARY KEY);
+        INSERT OR IGNORE INTO message_senders (sender) VALUES ('user'), ('agent'), ('cron');
+      `);
+      const checkInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").get() as { sql: string } | undefined;
+      if (checkInfo?.sql && checkInfo.sql.includes("CHECK")) {
+        db.exec(`
+          PRAGMA foreign_keys = OFF;
+          CREATE TABLE messages_migrated (
+            id TEXT PRIMARY KEY,
+            channelId TEXT NOT NULL,
+            sender TEXT NOT NULL REFERENCES message_senders(sender),
+            message TEXT NOT NULL,
+            createdAt TEXT NOT NULL,
+            FOREIGN KEY (channelId) REFERENCES channels(id)
+          );
+          INSERT INTO messages_migrated SELECT * FROM messages;
+          DROP TABLE messages;
+          ALTER TABLE messages_migrated RENAME TO messages;
+          CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channelId, createdAt);
+          PRAGMA foreign_keys = ON;
+        `);
+      }
+    },
+  };
+
   private initSchema(): void {
+    // Base schema (version 0)
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS store_schema_version (
+        version INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS channels (
         id TEXT PRIMARY KEY,
         createdAt TEXT NOT NULL
@@ -72,30 +114,24 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_pending_channel ON pending_queue(channelId);
     `);
-    // Migration: remove CHECK constraint on messages.sender (replaced by message_senders FK)
-    const checkInfo = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").get() as { sql: string } | undefined;
-    if (checkInfo?.sql && checkInfo.sql.includes("CHECK")) {
-      this.db.exec(`
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE messages_migrated (
-          id TEXT PRIMARY KEY,
-          channelId TEXT NOT NULL,
-          sender TEXT NOT NULL REFERENCES message_senders(sender),
-          message TEXT NOT NULL,
-          createdAt TEXT NOT NULL,
-          FOREIGN KEY (channelId) REFERENCES channels(id)
-        );
-        INSERT INTO messages_migrated SELECT * FROM messages;
-        DROP TABLE messages;
-        ALTER TABLE messages_migrated RENAME TO messages;
-        CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channelId, createdAt);
-        PRAGMA foreign_keys = ON;
-      `);
+
+    // Determine current version
+    const row = this.db.prepare("SELECT version FROM store_schema_version LIMIT 1").get() as { version: number } | undefined;
+    let version = row?.version ?? 0;
+
+    // Apply sequential migrations
+    while (version < Store.LATEST_STORE_VERSION) {
+      const fn = Store.STORE_MIGRATIONS[version];
+      if (fn === undefined) break;
+      fn(this.db);
+      version++;
     }
-    // Migration: add archivedAt column if missing
-    const columns = this.db.pragma("table_info(channels)") as Array<{ name: string }>;
-    if (!columns.some((c) => c.name === "archivedAt")) {
-      this.db.exec("ALTER TABLE channels ADD COLUMN archivedAt TEXT");
+
+    // Persist version
+    if (row === undefined) {
+      this.db.prepare("INSERT INTO store_schema_version (version) VALUES (?)").run(version);
+    } else if (version !== row.version) {
+      this.db.prepare("UPDATE store_schema_version SET version = ?").run(version);
     }
   }
 
