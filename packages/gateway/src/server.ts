@@ -513,7 +513,7 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
       });
     });
 
-    server.listen(port, () => {
+    server.listen(port, "localhost", () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr !== null ? addr.port : port;
       console.error(`[gateway] listening on http://localhost:${actualPort}`);
