@@ -124,10 +124,11 @@
 - 物理セッション currentState の正確な追跡（`onStatusChange("waiting")` で `currentState` を `tool:copilotclaw_wait` に設定。SDK `tool.execution_complete` による idle リセットを上書き）（v0.44.0）
 - postToolUse ログにセッション ID を含める（`postToolUse: [sessionId] tool=toolName` 形式。複数セッション並走時の診断を可能にする）（v0.44.0）
 
+- Dashboard のモバイル対応（タブ横スクロール、レスポンシブレイアウト、モーダル幅調整）（v0.45.0）
+- メッセージのリアルタイム更新の信頼性向上（SSE auto-reconnect、visibilitychange でのメッセージ再取得）（v0.45.0）
+- チャット履歴の無限スクロール化（初回 50 件、cursor ベースページネーション、スクロール位置復元）（v0.45.0）
+
 **未実現:**
-- Dashboard のモバイル対応（レスポンシブ対応、タブ横スクロール、viewport meta）
-- メッセージのリアルタイム更新の信頼性向上（モバイルで新着メッセージが反映されない問題。原因要調査）
-- チャット履歴の無限スクロール化（cursor ベースページネーション、初回 N 件のみロード）
 - Gateway-Agent 責務の再配置: 抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理
 - gateway 停止時の物理セッション延命（実装確認済み — copilotclaw_wait のエラー不可侵性により IPC 切断中も keepalive cycle が継続）
 - gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）
