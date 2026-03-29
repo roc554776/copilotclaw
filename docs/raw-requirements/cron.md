@@ -24,6 +24,8 @@
 ## cron の enable/disable
 
 - cron は enable/disable で切り替えられるようにする。
+- cron の項目ごとに enable/disable を設定できる必要がある。
+- 動的に読み込む必要は（まだ）ない。
 
 ## chat operator プロンプトの修正
 
