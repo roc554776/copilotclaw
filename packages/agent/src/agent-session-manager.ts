@@ -11,10 +11,10 @@ import { createChannelTools, type SubagentCompletionInfo } from "./tools/channel
 // The only tool exclusive to the channel-operator (parent agent).
 // Subagents (worker) never receive copilotclaw_wait — they use
 // copilotclaw_send_message and copilotclaw_list_messages which are shared.
-// Used to gate onPostToolUse reminder/notification injection:
-// the SDK hook system provides no mechanism to distinguish parent vs subagent
-// tool calls (sessionId is always the same, no parentToolCallId in hook inputs),
-// so we gate on the one tool name that is parent-exclusive.
+// Used to gate onPostToolUse reminder/notification injection.
+// Note: onPostToolUse does NOT fire for subagent tool calls (confirmed via debug logging).
+// The gate on copilotclaw_wait is for context conservation, not subagent exclusion —
+// firing on every tool call would waste context tokens.
 const PARENT_ONLY_TOOL = "copilotclaw_wait";
 
 // --- Custom Agent definitions ---
@@ -547,11 +547,9 @@ export class AgentSessionManager {
           try {
             if (signal.aborted) return;
 
-            // Only fire for the parent agent (channel-operator).
-            // copilotclaw_wait is the ONLY tool exclusive to the parent —
-            // copilotclaw_send_message and copilotclaw_list_messages are shared with
-            // subagents (worker), and the SDK hook system has no way to distinguish
-            // parent vs subagent calls (same sessionId, no parentToolCallId in hooks).
+            // Gate on copilotclaw_wait to conserve context tokens.
+            // onPostToolUse only fires for parent agent tools (not subagent tools),
+            // but firing on every parent tool call would still waste context.
             const isParentAgentTool = input.toolName === PARENT_ONLY_TOOL;
             this.debug(`postToolUse: tool=${input.toolName} isParent=${isParentAgentTool}`);
             if (!isParentAgentTool) return;
