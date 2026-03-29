@@ -652,7 +652,7 @@ export function DashboardPage() {
       <div
         ref={chatRef}
         onScroll={(e) => {
-          handleChatScroll(e);
+          handleChatScroll();
           // Load older messages when scrolled near top
           const el = e.currentTarget;
           if (el.scrollTop < 100 && hasOlderMessages && !loadingOlder) {
