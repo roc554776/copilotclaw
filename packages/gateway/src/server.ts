@@ -302,8 +302,7 @@ function createRequestHandler(
         }
         // Notify agent via IPC stream when a user or cron message arrives
         if ((sender === "user" || sender === "cron") && agentManager !== null) {
-          const pendingCount = store.pendingCounts()[channelId] ?? 0;
-          agentManager.notifyPending(channelId, pendingCount);
+          agentManager.notifyAgent(channelId);
         }
         json(res, 201, msg);
         return;

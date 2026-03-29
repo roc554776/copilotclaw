@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   // Set up IPC stream message handlers before connecting
   agentManager.setStreamMessageHandler({
     onChannelMessage: (channelId, sender, message) => {
-      const senderType = sender === "user" ? "user" as const : sender === "cron" ? "cron" as const : "agent" as const;
+      const senderType = sender === "user" ? "user" as const : sender === "cron" ? "cron" as const : sender === "system" ? "system" as const : "agent" as const;
       store.addMessage(channelId, senderType, message);
       // Broadcast to SSE clients (serverHandle.sseBroadcaster set after startServer)
       serverHandle?.sseBroadcaster?.broadcast({
@@ -44,7 +44,7 @@ async function main(): Promise<void> {
         data: { sender: senderType, message },
       });
     },
-    onSessionEvent: (sessionId, eventType, timestamp, data, parentId) => {
+    onSessionEvent: (sessionId, channelId, eventType, timestamp, data, parentId) => {
       const event: { type: string; timestamp: string; data: Record<string, unknown>; parentId?: string } = {
         type: eventType,
         timestamp,
@@ -52,6 +52,20 @@ async function main(): Promise<void> {
       };
       if (parentId !== undefined) event.parentId = parentId;
       sessionEventStore.appendEvent(sessionId, event);
+
+      // Subagent completion/failure: insert system message and notify agent
+      if (channelId !== undefined && (eventType === "subagent.completed" || eventType === "subagent.failed")) {
+        // Only notify for direct subagent calls (no parentToolCallId in the event data)
+        // Nested subagent events carry parentToolCallId from the outer task tool
+        if (data["parentToolCallId"] === undefined) {
+          const agentName = data["agentName"] as string ?? "unknown";
+          const status = eventType === "subagent.completed" ? "completed" : "failed";
+          const error = typeof data["error"] === "string" ? ` (error: ${data["error"]})` : "";
+          const msg = `[SUBAGENT ${status.toUpperCase()}] ${agentName} ${status}${error}`;
+          store.addMessage(channelId, "system", msg);
+          agentManager.notifyAgent(channelId);
+        }
+      }
     },
     onSystemPromptOriginal: (model, prompt, capturedAt) => {
       sessionEventStore.saveOriginalPrompt({ model, prompt, capturedAt });
@@ -123,8 +137,7 @@ async function main(): Promise<void> {
       if (store.hasPendingCronMessage(job.channelId, prefix)) return;
       const msg = store.addMessage(job.channelId, "cron", `${prefix}${job.message}`);
       if (msg !== undefined) {
-        const pendingCount = store.pendingCounts()[job.channelId] ?? 0;
-        agentManager.notifyPending(job.channelId, pendingCount);
+        agentManager.notifyAgent(job.channelId);
       }
     }, job.intervalMs);
     timer.unref();

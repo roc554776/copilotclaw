@@ -6,7 +6,7 @@ import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
 import { requestFromGateway, sendToGateway } from "./ipc-server.js";
-import { createChannelTools, type SubagentCompletionInfo } from "./tools/channel.js";
+import { createChannelTools } from "./tools/channel.js";
 
 // onPostToolUse hook fires only for the parent agent (channel-operator) tool calls.
 // Subagent tool calls do NOT trigger the hook — confirmed via debug logging (v0.39.0).
@@ -440,9 +440,6 @@ export class AgentSessionManager {
     // Ensure workspace is ready before starting the physical session
     this.ensureWorkspaceReady();
 
-    // Queue for subagent completion events, drained by wait and onPostToolUse
-    const subagentCompletionQueue: SubagentCompletionInfo[] = [];
-
     const { sendMessage, wait, listMessages } = createChannelTools({
       channelId,
       abortSignal: entry.abortController.signal,
@@ -451,11 +448,6 @@ export class AgentSessionManager {
         if (status === "processing") {
           entry.info.processingStartedAt = new Date().toISOString();
         }
-      },
-      drainSubagentCompletions: () => {
-        const items = [...subagentCompletionQueue];
-        subagentCompletionQueue.length = 0;
-        return items;
       },
       logError: this.logError,
     });
@@ -500,16 +492,8 @@ export class AgentSessionManager {
               // IPC error — skip notification (non-fatal)
             }
 
-            // Peek (don't drain) subagent completions — wait is the sole drain point
-            // to avoid double-reporting from two consumers draining the same queue.
-            if (subagentCompletionQueue.length > 0) {
-              const notices = subagentCompletionQueue.map((c) =>
-                `${c.agentName} ${c.status}${c.error ? ` (error: ${c.error})` : ""}` +
-                `${c.totalTokens !== undefined ? ` [tokens: ${c.totalTokens}]` : ""}` +
-                `${c.durationMs !== undefined ? ` [${c.durationMs}ms]` : ""}`
-              );
-              parts.push(`[SUBAGENT UPDATE] ${notices.join("; ")} — call copilotclaw_wait to get full details.`);
-            }
+            // Subagent completion notifications are now handled by gateway
+            // (inserted as system messages into pending queue + agent_notify push)
 
             if (shouldRemind) {
               parts.push(this.systemReminder);
@@ -636,6 +620,7 @@ export class AgentSessionManager {
       this.postToGateway({
         type: "session_event",
         sessionId: session.sessionId,
+        channelId,
         eventType,
         timestamp: event?.timestamp ?? new Date().toISOString(),
         data: (typeof event?.data === "object" && event.data !== null) ? event.data : {},
@@ -697,40 +682,16 @@ export class AgentSessionManager {
         }
       }
     });
-    // Type-safe helpers for extracting optional fields from SDK event data.
-    // The SDK's typed event handler narrows to base fields only; stats fields
-    // exist in the generated schema but are not exposed in the narrow type.
-    const asStr = (v: unknown): string | undefined => typeof v === "string" ? v : undefined;
-    const asNum = (v: unknown): number | undefined => typeof v === "number" ? v : undefined;
-
+    // Subagent completion/failure events are forwarded to gateway via forwardEvent.
+    // Gateway handles filtering (direct call detection) and notifies agent via agent_notify.
+    // Agent-side status tracking is retained for dashboard display.
     session.on("subagent.completed", (event) => {
       const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
       if (sub !== undefined) sub.status = "completed";
-      const d = event.data as Record<string, unknown>;
-      subagentCompletionQueue.push({
-        toolCallId: event.data.toolCallId,
-        agentName: event.data.agentName,
-        status: "completed",
-        model: asStr(d["model"]),
-        totalToolCalls: asNum(d["totalToolCalls"]),
-        totalTokens: asNum(d["totalTokens"]),
-        durationMs: asNum(d["durationMs"]),
-      });
     });
     session.on("subagent.failed", (event) => {
       const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
       if (sub !== undefined) sub.status = "failed";
-      const d = event.data as Record<string, unknown>;
-      subagentCompletionQueue.push({
-        toolCallId: event.data.toolCallId,
-        agentName: event.data.agentName,
-        status: "failed",
-        error: asStr(d["error"]),
-        model: asStr(d["model"]),
-        totalToolCalls: asNum(d["totalToolCalls"]),
-        totalTokens: asNum(d["totalTokens"]),
-        durationMs: asNum(d["durationMs"]),
-      });
     });
     session.on("session.model_change", (event) => {
       if (entry.info.physicalSession !== undefined) {

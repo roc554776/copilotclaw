@@ -99,7 +99,7 @@ export class BuiltinChatChannel implements ChannelProvider {
     return false;
   }
 
-  onMessage(channelId: string, sender: "user" | "agent" | "cron", message: string): void {
+  onMessage(channelId: string, sender: "user" | "agent" | "cron" | "system", message: string): void {
     this.sseBroadcaster.broadcast({
       type: "new_message",
       channelId,

@@ -22,24 +22,11 @@ const KEEPALIVE_INSTRUCTION = `[SYSTEM] No user message received (keepalive cycl
 
 export type AgentStatusChange = "waiting" | "processing";
 
-export interface SubagentCompletionInfo {
-  toolCallId: string;
-  agentName: string;
-  status: "completed" | "failed";
-  error?: string | undefined;
-  model?: string | undefined;
-  totalToolCalls?: number | undefined;
-  totalTokens?: number | undefined;
-  durationMs?: number | undefined;
-}
-
 export interface ChannelToolDeps {
   channelId: string;
   keepaliveTimeoutMs?: number;
   abortSignal?: AbortSignal;
   onStatusChange?: (status: AgentStatusChange) => void;
-  /** Drain all pending subagent completion events. Returns and clears the queue. */
-  drainSubagentCompletions?: () => SubagentCompletionInfo[];
   /** Structured log function (error level). Falls back to structured JSON on console.error. */
   logError?: (message: string) => void;
 }
@@ -69,7 +56,7 @@ async function drainPendingViaIpc(channelId: string): Promise<NextInputResponse[
   return [];
 }
 
-/** Wait for pending_notify from gateway, with keepalive timeout.
+/** Wait for agent_notify from gateway, with keepalive timeout.
  *  Returns true if notified, false on timeout or abort. */
 function waitForPendingNotify(channelId: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
@@ -94,12 +81,12 @@ function waitForPendingNotify(channelId: string, timeoutMs: number, signal?: Abo
 
     const onAbort = () => { settle(false); };
 
-    streamEvents.on("pending_notify", onNotify);
+    streamEvents.on("agent_notify", onNotify);
     signal?.addEventListener("abort", onAbort, { once: true });
 
     function cleanup(): void {
       clearTimeout(timer);
-      streamEvents.removeListener("pending_notify", onNotify);
+      streamEvents.removeListener("agent_notify", onNotify);
       signal?.removeEventListener("abort", onAbort);
     }
   });
@@ -125,6 +112,7 @@ async function pollNextInputs(channelId: string, keepaliveTimeoutMs: number, sig
 function combineMessages(inputs: NextInputResponse[]): string {
   return inputs.map((i) => {
     if (i.sender === "cron") return `[CRON TASK] ${i.message}`;
+    if (i.sender === "system") return `[SYSTEM EVENT] ${i.message}`;
     return i.message;
   }).join("\n\n");
 }
@@ -185,28 +173,13 @@ export function createChannelTools(deps: ChannelToolDeps) {
         const keepaliveTimeout = deps.keepaliveTimeoutMs ?? DEFAULT_KEEPALIVE_TIMEOUT_MS;
         const inputs = await pollNextInputs(deps.channelId, keepaliveTimeout, deps.abortSignal);
 
-        // Drain subagent completions that occurred while waiting
-        const subagentCompletions = deps.drainSubagentCompletions?.() ?? [];
-        const subagentNotice = subagentCompletions.length > 0
-          ? "[SUBAGENT COMPLETED] " + subagentCompletions.map((c) =>
-              `${c.agentName} ${c.status}${c.error ? ` (error: ${c.error})` : ""}` +
-              `${c.totalTokens !== undefined ? ` [tokens: ${c.totalTokens}]` : ""}` +
-              `${c.durationMs !== undefined ? ` [${c.durationMs}ms]` : ""}`
-            ).join("; ")
-          : "";
-
         if (inputs.length === 0) {
-          if (subagentCompletions.length > 0) {
-            // Subagent finished while no user message — return subagent info
-            deps.onStatusChange?.("processing");
-            return { userMessage: subagentNotice + WAIT_INSTRUCTION };
-          }
           return { userMessage: KEEPALIVE_INSTRUCTION };
         }
         deps.onStatusChange?.("processing");
         pendingReplyExpected = true;
         const combined = combineMessages(inputs);
-        return { userMessage: combined + "\n\n" + subagentNotice + WAIT_INSTRUCTION };
+        return { userMessage: combined + WAIT_INSTRUCTION };
       } catch (err: unknown) {
         // Log to system log only — agent must not see this error.
         // AbortError (from shutdown) is also caught here intentionally —

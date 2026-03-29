@@ -123,7 +123,7 @@ describe("copilotclaw_wait", () => {
     expect(result.userMessage).toContain(WAIT_INSTRUCTION);
   });
 
-  it("drains after pending_notify push", async () => {
+  it("drains after agent_notify push", async () => {
     let callCount = 0;
     (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       callCount++;
@@ -138,9 +138,9 @@ describe("copilotclaw_wait", () => {
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
 
-    // Emit pending_notify shortly after wait starts polling
+    // Emit agent_notify shortly after wait starts polling
     setTimeout(() => {
-      streamEvents.emit("pending_notify", { channelId: "ch-notify", count: 1 });
+      streamEvents.emit("agent_notify", { channelId: "ch-notify" });
     }, 30);
 
     const result = await wait.handler({}, invocation) as { userMessage: string };

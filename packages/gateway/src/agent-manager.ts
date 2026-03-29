@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.36.0";
+export const MIN_AGENT_VERSION = "0.43.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -26,7 +26,7 @@ export interface AgentManagerOptions {
 
 export interface StreamMessageHandler {
   onChannelMessage?: (channelId: string, sender: string, message: string) => void;
-  onSessionEvent?: (sessionId: string, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
+  onSessionEvent?: (sessionId: string, channelId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
   onSystemPromptOriginal?: (model: string, prompt: string, capturedAt: string) => void;
   onSystemPromptSession?: (sessionId: string, model: string, prompt: string) => void;
   onDrainPending?: (channelId: string) => unknown[];
@@ -119,11 +119,12 @@ export class AgentManager {
       }
       case "session_event": {
         const sessionId = msg["sessionId"] as string;
+        const channelId = typeof msg["channelId"] === "string" ? msg["channelId"] as string : undefined;
         const eventType = (msg["eventType"] as string) ?? "unknown";
         const timestamp = (msg["timestamp"] as string) ?? new Date().toISOString();
         const data = (typeof msg["data"] === "object" && msg["data"] !== null ? msg["data"] : {}) as Record<string, unknown>;
         const parentId = typeof msg["parentId"] === "string" ? msg["parentId"] as string : undefined;
-        handler.onSessionEvent?.(sessionId, eventType, timestamp, data, parentId);
+        handler.onSessionEvent?.(sessionId, channelId, eventType, timestamp, data, parentId);
         break;
       }
       case "system_prompt_original": {
@@ -175,10 +176,12 @@ export class AgentManager {
     }
   }
 
-  /** Send a pending_notify to the agent via the stream. */
-  notifyPending(channelId: string, count: number): void {
+  /** Send a generic agent_notify to the agent via the stream.
+   *  Used for all notification types: pending messages, subagent completion, etc.
+   *  Agent side listens for this single event type and drains pending queue. */
+  notifyAgent(channelId: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
-    this.stream.send({ type: "pending_notify", channelId, count });
+    this.stream.send({ type: "agent_notify", channelId });
   }
 
   /** Ensure agent process is running and compatible.

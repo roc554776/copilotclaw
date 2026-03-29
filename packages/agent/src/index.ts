@@ -170,7 +170,7 @@ async function main(): Promise<void> {
   const sessionManager = new AgentSessionManager(managerOpts);
   ipc.setSessionManager(sessionManager);
 
-  // Listen for pending_notify push messages from gateway — start sessions as needed
+  // Listen for agent_notify push from gateway — start sessions as needed
   const pendingHandler = (msg: Record<string, unknown>) => {
     const channelId = msg["channelId"] as string | undefined;
     const count = typeof msg["count"] === "number" ? msg["count"] as number : 1;
@@ -185,7 +185,7 @@ async function main(): Promise<void> {
       sessionManager.startSession({ boundChannelId: channelId });
     }
   };
-  streamEvents.on("pending_notify", pendingHandler);
+  streamEvents.on("agent_notify", pendingHandler);
 
   // Periodic stale session and max-age checks (still interval-based)
   const staleCheckTimer = setInterval(async () => {
@@ -236,7 +236,7 @@ async function main(): Promise<void> {
   });
 
   log("shutting down");
-  streamEvents.removeListener("pending_notify", pendingHandler);
+  streamEvents.removeListener("agent_notify", pendingHandler);
   clearInterval(staleCheckTimer);
   await sessionManager.stopAll();
   await ipc.close();

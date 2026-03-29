@@ -9,7 +9,7 @@ export interface Channel {
 export interface Message {
   id: string;
   channelId: string;
-  sender: "user" | "agent";
+  sender: "user" | "agent" | "cron" | "system";
   message: string;
   createdAt: string;
 }

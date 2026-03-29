@@ -844,74 +844,9 @@ describe("AgentSessionManager — custom agents configuration", () => {
   });
 });
 
-describe("AgentSessionManager — subagent completion notification", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("injects subagent completion info via onPostToolUse additionalContext", async () => {
-    const mockSession = makeMockCopilotSession("idle");
-    mockSession.send.mockImplementation(async () => "msg-id");
-
-    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
-    installClientMock(createSessionSpy);
-
-
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-
-    manager.startSession({ boundChannelId: "ch-sub-notify" });
-    await waitForPhysicalSession(manager);
-
-    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
-    const hook = config.hooks.onPostToolUse;
-
-    // Emit subagent.completed event
-    mockSession.emit("subagent.completed", {
-      data: { toolCallId: "tc-1", agentName: "worker", agentDisplayName: "Worker" },
-    });
-
-    // Next onPostToolUse (parent tool) should include subagent peek notification
-    const result = await hook({ toolName: "copilotclaw_wait" });
-    expect(result?.additionalContext).toContain("[SUBAGENT UPDATE]");
-    expect(result?.additionalContext).toContain("worker completed");
-    // onPostToolUse peeks the queue (does not drain) — wait is the sole drain point.
-    // So the second call still sees the same completion info.
-    const result2 = await hook({ toolName: "copilotclaw_wait" });
-    expect(result2?.additionalContext).toContain("[SUBAGENT UPDATE]");
-
-    mockSession.emit("session.idle");
-    await wait(30);
-  });
-
-  it("injects subagent.failed info with error message", async () => {
-    const mockSession = makeMockCopilotSession("idle");
-    mockSession.send.mockImplementation(async () => "msg-id");
-
-    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
-    installClientMock(createSessionSpy);
-
-
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-
-    manager.startSession({ boundChannelId: "ch-sub-fail" });
-    await waitForPhysicalSession(manager);
-
-    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
-    const hook = config.hooks.onPostToolUse;
-
-    mockSession.emit("subagent.failed", {
-      data: { toolCallId: "tc-2", agentName: "worker", agentDisplayName: "Worker", error: "timeout" },
-    });
-
-    const result = await hook({ toolName: "copilotclaw_wait" });
-    expect(result?.additionalContext).toContain("[SUBAGENT UPDATE]");
-    expect(result?.additionalContext).toContain("worker failed");
-    expect(result?.additionalContext).toContain("timeout");
-
-    mockSession.emit("session.idle");
-    await wait(30);
-  });
-});
+// Subagent completion notification tests removed — subagent completion
+// is now handled by gateway (inserts system message + agent_notify).
+// Agent-side subagentCompletionQueue no longer exists.
 
 describe("AgentSessionManager — session failure backoff", () => {
   afterEach(() => {

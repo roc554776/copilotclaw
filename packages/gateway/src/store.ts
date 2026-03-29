@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 export interface Message {
   id: string;
   channelId: string;
-  sender: "user" | "agent" | "cron";
+  sender: "user" | "agent" | "cron" | "system";
   message: string;
   createdAt: string;
 }
@@ -58,7 +58,7 @@ export class Store {
     1: (db) => {
       db.exec(`
         CREATE TABLE IF NOT EXISTS message_senders (sender TEXT PRIMARY KEY);
-        INSERT OR IGNORE INTO message_senders (sender) VALUES ('user'), ('agent'), ('cron');
+        INSERT OR IGNORE INTO message_senders (sender) VALUES ('user'), ('agent'), ('cron'), ('system');
       `);
       const checkInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").get() as { sql: string } | undefined;
       if (checkInfo?.sql && checkInfo.sql.includes("CHECK")) {
@@ -95,7 +95,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS message_senders (
         sender TEXT PRIMARY KEY
       );
-      INSERT OR IGNORE INTO message_senders (sender) VALUES ('user'), ('agent'), ('cron');
+      INSERT OR IGNORE INTO message_senders (sender) VALUES ('user'), ('agent'), ('cron'), ('system');
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         channelId TEXT NOT NULL,
@@ -206,7 +206,7 @@ export class Store {
     return result.changes > 0;
   }
 
-  addMessage(channelId: string, sender: "user" | "agent" | "cron", message: string): Message | undefined {
+  addMessage(channelId: string, sender: "user" | "agent" | "cron" | "system", message: string): Message | undefined {
     const ch = this.getChannel(channelId);
     if (ch === undefined) return undefined;
     const msg: Message = {
@@ -218,7 +218,7 @@ export class Store {
     };
     this.db.transaction(() => {
       this.db.prepare("INSERT INTO messages (id, channelId, sender, message, createdAt) VALUES (?, ?, ?, ?, ?)").run(msg.id, msg.channelId, msg.sender, msg.message, msg.createdAt);
-      if (sender === "user" || sender === "cron") {
+      if (sender === "user" || sender === "cron" || sender === "system") {
         this.db.prepare("INSERT INTO pending_queue (channelId, messageId) VALUES (?, ?)").run(channelId, msg.id);
       }
     })();
