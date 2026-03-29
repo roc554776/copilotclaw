@@ -8,14 +8,11 @@ import { runSessionLoop } from "./session-loop.js";
 import { requestFromGateway, sendToGateway } from "./ipc-server.js";
 import { createChannelTools, type SubagentCompletionInfo } from "./tools/channel.js";
 
-// The only tool exclusive to the channel-operator (parent agent).
-// Subagents (worker) never receive copilotclaw_wait — they use
-// copilotclaw_send_message and copilotclaw_list_messages which are shared.
-// Used to gate onPostToolUse reminder/notification injection.
-// Note: onPostToolUse does NOT fire for subagent tool calls (confirmed via debug logging).
-// The gate on copilotclaw_wait is for context conservation, not subagent exclusion —
-// firing on every tool call would waste context tokens.
-const PARENT_ONLY_TOOL = "copilotclaw_wait";
+// onPostToolUse hook fires only for the parent agent (channel-operator) tool calls.
+// Subagent tool calls do NOT trigger the hook — confirmed via debug logging (v0.39.0).
+// The CLI sends hooks.invoke RPC only for parent agent tools; the SDK itself has no
+// parent/subagent distinction (it would handle hooks for either if the CLI sent them).
+// Therefore, no toolName gating is needed for subagent exclusion.
 
 // --- Custom Agent definitions ---
 
@@ -547,12 +544,7 @@ export class AgentSessionManager {
           try {
             if (signal.aborted) return;
 
-            // Gate on copilotclaw_wait to conserve context tokens.
-            // onPostToolUse only fires for parent agent tools (not subagent tools),
-            // but firing on every parent tool call would still waste context.
-            const isParentAgentTool = input.toolName === PARENT_ONLY_TOOL;
-            this.debug(`postToolUse: tool=${input.toolName} isParent=${isParentAgentTool}`);
-            if (!isParentAgentTool) return;
+            this.debug(`postToolUse: tool=${input.toolName}`);
 
             const parts: string[] = [];
 
