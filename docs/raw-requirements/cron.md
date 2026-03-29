@@ -20,6 +20,11 @@
 - wait tool を修正して、 cron 的な sender のメッセージが来た場合は、そのことを伝えるようにしましょう。
 - 障害で、 cron のメッセージが溜まったままになるのはまずいので、未処理のまま stuck している場合は同じメッセージを重複して追加しないようにしましょう。
 
+<!-- 2026-03-29 -->
+## cron の enable/disable
+
+- cron は enable/disable で切り替えられるようにする。
+
 ## chat operator プロンプトの修正
 
 - chat operator のプロンプトの修正をして、 cron 的なのからタスクが来ることがあること、その場合には worker subagent に委譲することをマージしましょう。

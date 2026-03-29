@@ -125,6 +125,7 @@
 - Gateway-Agent 責務の再配置: 抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理
 - gateway 停止時の物理セッション延命（実装確認済み — copilotclaw_wait のエラー不可侵性により IPC 切断中も keepalive cycle が継続）
 - gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）
+- cron ジョブの enable/disable 切り替え（CronJobConfig に `enabled` フィールド追加）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）

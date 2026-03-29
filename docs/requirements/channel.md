@@ -32,6 +32,7 @@ config に設定した定期タスクを、チャンネル経由で agent に実
 - `copilotclaw_wait` ツールは cron sender のメッセージを区別して伝える
 - 同一 cron ジョブのメッセージが未処理のまま残っている場合、重複してメッセージを追加しない
 - まずは channel に直接紐づく agent のケースのみ実現する（将来はチャンネルに紐付かない cron も対応）
+- 各 cron ジョブは enabled/disabled を切り替えられる（未実現）
 
 ### Req: chat operator プロンプトへの cron 対応と subagent 利用ルールの追加（v0.41.0 で実現済み）
 
