@@ -369,6 +369,35 @@ channel binding の永続化:
 - dashboard では停止済みの物理セッションを折りたたみ表示（デフォルト折りたたみ、クリックで展開）する
 - イベントページへのリンクも停止済みセッションから引き続きアクセス可能にする
 
+### Gateway-Agent 責務の再配置（未実現）
+
+gateway process だけ最新版を起動しても最新機能が使えるように、責務を再配置する。
+
+**動機:**
+- 現状、システムプロンプト・custom agent 定義・hook ロジック等は全て agent process のコード（`agent-session-manager.ts`）に埋め込まれている
+- agent process を更新するにはプロセス再起動が必要であり、物理セッションが失われる
+- gateway process は物理セッションを持たないため、再起動コストが低い
+- 設定値と抽象セッション管理を gateway 側に寄せることで、gateway restart だけで最新機能を反映できるようにする
+
+**移行対象:**
+
+| 現在の所在 | 移行先 | 内容 |
+|---|---|---|
+| agent-session-manager.ts | gateway の agent モジュール | 抽象セッション管理（channel binding、suspended 状態、revive 判定、token 累積追跡） |
+| agent-session-manager.ts | gateway → IPC 経由 | CHANNEL_OPERATOR_PROMPT、WORKER_CONFIG、SYSTEM_REMINDER |
+| agent-session-manager.ts | gateway → IPC 経由 | custom agent 構成（name、description、prompt、infer） |
+| agent-session-manager.ts | gateway → IPC 経由 | onPostToolUse hook のリマインド内容 |
+
+**agent process に残る責務:**
+- 物理セッションの作成・実行・停止（`createSession` / `resumeSession` / `disconnect`）
+- SDK との直接通信（Copilot CLI サブプロセスの管理）
+- ツールハンドラの実行（`copilotclaw_wait` 等のブロッキング処理）
+
+**段階的移行:**
+- 完全な再起動不要化は困難（SDK セッションは agent process に紐づく）
+- すぐに移動できる設定（プロンプト文字列、agent 構成、リマインド内容）を先行して IPC 経由に移行する
+- 抽象セッション管理の移動はより大きな変更となるため、後続フェーズで対応する
+
 ### 物理 Session 停止後の記憶保持
 
 物理 session が停止した後に再開する際、直前のコンテキスト（会話履歴や作業状態）をできる限り保持する。

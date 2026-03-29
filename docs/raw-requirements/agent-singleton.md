@@ -30,6 +30,14 @@
   - gateway が agent process の socket に接続する形にする
   - agent process から gateway への通信を、双方向にすることは問題ない
 
+<!-- 2026-03-29 -->
+## Gateway-Agent 責務の再配置
+
+- システムプロンプトなど、各種の設定値は gateway 側 process の agent 用のモジュールにおいて、 IPC 経由で送るようにしてください。
+- 完全に再起動不要にするのはまだ難しいですが、すぐに移動できる設定は徹底して移動させましょう。
+- abstract session の管理は、 gateway process 側の agent モジュールに移動しちゃってください。 agent process は物理セッションだけを管理すれば ok。
+- 理由: gateway process だけ最新版を起動しても、できるだけ最新機能が使えるようにするため。
+
 ## agent プロセスの責務（既存）
 
 - agent プロセスの責務
