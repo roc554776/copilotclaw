@@ -360,6 +360,66 @@ describe("SessionOrchestrator", () => {
     });
   });
 
+  describe("reconcileWithAgent", () => {
+    it("revives suspended session when agent reports it running", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-1");
+      orch.suspendSession(sessionId);
+      expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);
+
+      orch.reconcileWithAgent([{ sessionId, channelId: "ch-1", status: "waiting" }]);
+
+      expect(orch.hasActiveSessionForChannel("ch-1")).toBe(true);
+      const session = orch.getSessionStatuses()[sessionId];
+      expect(session.status).toBe("waiting");
+    });
+
+    it("adopts unknown session reported by agent", () => {
+      const orch = new SessionOrchestrator();
+      orch.reconcileWithAgent([{ sessionId: "agent-sess-1", channelId: "ch-new", status: "processing" }]);
+
+      expect(orch.hasActiveSessionForChannel("ch-new")).toBe(true);
+      const session = orch.getSessionStatuses()["agent-sess-1"];
+      expect(session).toBeDefined();
+      expect(session.status).toBe("processing");
+      expect(session.channelId).toBe("ch-new");
+    });
+
+    it("remaps sessionId when agent's id differs from orchestrator's", () => {
+      const orch = new SessionOrchestrator();
+      const orchSessionId = orch.startSession("ch-1");
+      orch.suspendSession(orchSessionId);
+
+      orch.reconcileWithAgent([{ sessionId: "agent-different-id", channelId: "ch-1", status: "waiting" }]);
+
+      // Old id should be gone
+      expect(orch.getSessionStatuses()[orchSessionId]).toBeUndefined();
+      // New id should exist
+      const session = orch.getSessionStatuses()["agent-different-id"];
+      expect(session).toBeDefined();
+      expect(session.status).toBe("waiting");
+      expect(orch.getSessionIdForChannel("ch-1")).toBe("agent-different-id");
+    });
+
+    it("does not affect already-active sessions", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-1");
+      orch.updateSessionStatus(sessionId, "processing");
+
+      orch.reconcileWithAgent([{ sessionId, channelId: "ch-1", status: "waiting" }]);
+
+      // Should remain processing (already active, no change needed)
+      const session = orch.getSessionStatuses()[sessionId];
+      expect(session.status).toBe("processing");
+    });
+
+    it("handles empty running sessions list", () => {
+      const orch = new SessionOrchestrator();
+      orch.startSession("ch-1");
+      expect(() => orch.reconcileWithAgent([])).not.toThrow();
+    });
+  });
+
   describe("legacy migration", () => {
     const dbPath = join(TEST_DIR, "migration-test.db");
     const legacyPath = join(TEST_DIR, "agent-bindings.json");

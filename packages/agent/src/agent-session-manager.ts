@@ -1,7 +1,3 @@
-import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
@@ -46,17 +42,13 @@ export interface AgentSessionInfo {
   boundChannelId?: string | undefined;
   physicalSession?: PhysicalSessionSummary | undefined;
   subagentSessions?: SubagentInfo[] | undefined;
-  /** Cumulative token usage across all physical sessions (survives suspend/revive). */
-  cumulativeInputTokens?: number | undefined;
-  cumulativeOutputTokens?: number | undefined;
-  /** History of stopped physical sessions (most recent last). Preserved across suspend/revive. */
-  physicalSessionHistory?: PhysicalSessionSummary[] | undefined;
 }
 
 interface AgentSessionEntry {
   sessionId: string;
   copilotSessionId?: string | undefined; // SDK session ID for resumeSession
   copilotSession?: CopilotSession | undefined; // Live SDK session for getMessages()
+  resolvedModel?: string | undefined; // Model resolved by gateway
   info: AgentSessionInfo;
   client: CopilotClient;
   abortController: AbortController;
@@ -83,6 +75,8 @@ export interface AgentSessionManagerOptions {
     maxSessionAgeMs: number;
     rapidFailureThresholdMs: number;
     backoffDurationMs: number;
+    keepaliveTimeoutMs?: number;
+    reminderThresholdPercent?: number;
   };
   /** Structured log function (info level). Falls back to structured JSON on console.error. */
   log?: (message: string) => void;
@@ -91,9 +85,15 @@ export interface AgentSessionManagerOptions {
 }
 
 export interface StartSessionOptions {
+  /** Session ID assigned by the gateway orchestrator. Agent MUST use this ID (not generate its own)
+   *  so that physical_session_started/ended messages reference the correct orchestrator session. */
+  sessionId: string;
   boundChannelId?: string;
   /** SDK session ID to resume instead of creating a new one. Used by deferred resume. */
   copilotSessionId?: string;
+  /** Resolved model name from gateway. When set, agent uses this model directly
+   *  instead of running its own model selection algorithm. */
+  resolvedModel?: string;
 }
 
 // Session timing values are owned by gateway (agent-config.ts) and pushed via IPC.
@@ -110,6 +110,8 @@ export class AgentSessionManager {
   private readonly workerConfig: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
   private readonly systemReminder: string;
   private readonly initialPrompt: string;
+  private readonly keepaliveTimeoutMs: number;
+  private readonly reminderThresholdPercent: number;
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
   private readonly debug: (message: string) => void;
@@ -132,6 +134,8 @@ export class AgentSessionManager {
     this.workerConfig = options.prompts.worker;
     this.systemReminder = options.prompts.systemReminder;
     this.initialPrompt = options.prompts.initialPrompt;
+    this.keepaliveTimeoutMs = options.prompts.keepaliveTimeoutMs ?? 25 * 60 * 1000;
+    this.reminderThresholdPercent = options.prompts.reminderThresholdPercent ?? 0.10;
     this.log = options.log ?? defaultLog;
     this.logError = options.logError ?? defaultLogError;
     this.debug = this.debugLogLevel === "debug"
@@ -207,16 +211,27 @@ export class AgentSessionManager {
     return result;
   }
 
+  /** Return a list of currently running (non-suspended) sessions for stream reconciliation.
+   *  Used when gateway reconnects to discover which physical sessions are still alive. */
+  getRunningSessionsSummary(): Array<{ sessionId: string; channelId: string; status: string }> {
+    const result: Array<{ sessionId: string; channelId: string; status: string }> = [];
+    for (const [sessionId, entry] of this.sessions) {
+      if (entry.info.status !== "suspended" && entry.info.boundChannelId !== undefined) {
+        result.push({ sessionId, channelId: entry.info.boundChannelId, status: entry.info.status });
+      }
+    }
+    return result;
+  }
+
   getSessionStatus(sessionId: string): AgentSessionInfo | undefined {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return undefined;
     return { ...entry.info };
   }
 
-  startSession(options?: StartSessionOptions): string {
-    const boundChannelId = options?.boundChannelId;
+  startSession(options: StartSessionOptions): string {
+    const { sessionId, boundChannelId, copilotSessionId, resolvedModel } = options;
 
-    const sessionId = randomUUID();
     const abortController = new AbortController();
     const client = this.createClient();
     const generation = ++this.generationCounter;
@@ -237,56 +252,18 @@ export class AgentSessionManager {
     }
 
     // Propagate SDK session ID for resume before runSession reads it
-    if (options?.copilotSessionId !== undefined) {
-      entry.copilotSessionId = options.copilotSessionId;
+    if (copilotSessionId !== undefined) {
+      entry.copilotSessionId = copilotSessionId;
+    }
+
+    // Store resolved model from gateway for use in runSession
+    if (resolvedModel !== undefined) {
+      entry.resolvedModel = resolvedModel;
     }
 
     entry.sessionPromise = this.attachSessionLifecycle(entry, client);
     this.sessions.set(sessionId, entry);
     return sessionId;
-  }
-
-  /** Ensure workspace directory has required files and git init before session start. */
-  private ensureWorkspaceReady(): void {
-    if (this.workingDirectory === undefined) return;
-    const ws = this.workingDirectory;
-    mkdirSync(ws, { recursive: true });
-
-    // Git init if not already initialized and git is available
-    if (!existsSync(join(ws, ".git"))) {
-      const check = spawnSync("git", ["--version"], { encoding: "utf-8", stdio: "pipe" });
-      if (check.status === 0) {
-        spawnSync("git", ["init"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
-      }
-    }
-
-    // Create missing bootstrap files (minimal — templates live in gateway)
-    const defaults: Record<string, string> = {
-      "SOUL.md": "# SOUL.md - Who You Are\n\n_Customize this file to define your agent's persona._\n",
-      "USER.md": "# USER.md - About the User\n\n_Fill in information about yourself._\n",
-      "TOOLS.md": "# TOOLS.md - Tool Notes\n\n_Keep local notes about tools and configurations here._\n",
-      "MEMORY.md": "# MEMORY.md - Long-Term Memory\n\n_Your curated long-term memory._\n",
-    };
-    for (const [file, content] of Object.entries(defaults)) {
-      const p = join(ws, file);
-      if (!existsSync(p)) writeFileSync(p, content, "utf-8");
-    }
-    const memDir = join(ws, "memory");
-    if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
-    const gitkeep = join(memDir, ".gitkeep");
-    if (!existsSync(gitkeep)) writeFileSync(gitkeep, "", "utf-8");
-
-    // Initial commit if no commits yet
-    if (existsSync(join(ws, ".git"))) {
-      const logCheck = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
-      if (logCheck.status !== 0) {
-        spawnSync("git", ["add", "-A"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
-        const diffIndex = spawnSync("git", ["diff", "--cached", "--quiet"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
-        if (diffIndex.status !== 0) {
-          spawnSync("git", ["commit", "-m", "Initial workspace setup"], { cwd: ws, encoding: "utf-8", stdio: "pipe" });
-        }
-      }
-    }
   }
 
   private async runSession(entry: AgentSessionEntry): Promise<void> {
@@ -295,11 +272,9 @@ export class AgentSessionManager {
       throw new Error("channel-less sessions not yet supported");
     }
 
-    // Ensure workspace is ready before starting the physical session
-    this.ensureWorkspaceReady();
-
     const { sendMessage, wait, listMessages } = createChannelTools({
       channelId,
+      keepaliveTimeoutMs: this.keepaliveTimeoutMs,
       abortSignal: entry.abortController.signal,
       onStatusChange: (status) => {
         entry.info.status = status;
@@ -389,8 +364,8 @@ export class AgentSessionManager {
       } : {}),
     };
 
-    // Resolve model dynamically from SDK model list
-    const resolvedModel = await this.resolveModel(entry.client);
+    // Use gateway-resolved model if available, otherwise fall back to local resolution
+    const resolvedModel = entry.resolvedModel ?? await this.resolveModel(entry.client);
 
     // Build systemMessage with transform callbacks to capture original system prompt.
     // Each known section gets a pass-through callback that captures the content and
@@ -586,7 +561,7 @@ export class AgentSessionManager {
       const limit = event.data.tokenLimit;
       if (limit > 0) {
         reminderState.currentUsagePercent = event.data.currentTokens / limit;
-        if (reminderState.currentUsagePercent >= reminderState.lastReminderPercent + 0.10) {
+        if (reminderState.currentUsagePercent >= reminderState.lastReminderPercent + this.reminderThresholdPercent) {
           reminderState.needsReminder = true;
         }
       }
@@ -679,34 +654,11 @@ export class AgentSessionManager {
     }
   }
 
-  /** Transition an abstract session to suspended state.
-   *  The physical session is gone but the abstract session survives for later revival.
-   *  Cumulative token usage is accumulated from the physical session before clearing. */
+  /** Transition a session to suspended state.
+   *  Token accumulation and physical session history are managed by gateway's
+   *  SessionOrchestrator (via physical_session_ended message). Agent only clears
+   *  its local references. */
   suspendSessionState(entry: AgentSessionEntry): void {
-    // Accumulate token usage from the physical session being suspended
-    const ps = entry.info.physicalSession;
-    if (ps !== undefined) {
-      // Preserve stopped physical session in history for dashboard visibility
-      // If the last entry has the same sessionId (resumed session), update it instead of duplicating
-      const history = entry.info.physicalSessionHistory ?? [];
-      const lastEntry = history.length > 0 ? history[history.length - 1] : undefined;
-      if (lastEntry !== undefined && lastEntry.sessionId === ps.sessionId) {
-        // Same physical session resumed — compute token delta since last suspend
-        const deltaIn = (ps.totalInputTokens ?? 0) - (lastEntry.totalInputTokens ?? 0);
-        const deltaOut = (ps.totalOutputTokens ?? 0) - (lastEntry.totalOutputTokens ?? 0);
-        entry.info.cumulativeInputTokens = (entry.info.cumulativeInputTokens ?? 0) + Math.max(0, deltaIn);
-        entry.info.cumulativeOutputTokens = (entry.info.cumulativeOutputTokens ?? 0) + Math.max(0, deltaOut);
-        history[history.length - 1] = { ...ps, currentState: "stopped" };
-      } else {
-        // New physical session — accumulate full token count
-        entry.info.cumulativeInputTokens = (entry.info.cumulativeInputTokens ?? 0) + (ps.totalInputTokens ?? 0);
-        entry.info.cumulativeOutputTokens = (entry.info.cumulativeOutputTokens ?? 0) + (ps.totalOutputTokens ?? 0);
-        history.push({ ...ps, currentState: "stopped" });
-        // Keep only the last 10 physical sessions to prevent unbounded growth
-        if (history.length > 10) history.splice(0, history.length - 10);
-      }
-      entry.info.physicalSessionHistory = history;
-    }
     entry.info.status = "suspended";
     entry.copilotSession = undefined;
     entry.info.physicalSession = undefined;

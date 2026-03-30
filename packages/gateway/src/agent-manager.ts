@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.49.0";
+export const MIN_AGENT_VERSION = "0.50.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -24,6 +24,12 @@ export interface AgentManagerOptions {
   agentScript?: string;
 }
 
+export interface RunningSessionReport {
+  sessionId: string;
+  channelId: string;
+  status: string;
+}
+
 export interface StreamMessageHandler {
   onChannelMessage?: (channelId: string, sender: string, message: string) => void;
   onSessionEvent?: (sessionId: string, channelId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
@@ -31,6 +37,7 @@ export interface StreamMessageHandler {
   onSystemPromptSession?: (sessionId: string, model: string, prompt: string) => void;
   onPhysicalSessionStarted?: (sessionId: string, copilotSessionId: string, model: string) => void;
   onPhysicalSessionEnded?: (sessionId: string, reason: "idle" | "error" | "aborted", copilotSessionId: string, elapsedMs: number, totalInputTokens: number, totalOutputTokens: number, error?: string) => void;
+  onRunningSessionsReport?: (sessions: RunningSessionReport[]) => void;
   onDrainPending?: (channelId: string) => unknown[];
   onPeekPending?: (channelId: string) => unknown | null;
   onFlushPending?: (channelId: string) => number;
@@ -180,6 +187,11 @@ export class AgentManager {
         const limit = typeof msg["limit"] === "number" ? msg["limit"] as number : 5;
         const data = handler.onListMessages?.(channelId, limit) ?? [];
         this.stream?.send({ type: "response", id, data });
+        break;
+      }
+      case "running_sessions": {
+        const sessions = (msg["sessions"] as RunningSessionReport[]) ?? [];
+        handler.onRunningSessionsReport?.(sessions);
         break;
       }
       case "physical_session_started": {

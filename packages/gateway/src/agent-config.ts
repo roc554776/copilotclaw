@@ -22,6 +22,52 @@ export interface AgentPromptConfig {
   maxSessionAgeMs: number;
   rapidFailureThresholdMs: number;
   backoffDurationMs: number;
+  keepaliveTimeoutMs: number;
+  /** Context usage percentage increment that triggers a system prompt reminder (0.0–1.0). */
+  reminderThresholdPercent: number;
+}
+
+interface ModelInfo {
+  id: string;
+  billing?: { multiplier?: number };
+}
+
+/** Resolve which model to use for a session, applying gateway-side policy.
+ *  This runs on gateway so that updating the selection algorithm only requires gateway restart.
+ *  @param modelsResponse - result from agent's models IPC RPC
+ *  @param configModel - user-configured model (from config.json)
+ *  @param zeroPremium - whether to restrict to non-premium models
+ */
+export function resolveModel(
+  modelsResponse: Record<string, unknown> | null,
+  configModel: string | null,
+  zeroPremium: boolean,
+): string | undefined {
+  if (modelsResponse === null) return undefined; // agent unavailable, let agent fall back
+
+  const models = modelsResponse["models"] as ModelInfo[] | undefined;
+  if (!Array.isArray(models) || models.length === 0) return undefined;
+
+  const sorted = [...models].sort((a, b) =>
+    (a.billing?.multiplier ?? Infinity) - (b.billing?.multiplier ?? Infinity),
+  );
+  const nonPremium = sorted.filter((m) => m.billing?.multiplier === 0);
+
+  if (zeroPremium) {
+    if (nonPremium.length === 0) return undefined; // let agent throw
+    if (configModel !== undefined && configModel !== null) {
+      const modelInfo = models.find((m) => m.id === configModel);
+      if (modelInfo !== undefined && modelInfo.billing?.multiplier !== 0) {
+        return nonPremium[0]!.id; // override premium model
+      }
+      return configModel;
+    }
+    return nonPremium[0]!.id;
+  }
+
+  if (configModel !== undefined && configModel !== null) return configModel;
+
+  return sorted[0]!.id;
 }
 
 const CHANNEL_OPERATOR_PROMPT =
@@ -122,5 +168,7 @@ export function getAgentPromptConfig(): AgentPromptConfig {
     maxSessionAgeMs: 2 * 24 * 60 * 60 * 1000, // 2 days
     rapidFailureThresholdMs: 30_000, // session lasted < 30s = rapid failure
     backoffDurationMs: 60_000, // wait 60s before retrying
+    keepaliveTimeoutMs: 25 * 60 * 1000, // 25 minutes
+    reminderThresholdPercent: 0.10, // remind every 10% context usage increase
   };
 }

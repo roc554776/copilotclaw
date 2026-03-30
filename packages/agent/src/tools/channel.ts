@@ -3,8 +3,6 @@ import { requestFromGateway, sendToGateway, streamEvents } from "../ipc-server.j
 
 const WAIT_TOOL_NAME = "copilotclaw_wait";
 
-const DEFAULT_KEEPALIVE_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutes
-
 const WAIT_INSTRUCTION =
   `\n\n---\n` +
   `[SYSTEM] Required workflow: (A) Call copilotclaw_send_message with your complete reply, ` +
@@ -24,7 +22,8 @@ export type AgentStatusChange = "waiting" | "processing";
 
 export interface ChannelToolDeps {
   channelId: string;
-  keepaliveTimeoutMs?: number;
+  /** Keepalive timeout in milliseconds. Sent from gateway via config. */
+  keepaliveTimeoutMs: number;
   abortSignal?: AbortSignal;
   onStatusChange?: (status: AgentStatusChange) => void;
   /** Structured log function (error level). Falls back to structured JSON on console.error. */
@@ -170,7 +169,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
         }
 
         deps.onStatusChange?.("waiting");
-        const keepaliveTimeout = deps.keepaliveTimeoutMs ?? DEFAULT_KEEPALIVE_TIMEOUT_MS;
+        const keepaliveTimeout = deps.keepaliveTimeoutMs;
         const inputs = await pollNextInputs(deps.channelId, keepaliveTimeout, deps.abortSignal);
 
         if (inputs.length === 0) {

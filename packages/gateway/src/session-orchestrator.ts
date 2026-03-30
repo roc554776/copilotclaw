@@ -363,6 +363,55 @@ export class SessionOrchestrator {
     }
   }
 
+  /**
+   * Reconcile orchestrator state with actually-running sessions reported by agent.
+   * Called when agent stream (re)connects to prevent dual-session on gateway restart.
+   *
+   * For each running session in agent:
+   *   - If orchestrator has a suspended session for that channel, revive it
+   *   - If orchestrator has no session for that channel, create one
+   * This ensures the orchestrator knows about sessions that survived a gateway restart.
+   */
+  reconcileWithAgent(runningSessions: Array<{ sessionId: string; channelId: string; status: string }>): void {
+    for (const running of runningSessions) {
+      const existingSessionId = this.channelBindings.get(running.channelId);
+      if (existingSessionId !== undefined) {
+        const existing = this.sessions.get(existingSessionId);
+        if (existing !== undefined && existing.status === "suspended") {
+          // Revive the suspended session — the physical session is still alive in agent
+          // Use the agent's sessionId since that's what physical_session_started/ended will reference
+          if (existingSessionId !== running.sessionId) {
+            // SessionId mismatch (legacy or agent created its own) — remap
+            this.sessions.delete(existingSessionId);
+            this.deleteSessionFromDb(existingSessionId);
+            existing.sessionId = running.sessionId;
+            this.sessions.set(running.sessionId, existing);
+            this.channelBindings.set(running.channelId, running.sessionId);
+          }
+          existing.status = running.status === "waiting" ? "waiting" : running.status === "processing" ? "processing" : "starting";
+          this.persistSession(existing);
+          console.error(`[orchestrator] reconciled: revived session ${running.sessionId.slice(0, 8)} for channel ${running.channelId.slice(0, 8)}`);
+        }
+        // If already active, no action needed
+      } else {
+        // No orchestrator session for this channel — create one to track the running session
+        const session: AbstractSession = {
+          sessionId: running.sessionId,
+          status: running.status === "waiting" ? "waiting" : running.status === "processing" ? "processing" : "starting",
+          channelId: running.channelId,
+          startedAt: new Date().toISOString(),
+          cumulativeInputTokens: 0,
+          cumulativeOutputTokens: 0,
+          physicalSessionHistory: [],
+        };
+        this.sessions.set(running.sessionId, session);
+        this.channelBindings.set(running.channelId, running.sessionId);
+        this.persistSession(session);
+        console.error(`[orchestrator] reconciled: adopted session ${running.sessionId.slice(0, 8)} for channel ${running.channelId.slice(0, 8)}`);
+      }
+    }
+  }
+
   /** Close the database connection. */
   close(): void {
     this.db.close();

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
-import { listenIpc, streamEvents } from "./ipc-server.js";
+import { listenIpc, sendToGateway, streamEvents } from "./ipc-server.js";
 import { initOtel, getLogger, shutdownOtel } from "./otel.js";
 import { StructuredLogger } from "./structured-logger.js";
 import { type AuthConfig, resolveToken } from "./token-resolver.js";
@@ -31,6 +31,8 @@ interface AgentPromptConfig {
   maxSessionAgeMs: number;
   rapidFailureThresholdMs: number;
   backoffDurationMs: number;
+  keepaliveTimeoutMs?: number;
+  reminderThresholdPercent?: number;
 }
 
 interface GatewayConfig {
@@ -165,13 +167,26 @@ async function main(): Promise<void> {
   const sessionManager = new AgentSessionManager(managerOpts);
   ipc.setSessionManager(sessionManager);
 
+  // Report running sessions when gateway (re)connects stream.
+  // This allows gateway to reconcile its orchestrator state with actually-running
+  // physical sessions, preventing dual-session on gateway restart.
+  const streamConnectedHandler = () => {
+    const running = sessionManager.getRunningSessionsSummary();
+    log(`stream connected, reporting ${running.length} running session(s)`);
+    sendToGateway({ type: "running_sessions", sessions: running });
+  };
+  streamEvents.on("stream_connected", streamConnectedHandler);
+
   // Gateway-driven physical session commands (Phase 3)
   const startPhysicalSessionHandler = (msg: Record<string, unknown>) => {
+    const sessionId = msg["sessionId"] as string;
     const channelId = msg["channelId"] as string;
     const copilotSessionId = msg["copilotSessionId"] as string | undefined;
-    log(`start_physical_session: channel=${channelId.slice(0, 8)}, copilotSession=${copilotSessionId ?? "(new)"}`);
-    const opts: { boundChannelId: string; copilotSessionId?: string } = { boundChannelId: channelId };
+    const resolvedModel = msg["model"] as string | undefined;
+    log(`start_physical_session: session=${sessionId.slice(0, 8)}, channel=${channelId.slice(0, 8)}, copilotSession=${copilotSessionId ?? "(new)"}, model=${resolvedModel ?? "(auto)"}`);
+    const opts: import("./agent-session-manager.js").StartSessionOptions = { sessionId, boundChannelId: channelId };
     if (copilotSessionId !== undefined) opts.copilotSessionId = copilotSessionId;
+    if (resolvedModel !== undefined) opts.resolvedModel = resolvedModel;
     sessionManager.startSession(opts);
   };
   streamEvents.on("start_physical_session", startPhysicalSessionHandler);
@@ -202,6 +217,7 @@ async function main(): Promise<void> {
   });
 
   log("shutting down");
+  streamEvents.removeListener("stream_connected", streamConnectedHandler);
   streamEvents.removeListener("start_physical_session", startPhysicalSessionHandler);
   streamEvents.removeListener("stop_physical_session", stopPhysicalSessionHandler);
   await sessionManager.stopAll();

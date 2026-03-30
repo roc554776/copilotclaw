@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { semverSatisfies, AgentManager } from "../../src/agent-manager.js";
+import { resolveModel } from "../../src/agent-config.js";
 
 describe("semverSatisfies", () => {
   it("returns true when version equals minimum", () => {
@@ -494,5 +495,87 @@ describe("AgentManager — closeStream", () => {
     const manager = new AgentManager();
     // Should not throw
     manager.closeStream();
+  });
+});
+
+describe("AgentManager — running_sessions dispatch", () => {
+  function invokeHandleAgentMessage(manager: AgentManager, msg: Record<string, unknown>): void {
+    (manager as unknown as { handleAgentMessage: (msg: Record<string, unknown>) => void }).handleAgentMessage(msg);
+  }
+
+  it("dispatches running_sessions to onRunningSessionsReport handler", () => {
+    const manager = new AgentManager();
+    const onRunningSessionsReport = vi.fn();
+    manager.setStreamMessageHandler({ onRunningSessionsReport });
+
+    invokeHandleAgentMessage(manager, {
+      type: "running_sessions",
+      sessions: [
+        { sessionId: "s-1", channelId: "ch-1", status: "waiting" },
+        { sessionId: "s-2", channelId: "ch-2", status: "processing" },
+      ],
+    });
+
+    expect(onRunningSessionsReport).toHaveBeenCalledWith([
+      { sessionId: "s-1", channelId: "ch-1", status: "waiting" },
+      { sessionId: "s-2", channelId: "ch-2", status: "processing" },
+    ]);
+  });
+});
+
+describe("resolveModel (gateway-side model selection)", () => {
+  it("returns undefined when models response is null", () => {
+    expect(resolveModel(null, null, false)).toBeUndefined();
+  });
+
+  it("returns undefined when models list is empty", () => {
+    expect(resolveModel({ models: [] }, null, false)).toBeUndefined();
+  });
+
+  it("picks cheapest model when no config model set", () => {
+    const models = {
+      models: [
+        { id: "expensive", billing: { multiplier: 10 } },
+        { id: "cheap", billing: { multiplier: 1 } },
+      ],
+    };
+    expect(resolveModel(models, null, false)).toBe("cheap");
+  });
+
+  it("uses config model when set", () => {
+    const models = {
+      models: [
+        { id: "gpt-4.1", billing: { multiplier: 1 } },
+        { id: "gpt-4.1-mini", billing: { multiplier: 0 } },
+      ],
+    };
+    expect(resolveModel(models, "gpt-4.1", false)).toBe("gpt-4.1");
+  });
+
+  it("zeroPremium overrides premium config model", () => {
+    const models = {
+      models: [
+        { id: "gpt-4.1", billing: { multiplier: 1 } },
+        { id: "gpt-4.1-mini", billing: { multiplier: 0 } },
+      ],
+    };
+    expect(resolveModel(models, "gpt-4.1", true)).toBe("gpt-4.1-mini");
+  });
+
+  it("zeroPremium keeps non-premium config model", () => {
+    const models = {
+      models: [
+        { id: "gpt-4.1", billing: { multiplier: 1 } },
+        { id: "gpt-4.1-mini", billing: { multiplier: 0 } },
+      ],
+    };
+    expect(resolveModel(models, "gpt-4.1-mini", true)).toBe("gpt-4.1-mini");
+  });
+
+  it("zeroPremium returns undefined when no non-premium models", () => {
+    const models = {
+      models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }],
+    };
+    expect(resolveModel(models, null, true)).toBeUndefined();
   });
 });

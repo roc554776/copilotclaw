@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentPromptConfig } from "./agent-config.js";
+import { getAgentPromptConfig, resolveModel } from "./agent-config.js";
 import { AgentManager } from "./agent-manager.js";
 import { getProfileName, getStateDir, loadConfig, resolvePort } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
@@ -99,6 +99,12 @@ async function main(): Promise<void> {
     onListMessages: (channelId, limit) => {
       return store.listMessages(channelId, limit);
     },
+    onRunningSessionsReport: (sessions) => {
+      console.error(`[gateway] agent reports ${sessions.length} running session(s), reconciling with orchestrator`);
+      orchestrator.reconcileWithAgent(sessions);
+      // After reconciliation, check for pending messages on channels without active sessions
+      checkAllChannelsPending();
+    },
     onPhysicalSessionStarted: (sessionId, copilotSessionId, model) => {
       console.error(`[gateway] physical session started: session=${sessionId.slice(0, 8)}, copilot=${copilotSessionId.slice(0, 12)}, model=${model}`);
       orchestrator.updateSessionStatus(sessionId, "waiting");
@@ -182,8 +188,10 @@ async function main(): Promise<void> {
   // Establish IPC stream connection to agent (after agent is ensured)
   agentManager.connectStream();
 
-  // Helper: start a session for a channel via orchestrator + agent manager
-  const startSessionForChannel = (channelId: string) => {
+  // Helper: start a session for a channel via orchestrator + agent manager.
+  // Resolves the model on gateway side so the selection algorithm can be updated
+  // by restarting gateway alone (without restarting agent).
+  const startSessionForChannel = async (channelId: string) => {
     if (orchestrator.isChannelInBackoff(channelId)) {
       console.error(`[gateway] skipping session start for channel ${channelId.slice(0, 8)} (in backoff)`);
       return;
@@ -191,8 +199,18 @@ async function main(): Promise<void> {
     if (orchestrator.hasActiveSessionForChannel(channelId)) return;
     const sessionId = orchestrator.startSession(channelId);
     const session = orchestrator.getSessionStatuses()[sessionId];
-    console.error(`[gateway] starting physical session for channel ${channelId.slice(0, 8)}, session=${sessionId.slice(0, 8)}`);
-    agentManager.startPhysicalSession(sessionId, channelId, session?.copilotSessionId);
+
+    // Resolve model on gateway side
+    let resolvedModelName: string | undefined;
+    try {
+      const modelsResponse = await agentManager.getModels();
+      resolvedModelName = resolveModel(modelsResponse, config.model ?? null, config.zeroPremium ?? false);
+    } catch {
+      // Model resolution failed — agent will fall back to its own resolution
+    }
+
+    console.error(`[gateway] starting physical session for channel ${channelId.slice(0, 8)}, session=${sessionId.slice(0, 8)}, model=${resolvedModelName ?? "(agent-fallback)"}`);
+    agentManager.startPhysicalSession(sessionId, channelId, session?.copilotSessionId, resolvedModelName);
   };
 
   // Helper: check all channels for pending messages and start sessions via orchestrator
@@ -205,7 +223,9 @@ async function main(): Promise<void> {
       const oldest = store.peekOldestPending(channelId);
       if (oldest !== undefined) {
         console.error(`[gateway] pending message found for channel ${channelId.slice(0, 8)}, starting session`);
-        startSessionForChannel(channelId);
+        startSessionForChannel(channelId).catch((err: unknown) => {
+          console.error(`[gateway] failed to start session for channel ${channelId.slice(0, 8)}:`, err);
+        });
       }
     }
   };
@@ -231,7 +251,9 @@ async function main(): Promise<void> {
       }
       const msg = store.addMessage(job.channelId, "cron", `${prefix}${job.message}`);
       if (msg !== undefined) {
-        startSessionForChannel(job.channelId);
+        startSessionForChannel(job.channelId).catch((err: unknown) => {
+          console.error(`[gateway] cron ${job.id}: failed to start session:`, err);
+        });
         // Fallback: also send agent_notify for backward compat
         agentManager.notifyAgent(job.channelId);
       }
@@ -280,10 +302,12 @@ async function main(): Promise<void> {
   }, ORCHESTRATOR_CHECK_INTERVAL_MS);
   orchestratorCheck.unref();
 
-  // On stream "connected" event: check all channels for pending and start sessions
+  // On stream "connected" event: do NOT check pending immediately.
+  // Wait for the agent's running_sessions report (sent automatically on stream connect)
+  // to reconcile orchestrator state before starting new sessions.
+  // checkAllChannelsPending() is called in onRunningSessionsReport handler.
   agentManager.onStreamConnected(() => {
-    console.error("[gateway] stream connected, checking for pending messages");
-    checkAllChannelsPending();
+    console.error("[gateway] stream connected, waiting for agent running_sessions report");
   });
 
   // On stream "disconnected" event: suspend all active sessions (agent restart scenario)
