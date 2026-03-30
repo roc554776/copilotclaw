@@ -260,18 +260,26 @@ export class AgentSessionManager {
     }
   }
 
-  /** Get the first active CopilotClient (for server-level RPCs like quota/models). */
-  private getActiveClient(): CopilotClient | undefined {
+  private pooledClient: CopilotClient | undefined;
+
+  /** Get any CopilotClient (for server-level RPCs like quota/models).
+   *  Prefers active sessions, falls back to suspended, uses pooled client if none exist. */
+  private getAnyClient(): CopilotClient {
     for (const [, entry] of this.sessions) {
       if (entry.info.status !== "suspended") return entry.client;
     }
-    return undefined;
+    for (const [, entry] of this.sessions) {
+      return entry.client;
+    }
+    if (this.pooledClient === undefined) {
+      this.pooledClient = this.createClient();
+    }
+    return this.pooledClient;
   }
 
   async getQuota(): Promise<Record<string, unknown> | null> {
-    const client = this.getActiveClient();
-    if (client === undefined) return null;
     try {
+      const client = this.getAnyClient();
       return await client.rpc.account.getQuota() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
       this.logError(`getQuota error: ${err instanceof Error ? err.message : String(err)}`);
@@ -280,9 +288,8 @@ export class AgentSessionManager {
   }
 
   async getModels(): Promise<Record<string, unknown> | null> {
-    const client = this.getActiveClient();
-    if (client === undefined) return null;
     try {
+      const client = this.getAnyClient();
       return await client.rpc.models.list() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
       this.logError(`getModels error: ${err instanceof Error ? err.message : String(err)}`);
