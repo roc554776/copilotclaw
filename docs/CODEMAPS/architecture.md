@@ -1,24 +1,25 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-29 | Packages: 3 (cli, gateway, agent) | Version: 0.48.0 | Token estimate: ~2400 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-29 | Packages: 3 (cli, gateway, agent) | Version: 0.49.0 | Token estimate: ~2400 -->
 
 # Architecture
 
 ## System Overview
 
 ```
-┌─────────────┐  HTTP   ┌─────────────┐  IPC (.sock)  ┌─────────────────────────────┐
-│   Browser    │◄──────►│   Gateway    │◄────────────►│           Agent             │
-│  (dashboard) │        │  (daemon)    │  (stream +    │  ┌───────────────────────┐  │
-└─────────────┘        └─────────────┘   short-lived) │  │ AgentSessionManager   │  │
-                                                       │  │  sessions: sessId→…   │  │
-                                                       │  │  bindings: chId→sessId│  │
-                                                       └──┴───────────────────────┴──┘
-                                                                   │
-                                                            Copilot SDK
-                                                            (mocked in tests)
+┌─────────────┐  HTTP   ┌─────────────────────────────┐  IPC (.sock)  ┌──────────────────────┐
+│   Browser    │◄──────►│          Gateway             │◄────────────►│        Agent         │
+│  (dashboard) │        │  ┌───────────────────────┐  │  (stream +    │  ┌────────────────┐  │
+└─────────────┘        │  │ SessionOrchestrator   │  │   short-lived) │  │ AgentSession   │  │
+                        │  │  sessions: sessId→…   │  │               │  │ Manager        │  │
+                        │  │  bindings: chId→sessId│  │               │  │ (physical only)│  │
+                        │  │  backoff: chId→expiry │  │               │  └────────────────┘  │
+                        │  └───────────────────────┘  │               └──────────────────────┘
+                        └─────────────────────────────┘                          │
+                                                                          Copilot SDK
+                                                                          (mocked in tests)
 ```
 
 - **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, zeroPremium, debugMockCopilotUnsafeTools, stateDir, workspaceRoot, auth.github, otel, debug) via /api/status; proxies Copilot quota and models from agent via /api/quota and /api/models; serves recent logs via /api/logs (ring buffer); hosts observability infrastructure (session event store, system prompt snapshots, status page, events page); initializes OTel at startup (logs + metrics export via OTLP HTTP) and shuts down on exit
-- **Agent**: single process, manages agent sessions independently of channels; communicates with gateway exclusively via IPC (stream for push-based messaging, short-lived connections for status/stop/quota/models); receives OTel config from gateway via IPC stream config push and initializes its own OTel setup independently
+- **Agent**: single process, executes physical sessions on behalf of gateway; communicates with gateway exclusively via IPC (stream for push-based messaging, short-lived connections for status/stop/quota/models); receives OTel config from gateway via IPC stream config push and initializes its own OTel setup independently; does not manage abstract sessions, channel bindings, backoff, or persistence (moved to gateway SessionOrchestrator in v0.49.0)
 - **Agent Session**: wraps a Copilot SDK session with its own sessionId, optionally bound to a channel
 - **ChannelProvider**: plugin interface for chat mediums (built-in chat, Discord, Telegram, etc.); providers handle medium-specific routes and receive message notifications
 - **BuiltinChatChannel**: default ChannelProvider — serves dashboard UI at "/", SSE at "/api/events", broadcasts via SseBroadcaster
@@ -62,8 +63,9 @@ Environment variables:
 - Gateway stop → gateway only (agent process NOT stopped)
 - Gateway restart → POST /api/stop, wait for port free, then start (restart.ts)
 - Agent ↔ Gateway: IPC stream (v0.35.0) — persistent bidirectional connection; gateway pushes config and agent_notify; agent pushes channel messages, session events, system prompts; agent sends request-response for drain/peek/flush/list_messages
-- Agent process manages agent sessions: listens for agent_notify push from gateway via IPC stream, starts session when notified
-- User message POST triggers gateway notifyAgent via IPC stream (push-based, no polling)
+- Gateway SessionOrchestrator manages abstract sessions (channel bindings, suspend/revive, backoff, max age); sends start_physical_session/stop_physical_session commands to agent via IPC stream
+- Agent listens for start_physical_session/stop_physical_session from gateway; sends physical_session_started/physical_session_ended back to gateway
+- User message POST triggers gateway to check orchestrator and start physical session via agent (push-based, no polling)
 
 ## Session Keepalive
 
@@ -93,21 +95,22 @@ Environment variables:
 - Agent receives system messages via normal pending drain in `copilotclaw_wait`; combineMessages prefixes system sender with `[SYSTEM EVENT]`
 - Agent-side status tracking retained (subagent session status updated on events) for dashboard display only
 
-## Session Lifecycle (v0.18.0: Persistent Channel Bindings)
+## Session Lifecycle (v0.18.0: Persistent Channel Bindings, v0.49.0: Gateway-Side Orchestration)
 
+- **Responsibility Split (v0.49.0)**: Abstract session lifecycle (channel bindings, suspend/revive, backoff, max age, persistence) managed by gateway's SessionOrchestrator; agent only executes physical sessions (Copilot SDK sessions) on gateway command
 - **Abstract vs. Physical Sessions**: Abstract session (sessionId, bound to channel) is separate from physical session (Copilot SDK session). When physical session ends unexpectedly, abstract session transitions to "suspended" (not deleted), preserving channel binding.
 - **Session Status**: "starting" → "waiting" → "processing" → "suspended" or "stopped"
   - "suspended": physical session stopped unexpectedly or max age reached; abstract session preserved for revival
   - "stopped": explicit stopSession() — fully removes abstract session and channel binding
-- **Suspension via checkStaleAndHandle**: if processing >10 min with pending inputs, suspend (abstract survives), notify channel with timeout message, flush inputs; deferred resume on next pending message
-- **Suspension via checkSessionMaxAge**: if "waiting" session exceeds 2 days (default, configurable), suspend and clear copilotSessionId (so next revival creates a new physical session rather than resuming the old one)
-- **Revival via reviveSession**: suspended sessions auto-revive with new physical session when triggered (e.g., user message arrives for the channel); same abstract sessionId reused, copilotSessionId preserved for resumeSession; resumeSession wrapped in try/catch — on failure, clears copilotSessionId and falls back to createSession (v0.38.0)
-- **Auto-revival in polling**: startSession auto-detects suspended sessions for a channel via hasActiveSessionForChannel; if suspended, revives with saved copilotSessionId
-- **Binding Persistence (v0.18.0+)**: AgentSessionManager accepts optional `persistPath` option (defaults to {{stateDir}}/data/agent-bindings.json — uses stateDir, not workspaceRoot); suspended sessions with channel bindings persisted to disk via atomic write (tmp → rename); `loadBindings()` called in constructor (line 192) restores suspended sessions from disk on agent restart, allowing recovery of channel-bound sessions across process boundaries; restores cumulative token data and physicalSessionHistory from snapshots; `saveBindings()` called on suspendSession and stopSession; SessionSnapshot and BindingSnapshot types define persist format; SessionSnapshot includes cumulativeInputTokens/cumulativeOutputTokens, physicalSessionHistory (v0.30.0)
-- **Cumulative Token Tracking (v0.27.0)**: AgentSessionInfo tracks cumulativeInputTokens and cumulativeOutputTokens across physical sessions; suspendSession() accumulates token usage via delta calculation when same physical session is resumed (compares against last history entry to compute delta, preventing double-counting); cumulative totals persisted in SessionSnapshot via saveBindings() and restored via loadBindings(); dashboard shows cumulative tokens; IPC AgentSessionStatusResponse includes cumulative token fields
-- **Stopped Session History (v0.30.0)**: AgentSessionInfo has physicalSessionHistory (PhysicalSessionSummary[]); suspendSession() pushes a copy of the physical session (with currentState set to "stopped") to history before clearing physicalSession; capped at 10 entries (oldest removed); persisted in SessionSnapshot via saveBindings() and restored via loadBindings(); IPC AgentSessionStatusResponse includes physicalSessionHistory field
-- **savedCopilotSessionIds map**: no longer the primary resume mechanism — copilotSessionId lives on the suspended entry; map kept for potential compatibility
-- **Channel notifications**: session stopped (unexpected end) and session timed out (stale processing) post system messages to bound channel
+- **Gateway-Driven Session Commands (v0.49.0)**: Gateway sends start_physical_session (with sessionId, channelId, optional copilotSessionId) and stop_physical_session (with sessionId) to agent via IPC stream; agent sends physical_session_started (sessionId, copilotSessionId, model) and physical_session_ended (sessionId, reason, copilotSessionId, elapsedMs, tokens, error) back to gateway
+- **Suspension via daemon periodic check**: gateway daemon checks all sessions periodically (30s); maxAge check suspends sessions exceeding 2 days (default, configurable) by sending stop_physical_session to agent then calling orchestrator.suspendSession()
+- **Revival via orchestrator.startSession**: when a message arrives for a channel with a suspended session, orchestrator revives (sets status to "starting") and gateway sends start_physical_session with preserved copilotSessionId; agent-side resumeSession wrapped in try/catch — on failure, clears copilotSessionId and falls back to createSession (v0.38.0)
+- **Stream disconnect handling**: onStreamDisconnected calls orchestrator.suspendAllActive() to suspend all non-suspended sessions (agent restart scenario); onStreamConnected checks all channels for pending messages and starts sessions
+- **Binding Persistence (v0.49.0)**: SessionOrchestrator uses SQLite (session-orchestrator.db in data dir, WAL mode); abstract_sessions table (sessionId PK, channelId, status, startedAt, copilotSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory JSON); persistSession() upserts on every mutation; loadFromDb() on construction; legacy one-time migration from agent-bindings.json (renames to .migrated after migration)
+- **Cumulative Token Tracking (v0.27.0)**: SessionOrchestrator tracks cumulativeInputTokens and cumulativeOutputTokens per abstract session; suspendSession() accumulates tokens from physical session before clearing; gateway updates physical session via onPhysicalSessionEnded handler; dashboard shows cumulative tokens
+- **Stopped Session History (v0.30.0)**: SessionOrchestrator maintains physicalSessionHistory (PhysicalSessionSummary[]) per abstract session; suspendSession() pushes physical session to history before clearing; capped at 10 entries (oldest removed); persisted in SQLite
+- **Channel backoff**: SessionOrchestrator tracks channelBackoff map (ephemeral, not persisted); daemon records backoff on rapid failure (onPhysicalSessionEnded checks elapsedMs < rapidFailureThresholdMs); isChannelInBackoff() checked before starting sessions
+- **Channel notifications**: gateway daemon inserts system messages on unexpected physical session stop (with error detail) and flushes pending messages for the channel
 
 ## Observability (v0.28.0, SQLite v0.29.0)
 
@@ -130,14 +133,14 @@ Environment variables:
 - Gateway and agent are independent processes (gateway stop does NOT stop agent)
 - Startup direction: always gateway → agent (agent never starts gateway)
 - Agent process ensure: gateway start time only (NOT on user message POST)
-- Agent session ensure: agent process responsibility (listens for agent_notify via IPC stream)
+- Agent session ensure: gateway responsibility via SessionOrchestrator (sends start_physical_session/stop_physical_session to agent via IPC stream)
 - Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel; LogBuffer optionally writes structured JSON lines to file via enableFileOutput() (gateway.log); agent spawned with stderr redirected to agent.log; agent process initializes its own StructuredLogger writing to agent.log
 - Structured logging: StructuredLogger (intentionally duplicated in gateway and agent packages) writes JSON Lines (StructuredLogEntry: ts, level, component, msg, data?) to file via appendFileSync; bridges to OpenTelemetry via optional OtelLoggerBridge parameter (emits log records to OTel LoggerProvider when configured); agent uses structured JSON fallback pattern (console.error with JSON.stringify) before StructuredLogger is initialized — applies to index.ts module-level log/logError, AgentSessionManager defaultLog/defaultLogError, and channel.ts ChannelToolDeps logError
 - OpenTelemetry: OTel setup module (otel.ts, intentionally duplicated in gateway and agent) initializes OTLP HTTP exporters for logs and metrics; gateway additionally defines application-level metrics (otel-metrics.ts: session count gauges, token usage counters); endpoints configured via config.otel.endpoints (empty = noop export); agent receives OTel config from gateway via IPC stream config push and initializes independently with serviceName "copilotclaw-agent"
-- Channel backoff: AgentSessionManager tracks channelBackoff map; recordBackoffIfRapidFailure() sets backoff when session fails within rapid-failure threshold (rapidFailureThresholdMs, backoffDurationMs from gateway config); isChannelInBackoff() checked in polling loop to skip channels in backoff (prevents retry storms); notifyChannelSessionStopped() includes error reason in system message when available
+- Channel backoff: SessionOrchestrator tracks channelBackoff map (ephemeral, not persisted); gateway daemon records backoff in onPhysicalSessionEnded when elapsedMs < rapidFailureThresholdMs; isChannelInBackoff() checked before starting sessions (prevents retry storms)
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (434 tests: 105 agent + 297 gateway + 32 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (469 tests: 84 agent + 353 gateway + 32 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
 - Frontend tests: vitest + jsdom + @testing-library/react for React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll)
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
