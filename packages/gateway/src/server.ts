@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -130,7 +130,6 @@ export interface ServerDeps {
   channelProviders?: ChannelProvider[];
   logBuffer?: LogBuffer;
   sessionEventStore?: SessionEventStore;
-  stateDir?: string;
 }
 
 function createRequestHandler(
@@ -140,12 +139,7 @@ function createRequestHandler(
   channelProviders: ChannelProvider[],
   logBuffer: LogBuffer,
   sessionEventStore: SessionEventStore | null,
-  stateDir: string | undefined,
 ) {
-  // Persistent cache for quota/models — survives gateway restart
-  let cachedQuota = loadJsonCache(stateDir, "quota-cache.json");
-  let cachedModels = loadJsonCache(stateDir, "models-cache.json");
-
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
     const fullPathname = url?.split("?")[0] ?? "/";
@@ -202,29 +196,28 @@ function createRequestHandler(
     }
 
     if (fullPathname === "/api/quota" && method === "GET") {
+      // Try live IPC first, fall back to session event store
       const quota = agentManager !== null ? await agentManager.getQuota() : null;
       if (quota !== null) {
-        cachedQuota = quota;
-        saveJsonCache(stateDir, "quota-cache.json", quota);
         json(res, 200, quota);
-      } else if (cachedQuota !== null) {
-        json(res, 200, cachedQuota);
+      } else if (sessionEventStore !== null) {
+        const cached = sessionEventStore.getLatestQuota();
+        json(res, 200, cached ?? { quotaSnapshots: {} });
       } else {
-        json(res, 503, { error: "quota not available (no active agent session)" });
+        json(res, 200, { quotaSnapshots: {} });
       }
       return;
     }
 
     if (fullPathname === "/api/models" && method === "GET") {
+      // Try live IPC first, fall back to session event store
       const models = agentManager !== null ? await agentManager.getModels() : null;
       if (models !== null) {
-        cachedModels = models;
-        saveJsonCache(stateDir, "models-cache.json", models);
         json(res, 200, models);
-      } else if (cachedModels !== null) {
-        json(res, 200, cachedModels);
+      } else if (sessionEventStore !== null) {
+        json(res, 200, { models: sessionEventStore.getKnownModels() });
       } else {
-        json(res, 503, { error: "models not available (no active agent session)" });
+        json(res, 200, { models: [] });
       }
       return;
     }
@@ -509,25 +502,6 @@ function createRequestHandler(
   };
 }
 
-function loadJsonCache(stateDir: string | undefined, filename: string): Record<string, unknown> | null {
-  if (stateDir === undefined) return null;
-  const cacheDir = join(stateDir, "data");
-  const filePath = join(cacheDir, filename);
-  if (!existsSync(filePath)) return null;
-  try {
-    return JSON.parse(readFileSync(filePath, "utf-8")) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function saveJsonCache(stateDir: string | undefined, filename: string, data: Record<string, unknown>): void {
-  if (stateDir === undefined) return;
-  const cacheDir = join(stateDir, "data");
-  mkdirSync(cacheDir, { recursive: true });
-  writeFileSync(join(cacheDir, filename), JSON.stringify(data, null, 2) + "\n", "utf-8");
-}
-
 export interface ServerHandle {
   server: Server;
   port: number;
@@ -552,8 +526,7 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
     new BuiltinChatChannel({ store, agentManager, sseBroadcaster }),
   ];
 
-  const stateDir = options?.stateDir;
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, stateDir);
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {

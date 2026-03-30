@@ -220,6 +220,42 @@ export class SessionEventStore {
     return Array.from(byModel.entries()).map(([model, usage]) => ({ model, ...usage }));
   }
 
+  /** Get the latest quotaSnapshots from the most recent assistant.usage event. */
+  getLatestQuota(): Record<string, unknown> | null {
+    const row = this.db.prepare(
+      "SELECT data FROM session_events WHERE type = 'assistant.usage' ORDER BY id DESC LIMIT 1",
+    ).get() as { data: string } | undefined;
+    if (row === undefined) return null;
+    try {
+      const d = JSON.parse(row.data) as Record<string, unknown>;
+      if (d["quotaSnapshots"] !== undefined) {
+        return { quotaSnapshots: d["quotaSnapshots"] };
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /** Get distinct models seen in assistant.usage events with their latest billing multiplier. */
+  getKnownModels(): Array<{ id: string; billing?: { multiplier?: number } }> {
+    // Get the latest assistant.usage event for each distinct model
+    const rows = this.db.prepare(
+      "SELECT data FROM session_events WHERE type = 'assistant.usage' GROUP BY json_extract(data, '$.model') ORDER BY id DESC",
+    ).all() as Array<{ data: string }>;
+    const models: Array<{ id: string; billing?: { multiplier?: number } }> = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      try {
+        const d = JSON.parse(row.data) as Record<string, unknown>;
+        const model = d["model"] as string | undefined;
+        if (model !== undefined && !seen.has(model)) {
+          seen.add(model);
+          models.push({ id: model });
+        }
+      } catch { /* ignore */ }
+    }
+    return models;
+  }
+
   /** Close the database connection. */
   close(): void {
     this.db.close();

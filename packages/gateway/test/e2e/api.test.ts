@@ -347,16 +347,20 @@ describe("GET / (dashboard)", () => {
 });
 
 describe("GET /api/quota", () => {
-  it("returns 503 when no agent manager", async () => {
+  it("returns 200 with empty quota when no active session", async () => {
     const res = await fetch(`${baseUrl}/api/quota`);
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { quotaSnapshots?: Record<string, unknown> };
+    expect(body.quotaSnapshots).toBeDefined();
   });
 });
 
 describe("GET /api/models", () => {
-  it("returns 503 when no agent manager", async () => {
+  it("returns 200 with models array when no active session", async () => {
     const res = await fetch(`${baseUrl}/api/models`);
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { models: unknown[] };
+    expect(Array.isArray(body.models)).toBe(true);
   });
 });
 
