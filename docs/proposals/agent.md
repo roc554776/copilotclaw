@@ -530,7 +530,10 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
 
 ロジックの gateway 移行:
 - SDK フックを gateway RPC 経由にする汎用機構（v0.51.0 で実現済み）: SDK の全フック（onPreToolUse, onPostToolUse, onUserPromptSubmitted, onSessionStart, onSessionEnd, onErrorOccurred）を事前に登録し、フック発火時に gateway に RPC（`{ type: "hook", hookName, sessionId, copilotSessionId, channelId, input }`）を送る。gateway が応答を返せばそれを使用、gateway 停止時は agent がフォールバック動作（onPostToolUse の場合は keepalive リマインダー）を自律実行。新しいフックタイプが SDK に追加された場合は agent の登録コードに追加が必要だが、フックのロジック変更は gateway 更新のみで反映される
-- ツールロジックを gateway の RPC コールバックに委譲する（未実現）: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
+- ツール定義の動的注入と処理の gateway 委譲（未実現）: ツールの定義（名前、description、parameters スキーマ）を gateway config で送り、agent が SDK の `defineTool` で動的に登録する。gateway の更新だけでツールの追加・変更・削除が可能になる。ツールの処理本体も gateway に置く。agent のツールハンドラは generic dispatcher として gateway に RPC を送り、gateway が処理結果を返す。agent はそのまま SDK に返す。
+  - `copilotclaw_wait` は特殊: agent に初めから存在を約束する（常に登録）。基本は gateway に RPC でロジックを委譲するが、gateway 停止時は agent 内の既定ロジック（keepalive cycle）にフォールバックして処理を継続する。これにより gateway 停止時も物理セッションが維持される
+  - `copilotclaw_wait` 以外のツール: gateway 停止時は RPC が失敗する。ツールハンドラはエラーを返すのではなく、「gateway に接続できないため処理できない」旨を SDK に返す（物理セッションを壊さないため）
+  - 前提制約: ツール RPC 失敗が物理セッション破壊につながる設計は許されない
 - 物理セッションのライフサイクル判断を gateway に委ねる（v0.52.0 で実現済み）: SDK の `session.idle`（LLM がツールを呼ばずにターンを終了）や error 発生時に、agent は gateway に lifecycle RPC（`{ type: "lifecycle", event: "idle"|"error", sessionId, channelId, elapsedMs, error? }`）を送り、gateway が `{ action: "stop"|"reinject"|"wait", clearCopilotSessionId? }` で応答する。gateway が `stop` を返した場合のみ agent が `client.stop()` で物理セッションを破棄する。`reinject` の場合は `session.send()` で再投入してセッションを継続する。gateway 不在時のデフォルトは `wait`（物理セッションを破棄しない）
 
 **v0.49.0 移行の経緯:**
