@@ -576,6 +576,69 @@ describe("AgentSessionManager — custom agents configuration", () => {
   });
 });
 
+describe("AgentSessionManager — gateway passthrough config (clientOptions, sessionConfigOverrides)", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards clientOptions to CopilotClient constructor (merged with githubToken)", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const manager = new AgentSessionManager({
+      prompts: {
+        ...TEST_PROMPTS,
+        clientOptions: { enterpriseHostname: "my.ghes.com", otherOpt: 42 },
+      },
+      githubToken: "tok-test",
+    });
+
+    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-client-opts" });
+    await waitForSessionReady(manager);
+
+    // CopilotClient should have been constructed with merged options
+    const clientCalls = (CopilotClient as ReturnType<typeof vi.fn>).mock.calls;
+    expect(clientCalls.length).toBeGreaterThan(0);
+    const ctorArg = clientCalls[0]![0] as Record<string, unknown>;
+    // clientOptions fields are present
+    expect(ctorArg["enterpriseHostname"]).toBe("my.ghes.com");
+    expect(ctorArg["otherOpt"]).toBe(42);
+    // githubToken wins over anything in clientOptions
+    expect(ctorArg["githubToken"]).toBe("tok-test");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("merges sessionConfigOverrides into createSession config (overwriting base fields)", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
+    installClientMock(createSessionSpy);
+
+    const manager = new AgentSessionManager({
+      prompts: {
+        ...TEST_PROMPTS,
+        sessionConfigOverrides: { extraFeatureFlag: true, agent: "custom-primary" },
+      },
+    });
+
+    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-session-overrides" });
+    await waitForSessionReady(manager);
+
+    const config = createSessionSpy.mock.calls[0]![0] as Record<string, unknown>;
+    // Extra field from overrides is present
+    expect(config["extraFeatureFlag"]).toBe(true);
+    // sessionConfigOverrides.agent overwrites the base agent field
+    expect(config["agent"]).toBe("custom-primary");
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+});
+
 describe("AgentSessionManager — suspend clears physical session (history is gateway's responsibility)", () => {
   afterEach(() => {
     vi.clearAllMocks();

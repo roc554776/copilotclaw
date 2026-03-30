@@ -115,7 +115,11 @@ export class AgentSessionManager {
       console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
     };
     this.debugLogLevel = options.debugLogLevel ?? "info";
-    // Dynamic custom agents list from gateway (passthrough to SDK)
+    // Dynamic custom agents list from gateway (passthrough to SDK).
+    // customAgents is optional on the agent-side type for backward compat with old gateways
+    // that do not send the field. The gateway (agent-config.ts) always sends it as a required
+    // field. The empty-array fallback is a type-safety guard — if it fires, the SDK call will
+    // have customAgents:[] with agent:"channel-operator", which is a degraded/broken state.
     this.customAgents = options.prompts.customAgents ?? [];
     this.primaryAgentName = options.prompts.primaryAgentName ?? this.customAgents.find((a) => !a.infer)?.name ?? "channel-operator";
     this.systemReminder = options.prompts.systemReminder;
@@ -386,7 +390,10 @@ export class AgentSessionManager {
       // Dynamic custom agents list from gateway (passthrough to SDK)
       customAgents: this.customAgents.map((a) => ({ ...a, tools: null })),
       agent: this.primaryAgentName,
-      // Gateway-provided session config overrides (passthrough to SDK)
+      // Gateway-provided session config overrides (passthrough to SDK).
+      // Intentionally last — this can overwrite any field above (model, agent,
+      // customAgents, systemMessage, onPermissionRequest, tools, hooks, etc.).
+      // Gateway is the trusted authority; unexpected overwrites are an ops concern.
       ...this.sessionConfigOverrides,
     };
     let session: CopilotSession;
