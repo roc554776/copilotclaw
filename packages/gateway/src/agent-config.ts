@@ -37,6 +37,19 @@ export interface AgentPromptConfig {
   clientOptions?: Record<string, unknown>;
   /** Extra options to merge into createSession/resumeSession config (passthrough). */
   sessionConfigOverrides?: Record<string, unknown>;
+  /** Dynamic tool definitions. Agent registers these with SDK defineTool and dispatches
+   *  tool calls to gateway via RPC. copilotclaw_wait is always registered (built-in)
+   *  and does not need to be listed here — it has a gateway-offline fallback.
+   *  Each entry defines the tool's name, description, and JSON Schema parameters. */
+  toolDefinitions?: ToolDefinition[];
+}
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  /** If true, tool execution skips permission request (default: true). */
+  skipPermission?: boolean;
 }
 
 interface ModelInfo {
@@ -191,5 +204,29 @@ export function getAgentPromptConfig(): AgentPromptConfig {
       "custom_instructions", "last_instructions",
     ],
     maxQueueSize: 10_000,
+    toolDefinitions: [
+      {
+        name: "copilotclaw_send_message",
+        description: "Send a message to the channel. Use this to report progress or reply to the user. Returns immediately.",
+        parameters: {
+          type: "object",
+          properties: {
+            message: { type: "string", description: "The message to send" },
+          },
+          required: ["message"],
+        },
+      },
+      {
+        name: "copilotclaw_list_messages",
+        description: "List recent messages in the channel. Returns messages in reverse chronological order with sender information.",
+        parameters: {
+          type: "object",
+          properties: {
+            limit: { type: "number", description: "Maximum number of messages to return (default: 5)" },
+          },
+          required: [],
+        },
+      },
+    ],
   };
 }

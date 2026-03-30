@@ -48,6 +48,55 @@ async function main(): Promise<void> {
 
   // Set up IPC stream message handlers before connecting
   agentManager.setStreamMessageHandler({
+    onToolCall: (request) => {
+      // Gateway-side tool handler. All dynamic tools dispatch here via RPC.
+      // Adding/modifying tools only requires gateway restart (no agent update).
+      switch (request.toolName) {
+        case "copilotclaw_send_message": {
+          const message = request.args["message"] as string ?? "";
+          store.addMessage(request.channelId, "agent", message);
+          serverHandle?.sseBroadcaster?.broadcast({
+            type: "new_message",
+            channelId: request.channelId,
+            data: { sender: "agent", message },
+          });
+          return { status: "sent" };
+        }
+        case "copilotclaw_list_messages": {
+          const limit = (request.args["limit"] as number) ?? 5;
+          const messages = store.listMessages(request.channelId, limit);
+          return { messages };
+        }
+        case "copilotclaw_wait": {
+          // Wait tool: check for pending messages.
+          // The full keepalive loop lives in agent (built-in fallback),
+          // but gateway can provide the drain+wait logic here.
+          const channelId = request.channelId;
+          const drained = store.drainPending(channelId);
+          if (drained.length > 0) {
+            const combined = drained.map((m) => {
+              const sender = m.sender;
+              const msg = m.message;
+              if (sender === "cron") return `[CRON TASK] ${msg}`;
+              if (sender === "system") return `[SYSTEM EVENT] ${msg}`;
+              return msg;
+            }).join("\n\n");
+            return {
+              userMessage: combined +
+                "\n\n---\n[SYSTEM] Required workflow: (A) Call copilotclaw_send_message with your complete reply, " +
+                "then (B) call copilotclaw_wait to wait for the next message. " +
+                "You MUST call copilotclaw_send_message BEFORE copilotclaw_wait. " +
+                "The user CANNOT see your text output — only messages sent via copilotclaw_send_message reach them. " +
+                "Do NOT stop without calling copilotclaw_wait.",
+            };
+          }
+          // No pending messages — return null so agent falls through to its keepalive loop
+          return null;
+        }
+        default:
+          return { error: `Unknown tool: ${request.toolName}` };
+      }
+    },
     onLifecycle: (request) => {
       // Gateway-side lifecycle handler. Agent asks what to do on idle/error.
       // Gateway decides: stop (destroy session), reinject (re-enter session loop), wait (keep alive).

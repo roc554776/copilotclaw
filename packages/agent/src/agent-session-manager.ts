@@ -60,6 +60,7 @@ export interface AgentSessionManagerOptions {
     maxQueueSize?: number;
     clientOptions?: Record<string, unknown>;
     sessionConfigOverrides?: Record<string, unknown>;
+    toolDefinitions?: Array<{ name: string; description: string; parameters: Record<string, unknown>; skipPermission?: boolean }>;
   };
   /** Structured log function (info level). Falls back to structured JSON on console.error. */
   log?: (message: string) => void;
@@ -97,6 +98,7 @@ export class AgentSessionManager {
   private readonly knownSections: string[];
   private readonly clientOptions: Record<string, unknown>;
   private readonly sessionConfigOverrides: Record<string, unknown>;
+  private readonly toolDefinitions: Array<{ name: string; description: string; parameters: Record<string, unknown>; skipPermission?: boolean }>;
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
   private generationCounter = 0;
@@ -131,6 +133,7 @@ export class AgentSessionManager {
     ];
     this.clientOptions = options.prompts.clientOptions ?? {};
     this.sessionConfigOverrides = options.prompts.sessionConfigOverrides ?? {};
+    this.toolDefinitions = options.prompts.toolDefinitions ?? [];
     this.log = options.log ?? defaultLog;
     this.logError = options.logError ?? defaultLogError;
   }
@@ -266,7 +269,7 @@ export class AgentSessionManager {
       throw new Error("channel-less sessions not yet supported");
     }
 
-    const { sendMessage, wait, listMessages } = createChannelTools({
+    const { tools: channelTools } = createChannelTools({
       channelId,
       keepaliveTimeoutMs: this.keepaliveTimeoutMs,
       abortSignal: entry.abortController.signal,
@@ -277,6 +280,7 @@ export class AgentSessionManager {
         }
       },
       logError: this.logError,
+      toolDefinitions: this.toolDefinitions,
     });
 
     const signal = entry.abortController.signal;
@@ -353,7 +357,7 @@ export class AgentSessionManager {
 
     const sessionConfig = {
       onPermissionRequest: approveAll,
-      tools: [sendMessage, wait, listMessages],
+      tools: channelTools,
       hooks: {
         onPreToolUse: makeHookHandler("onPreToolUse"),
         onPostToolUse: makeHookHandler("onPostToolUse"),

@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.52.0";
+export const MIN_AGENT_VERSION = "0.53.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -43,6 +43,12 @@ export interface LifecycleResponse {
   clearCopilotSessionId?: boolean;
 }
 
+export interface ToolCallRequest {
+  toolName: string;
+  channelId: string;
+  args: Record<string, unknown>;
+}
+
 export interface HookRequest {
   hookName: string;
   sessionId: string;
@@ -52,6 +58,7 @@ export interface HookRequest {
 }
 
 export interface StreamMessageHandler {
+  onToolCall?: (request: ToolCallRequest) => unknown;
   onLifecycle?: (request: LifecycleRequest) => LifecycleResponse;
   onHook?: (request: HookRequest) => Record<string, unknown> | null;
   onChannelMessage?: (channelId: string, sender: string, message: string) => void;
@@ -152,6 +159,17 @@ export class AgentManager {
     if (type === undefined || handler === null) return;
 
     switch (type) {
+      case "tool_call": {
+        const id = msg["id"] as string;
+        const toolCallRequest: ToolCallRequest = {
+          toolName: msg["toolName"] as string,
+          channelId: msg["channelId"] as string,
+          args: (msg["args"] as Record<string, unknown>) ?? {},
+        };
+        const toolResult = handler.onToolCall?.(toolCallRequest) ?? null;
+        this.stream?.send({ type: "response", id, data: toolResult });
+        break;
+      }
       case "lifecycle": {
         const id = msg["id"] as string;
         const lifecycleRequest: LifecycleRequest = {

@@ -1,5 +1,5 @@
 import { defineTool } from "@github/copilot-sdk";
-import { requestFromGateway, sendToGateway, streamEvents } from "../ipc-server.js";
+import { requestFromGateway, streamEvents } from "../ipc-server.js";
 
 const WAIT_TOOL_NAME = "copilotclaw_wait";
 
@@ -20,6 +20,13 @@ const KEEPALIVE_INSTRUCTION = `[SYSTEM] No user message received (keepalive cycl
 
 export type AgentStatusChange = "waiting" | "processing";
 
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  skipPermission?: boolean;
+}
+
 export interface ChannelToolDeps {
   channelId: string;
   /** Keepalive timeout in milliseconds. Sent from gateway via config. */
@@ -28,20 +35,15 @@ export interface ChannelToolDeps {
   onStatusChange?: (status: AgentStatusChange) => void;
   /** Structured log function (error level). Falls back to structured JSON on console.error. */
   logError?: (message: string) => void;
+  /** Dynamic tool definitions from gateway config. Agent registers these and dispatches
+   *  tool calls to gateway via RPC. copilotclaw_wait is built-in and always present. */
+  toolDefinitions?: ToolDefinition[];
 }
 
 interface NextInputResponse {
   id: string;
   sender: string;
   message: string;
-}
-
-interface MessageResponse {
-  id: string;
-  channelId: string;
-  sender: "user" | "agent" | "cron" | "system";
-  message: string;
-  createdAt: string;
 }
 
 /** Drain pending messages via IPC. Returns messages or empty array. */
@@ -116,36 +118,41 @@ function combineMessages(inputs: NextInputResponse[]): string {
   }).join("\n\n");
 }
 
+/** Create a gateway-dispatched tool handler. Sends tool call to gateway via RPC,
+ *  returns the result. On gateway disconnect, returns a graceful error message
+ *  instead of throwing (to preserve physical session). */
+function createGatewayToolHandler(
+  toolName: string,
+  channelId: string,
+  logError: (message: string) => void,
+): (args: Record<string, unknown>) => Promise<unknown> {
+  return async (args: Record<string, unknown>) => {
+    try {
+      const result = await requestFromGateway({
+        type: "tool_call",
+        toolName,
+        channelId,
+        args,
+      });
+      return result ?? { status: "ok" };
+    } catch {
+      // Gateway unreachable — return graceful error, NOT throw.
+      // Throwing would risk killing the physical session.
+      logError(`tool ${toolName}: gateway unreachable, returning graceful error`);
+      return { error: "Gateway is not connected. The tool cannot be executed at this time." };
+    }
+  };
+}
+
 export function createChannelTools(deps: ChannelToolDeps) {
   const logError = deps.logError ?? ((message: string) => {
     console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
   });
 
   // Swallowed-message detection state.
-  // Tracks whether wait returned user messages and whether
-  // send_message was called before the next wait invocation.
-  // When the LLM calls wait again without having called
-  // send_message, the handler returns a forceful reminder instead of
-  // polling — this is a deterministic safeguard against lost replies.
   let pendingReplyExpected = false;
 
-  const sendMessage = defineTool("copilotclaw_send_message", {
-    description: "Send a message to the channel. Use this to report progress or reply to the user. Returns immediately.",
-    parameters: {
-      type: "object",
-      properties: {
-        message: { type: "string", description: "The message to send" },
-      },
-      required: ["message"],
-    },
-    handler: async (args: { message: string }) => {
-      sendToGateway({ type: "channel_message", channelId: deps.channelId, sender: "agent", message: args.message });
-      pendingReplyExpected = false;
-      return { status: "sent" };
-    },
-    skipPermission: true,
-  });
-
+  // --- Built-in: copilotclaw_wait (always registered, has gateway-offline fallback) ---
   const wait = defineTool(WAIT_TOOL_NAME, {
     description: "Wait for user input, subagent completion, or other events. Blocks until input arrives or keepalive timeout. Call this whenever you have nothing to do, even temporarily.",
     parameters: {
@@ -159,9 +166,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
       // an error, the agent's physical session stops, causing an irrecoverable
       // deadlock. The agent must not perceive that an error occurred.
       try {
-        // Swallowed-message guard: if the previous wait returned user
-        // messages but send_message was never called, the user got no reply.
-        // Return immediately with a forceful reminder instead of polling.
+        // Swallowed-message guard
         if (pendingReplyExpected) {
           logError("swallowed message detected — forcing reply reminder");
           deps.onStatusChange?.("processing");
@@ -169,6 +174,30 @@ export function createChannelTools(deps: ChannelToolDeps) {
         }
 
         deps.onStatusChange?.("waiting");
+
+        // Try gateway RPC first. If gateway handles wait, use its response.
+        try {
+          const gatewayResult = await requestFromGateway({
+            type: "tool_call",
+            toolName: WAIT_TOOL_NAME,
+            channelId: deps.channelId,
+            args: {},
+          });
+          if (gatewayResult !== null && gatewayResult !== undefined && typeof gatewayResult === "object") {
+            const msg = gatewayResult as Record<string, unknown>;
+            if (typeof msg["userMessage"] === "string") {
+              if (msg["userMessage"] !== KEEPALIVE_INSTRUCTION) {
+                deps.onStatusChange?.("processing");
+                pendingReplyExpected = true;
+              }
+              return gatewayResult;
+            }
+          }
+        } catch {
+          // Gateway unreachable — fall through to built-in keepalive logic
+        }
+
+        // Fallback: agent-autonomous keepalive cycle (gateway offline)
         const keepaliveTimeout = deps.keepaliveTimeoutMs;
         const inputs = await pollNextInputs(deps.channelId, keepaliveTimeout, deps.abortSignal);
 
@@ -180,38 +209,25 @@ export function createChannelTools(deps: ChannelToolDeps) {
         const combined = combineMessages(inputs);
         return { userMessage: combined + WAIT_INSTRUCTION };
       } catch (err: unknown) {
-        // Log to system log only — agent must not see this error.
-        // AbortError (from shutdown) is also caught here intentionally —
-        // the session loop's shouldStop() check handles clean shutdown.
-        // Re-throwing any error would kill the physical session (deadlock).
         logError(`wait internal error (suppressed): ${err instanceof Error ? err.message : String(err)}`);
-        // Return keepalive-equivalent response — indistinguishable from timeout
         return { userMessage: KEEPALIVE_INSTRUCTION };
       }
     },
     skipPermission: true,
   });
 
-  const listMessages = defineTool("copilotclaw_list_messages", {
-    description: "List recent messages in the channel. Returns messages in reverse chronological order with sender information.",
-    parameters: {
-      type: "object",
-      properties: {
-        limit: { type: "number", description: "Maximum number of messages to return (default: 5)" },
-      },
-      required: [],
-    },
-    handler: async (args: { limit?: number }) => {
-      const limit = args.limit ?? 5;
-      try {
-        const data = await requestFromGateway({ type: "list_messages", channelId: deps.channelId, limit });
-        return { messages: Array.isArray(data) ? data as MessageResponse[] : [] };
-      } catch (err: unknown) {
-        throw new Error(`list_messages failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-    skipPermission: true,
-  });
+  // --- Dynamic tools from gateway config ---
+  const dynamicTools = (deps.toolDefinitions ?? []).map((def) => {
+    // Skip copilotclaw_wait if listed in toolDefinitions (it's built-in)
+    if (def.name === WAIT_TOOL_NAME) return null;
 
-  return { sendMessage, wait, listMessages };
+    return defineTool(def.name, {
+      description: def.description,
+      parameters: def.parameters,
+      handler: createGatewayToolHandler(def.name, deps.channelId, logError),
+      skipPermission: def.skipPermission ?? true,
+    });
+  }).filter((t): t is NonNullable<typeof t> => t !== null);
+
+  return { tools: [wait, ...dynamicTools] };
 }

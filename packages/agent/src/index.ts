@@ -37,6 +37,7 @@ interface AgentPromptConfig {
   maxQueueSize?: number;
   clientOptions?: Record<string, unknown>;
   sessionConfigOverrides?: Record<string, unknown>;
+  toolDefinitions?: Array<{ name: string; description: string; parameters: Record<string, unknown>; skipPermission?: boolean }>;
 }
 
 interface GatewayConfig {
