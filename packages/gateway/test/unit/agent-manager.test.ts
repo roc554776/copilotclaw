@@ -578,4 +578,16 @@ describe("resolveModel (gateway-side model selection)", () => {
     };
     expect(resolveModel(models, null, true)).toBeUndefined();
   });
+  it("zeroPremium with unknown config model falls through to configModel (consistent with agent fallback)", () => {
+    // When the configured model ID is not in the models list, the gateway cannot
+    // determine its billing tier, so it passes the model ID through unchanged.
+    // The agent will receive this model and either use it or fall back on its own.
+    const models = {
+      models: [
+        { id: "gpt-4.1", billing: { multiplier: 1 } },
+        { id: "gpt-4.1-mini", billing: { multiplier: 0 } },
+      ],
+    };
+    expect(resolveModel(models, "unknown-model-id", true)).toBe("unknown-model-id");
+  });
 });

@@ -137,14 +137,10 @@
 - Gateway-Agent 責務の再配置（v0.49.0 で部分実現、v0.50.0 で追加移行）: SessionOrchestrator を gateway に新設し、チャンネルバインディング、suspended 永続化、復活、状態管理、バックオフ、stale 検出、max age、pending ポーリング、通知を gateway 側に移行。agent からは channelBindings, backoff, stale/maxAge, persistence, channel notification を削除。IPC に start_physical_session/stop_physical_session/physical_session_started/physical_session_ended/running_sessions を追加。SessionOrchestrator は SQLite 永続化。agent-bindings.json からの一括マイグレーション対応。v0.50.0: sessionId 不整合修正、gateway 再起動時の二重セッション防止（running_sessions reconciliation）、抽象セッション状態の二重管理削除、モデル選択ポリシーの gateway 移行、keepalive タイムアウト/リマインダーポリシーの config 化、workspace bootstrap の agent 削除。MIN_AGENT_VERSION を 0.50.0 に引き上げ。
 
 **未実現:**
-- gateway 再起動時の二重セッション（gateway 再起動時に延命した旧物理セッションが agent で動き続けたまま、gateway が新物理セッションを開始してしまう）
 - gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）
-- Gateway-Agent 責務の再配置 — agent に残存する抽象セッション状態の二重管理（AgentSessionInfo, suspendSessionState, cumulativeTokens, physicalSessionHistory が gateway の SessionOrchestrator と重複）
-- Gateway-Agent 責務の再配置 — モデル選択ポリシーが agent にある（resolveModel の zeroPremium 判定、multiplier ソート）
-- Gateway-Agent 責務の再配置 — keepalive タイムアウトが agent にハードコード（DEFAULT_KEEPALIVE_TIMEOUT_MS）
+- Gateway-Agent 責務の再配置 — agent に残存する抽象セッション状態の二重管理（累積トークン・ physicalSessionHistory は gateway 移行済みだが、AgentSessionInfo.status/physicalSession/subagentSessions は agent に残存）
+- Gateway-Agent 責務の再配置 — モデル選択ポリシーの部分移行残存（gateway が resolveModel を実行し agent に渡すよう変更済みだが、agent 内に fallback 用の resolveModel が残存）
 - Gateway-Agent 責務の再配置 — 物理セッション状態の詳細追跡が agent にある（PhysicalSessionSummary, SubagentInfo。イベントは既に gateway に転送済み）
-- Gateway-Agent 責務の再配置 — リマインダーポリシーが agent にハードコード（reminderState、コンテキスト使用率閾値）
-- Gateway-Agent 責務の再配置 — workspace bootstrap の二重実行（agent の ensureWorkspaceReady と gateway の ensureWorkspace）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
