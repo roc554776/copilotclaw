@@ -859,6 +859,12 @@ export class AgentSessionManager {
   private suspendSession(entry: AgentSessionEntry): void {
     this.suspendSessionState(entry);
     this.saveBindings();
+    // Flush pending messages for the channel — if the session idle-exited without
+    // calling copilotclaw_wait, pending messages would stay forever and block cron dedup.
+    const channelId = entry.info.boundChannelId;
+    if (channelId !== undefined) {
+      this.postToGateway({ type: "flush_pending", channelId });
+    }
   }
 
   /** Revive a suspended abstract session by launching a new physical session. */
