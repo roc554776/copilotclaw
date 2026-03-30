@@ -132,6 +132,7 @@
 - イベントビューの自動更新と無限スクロール化（Refresh ボタン削除、cursor ベースページネーション、初回最新 N 件 + 上下無限スクロール）（v0.46.0）
 
 - トークン消費指数と消費量の閲覧 UI（/status の Token Consumption セクション。直近 5h・期間別・モデル別の表示。computeIndex = SUM{MAX(multiplier,0.1)*totalTokens}）（v0.48.0）
+- suspend された物理セッションの effective system prompt 確認（physicalSessionHistory 内の各エントリに View → リンク追加）（v0.48.0）
 
 **未実現:**
 - Gateway-Agent 責務の再配置: 抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理

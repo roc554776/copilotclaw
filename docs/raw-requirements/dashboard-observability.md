@@ -100,3 +100,7 @@
 - original system prompt: 改変前のプロンプト
 - effective system prompt: 物理セッションで実際に適用されているプロンプト
 - ドキュメントやコード上、明確にどちらかを指す場合は省略せず書く
+
+<!-- 2026-03-30 -->
+
+- suspend されてしまった物理セッションの effective system prompt を確認する方法が必要です。

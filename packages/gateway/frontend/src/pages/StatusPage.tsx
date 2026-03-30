@@ -94,7 +94,7 @@ export function StatusPage() {
     [],
   );
   const [effectivePrompts, setEffectivePrompts] = useState<
-    Array<{ sessionId: string; data: EffectivePrompt }>
+    Array<{ sessionId: string; data: EffectivePrompt | null }>
   >([]);
   const [tokenUsage5h, setTokenUsage5h] = useState<TokenUsageEntry[]>([]);
   const [tokenUsagePeriods, setTokenUsagePeriods] = useState<Array<{ label: string; data: TokenUsageEntry[] }>>([]);
@@ -166,12 +166,10 @@ export function StatusPage() {
     loadingPromptsRef.current.add(sessionId);
     try {
       const data = await fetchEffectivePrompt(sessionId);
-      if (data) {
-        setEffectivePrompts((prev) => {
-          if (prev.some((sp) => sp.sessionId === sessionId)) return prev;
-          return [...prev, { sessionId, data }];
-        });
-      }
+      setEffectivePrompts((prev) => {
+        if (prev.some((sp) => sp.sessionId === sessionId)) return prev;
+        return [...prev, { sessionId, data }];
+      });
     } finally {
       loadingPromptsRef.current.delete(sessionId);
     }
@@ -389,37 +387,27 @@ export function StatusPage() {
                                 Effective Prompt
                               </span>
                               <span>
-                                {effectivePrompts.some((sp) => sp.sessionId === sess.physicalSession!.sessionId) ? (
-                                  <a
-                                    href="#"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== sess.physicalSession!.sessionId));
-                                    }}
-                                  >
-                                    Hide
-                                  </a>
-                                ) : (
-                                  <a
-                                    href="#"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      loadEffectivePrompt(
-                                        sess.physicalSession!
-                                          .sessionId,
-                                      );
-                                    }}
-                                  >
-                                    View &rarr;
-                                  </a>
-                                )}
+                                {(() => {
+                                  const loaded = effectivePrompts.find((sp) => sp.sessionId === sess.physicalSession!.sessionId);
+                                  if (loaded === undefined) {
+                                    return <a href="#" onClick={(e) => { e.preventDefault(); loadEffectivePrompt(sess.physicalSession!.sessionId); }}>View &rarr;</a>;
+                                  }
+                                  if (loaded.data === null) {
+                                    return <span style={{ color: "#8b949e" }}>Not available</span>;
+                                  }
+                                  return <a href="#" onClick={(e) => { e.preventDefault(); setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== sess.physicalSession!.sessionId)); }}>Hide</a>;
+                                })()}
                               </span>
                             </div>
                             {effectivePrompts
                               .filter((sp) => sp.sessionId === sess.physicalSession!.sessionId)
                               .map((sp) => (
                                 <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
-                                  <pre style={preStyle}>{sp.data.prompt}</pre>
+                                  {sp.data !== null ? (
+                                    <pre style={preStyle}>{sp.data.prompt}</pre>
+                                  ) : (
+                                    <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>Not available.</div>
+                                  )}
                                 </div>
                               ))}
                           </div>
@@ -521,34 +509,27 @@ export function StatusPage() {
                                         Effective Prompt
                                       </span>
                                       <span>
-                                        {effectivePrompts.some((sp) => sp.sessionId === hps.sessionId) ? (
-                                          <a
-                                            href="#"
-                                            onClick={(e) => {
-                                              e.preventDefault();
-                                              setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== hps.sessionId));
-                                            }}
-                                          >
-                                            Hide
-                                          </a>
-                                        ) : (
-                                          <a
-                                            href="#"
-                                            onClick={(e) => {
-                                              e.preventDefault();
-                                              loadEffectivePrompt(hps.sessionId);
-                                            }}
-                                          >
-                                            View &rarr;
-                                          </a>
-                                        )}
+                                        {(() => {
+                                          const loaded = effectivePrompts.find((sp) => sp.sessionId === hps.sessionId);
+                                          if (loaded === undefined) {
+                                            return <a href="#" onClick={(e) => { e.preventDefault(); loadEffectivePrompt(hps.sessionId); }}>View &rarr;</a>;
+                                          }
+                                          if (loaded.data === null) {
+                                            return <span style={{ color: "#8b949e" }}>Not available</span>;
+                                          }
+                                          return <a href="#" onClick={(e) => { e.preventDefault(); setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== hps.sessionId)); }}>Hide</a>;
+                                        })()}
                                       </span>
                                     </div>
                                     {effectivePrompts
                                       .filter((sp) => sp.sessionId === hps.sessionId)
                                       .map((sp) => (
                                         <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
-                                          <pre style={preStyle}>{sp.data.prompt}</pre>
+                                          {sp.data !== null ? (
+                                            <pre style={preStyle}>{sp.data.prompt}</pre>
+                                          ) : (
+                                            <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>Not available.</div>
+                                          )}
                                         </div>
                                       ))}
                                   </div>
