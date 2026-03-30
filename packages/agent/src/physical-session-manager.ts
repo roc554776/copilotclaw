@@ -13,21 +13,20 @@ import { createChannelTools } from "./tools/channel.js";
 // Agent prompt and session config are now owned by gateway (agent-config.ts)
 // and pushed via IPC. No fallback defaults here — gateway always sends them.
 
-export type AgentSessionStatus = "starting" | "waiting" | "processing" | "suspended" | "stopped";
+export type PhysicalSessionStatus = "starting" | "waiting" | "processing" | "suspended" | "stopped";
 
-export interface AgentSessionInfo {
-  status: AgentSessionStatus;
+export interface PhysicalSessionInfo {
+  status: PhysicalSessionStatus;
   startedAt: string;
   processingStartedAt?: string | undefined;
-  boundChannelId?: string | undefined;
 }
 
-interface AgentSessionEntry {
+interface PhysicalSessionEntry {
   sessionId: string;
   copilotSessionId?: string | undefined; // SDK session ID for resumeSession
   copilotSession?: CopilotSession | undefined; // Live SDK session for getMessages()
   resolvedModel?: string | undefined; // Model resolved by gateway
-  info: AgentSessionInfo;
+  info: PhysicalSessionInfo;
   client: CopilotClient;
   abortController: AbortController;
   sessionPromise: Promise<void>;
@@ -35,10 +34,7 @@ interface AgentSessionEntry {
   reinjectCount: number;
 }
 
-export interface AgentSessionManagerOptions {
-  model?: string;
-  zeroPremium?: boolean;
-  debugMockCopilotUnsafeTools?: boolean;
+export interface PhysicalSessionManagerOptions {
   workingDirectory?: string;
   /** GitHub token for authentication (from profile auth config). When set, passed to CopilotClient. */
   githubToken?: string;
@@ -68,11 +64,10 @@ export interface AgentSessionManagerOptions {
   logError?: (message: string) => void;
 }
 
-export interface StartSessionOptions {
-  /** Session ID assigned by the gateway orchestrator. Agent MUST use this ID (not generate its own)
-   *  so that physical_session_started/ended messages reference the correct orchestrator session. */
+export interface StartPhysicalSessionOptions {
+  /** Opaque session token assigned by gateway. Agent uses this for all IPC communication.
+   *  Agent does not know what this token represents internally (abstract session, channel, etc.). */
   sessionId: string;
-  boundChannelId?: string;
   /** SDK session ID to resume instead of creating a new one. Used by deferred resume. */
   copilotSessionId?: string;
   /** Resolved model name from gateway. When set, agent uses this model directly
@@ -82,11 +77,8 @@ export interface StartSessionOptions {
 
 // Session timing values are owned by gateway (agent-config.ts) and pushed via IPC.
 
-export class AgentSessionManager {
-  private readonly sessions = new Map<string, AgentSessionEntry>();
-  private readonly model: string | undefined;
-  private readonly zeroPremium: boolean;
-  private readonly debugMockCopilotUnsafeTools: boolean;
+export class PhysicalSessionManager {
+  private readonly sessions = new Map<string, PhysicalSessionEntry>();
   private readonly workingDirectory: string | undefined;
   private readonly githubToken: string | undefined;
   private readonly customAgents: Array<{ name: string; displayName: string; description: string; prompt: string; infer: boolean }>;
@@ -103,10 +95,7 @@ export class AgentSessionManager {
   private readonly logError: (message: string) => void;
   private generationCounter = 0;
 
-  constructor(options: AgentSessionManagerOptions) {
-    this.model = options.model;
-    this.zeroPremium = options.zeroPremium ?? false;
-    this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
+  constructor(options: PhysicalSessionManagerOptions) {
     this.workingDirectory = options.workingDirectory;
     this.githubToken = options.githubToken;
     const defaultLog = (message: string) => {
@@ -185,7 +174,7 @@ export class AgentSessionManager {
   }
 
   /** Get session messages (conversation history) from the SDK for a given copilot session ID. */
-  async getSessionMessages(copilotSessionId: string): Promise<unknown[] | null> {
+  async getPhysicalSessionMessages(copilotSessionId: string): Promise<unknown[] | null> {
     for (const [, entry] of this.sessions) {
       if (entry.copilotSessionId === copilotSessionId && entry.copilotSession !== undefined) {
         try {
@@ -199,8 +188,8 @@ export class AgentSessionManager {
     return null;
   }
 
-  getSessionStatuses(): Record<string, AgentSessionInfo> {
-    const result: Record<string, AgentSessionInfo> = {};
+  getPhysicalSessionStatuses(): Record<string, PhysicalSessionInfo> {
+    const result: Record<string, PhysicalSessionInfo> = {};
     for (const [sessionId, entry] of this.sessions) {
       result[sessionId] = { ...entry.info };
     }
@@ -209,29 +198,29 @@ export class AgentSessionManager {
 
   /** Return a list of currently running (non-suspended) sessions for stream reconciliation.
    *  Used when gateway reconnects to discover which physical sessions are still alive. */
-  getRunningSessionsSummary(): Array<{ sessionId: string; channelId: string; status: string }> {
-    const result: Array<{ sessionId: string; channelId: string; status: string }> = [];
+  getRunningPhysicalSessionsSummary(): Array<{ sessionId: string; status: string }> {
+    const result: Array<{ sessionId: string; status: string }> = [];
     for (const [sessionId, entry] of this.sessions) {
-      if (entry.info.status !== "suspended" && entry.info.boundChannelId !== undefined) {
-        result.push({ sessionId, channelId: entry.info.boundChannelId, status: entry.info.status });
+      if (entry.info.status !== "suspended") {
+        result.push({ sessionId, status: entry.info.status });
       }
     }
     return result;
   }
 
-  getSessionStatus(sessionId: string): AgentSessionInfo | undefined {
+  getPhysicalSessionStatus(sessionId: string): PhysicalSessionInfo | undefined {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return undefined;
     return { ...entry.info };
   }
 
-  startSession(options: StartSessionOptions): string {
-    const { sessionId, boundChannelId, copilotSessionId, resolvedModel } = options;
+  startPhysicalSession(options: StartPhysicalSessionOptions): string {
+    const { sessionId, copilotSessionId, resolvedModel } = options;
 
     const abortController = new AbortController();
     const client = this.createClient();
     const generation = ++this.generationCounter;
-    const entry: AgentSessionEntry = {
+    const entry: PhysicalSessionEntry = {
       sessionId,
       info: {
         status: "starting",
@@ -243,10 +232,6 @@ export class AgentSessionManager {
       generation,
       reinjectCount: 0,
     };
-
-    if (boundChannelId !== undefined) {
-      entry.info.boundChannelId = boundChannelId;
-    }
 
     // Propagate SDK session ID for resume before runSession reads it
     if (copilotSessionId !== undefined) {
@@ -263,14 +248,9 @@ export class AgentSessionManager {
     return sessionId;
   }
 
-  private async runSession(entry: AgentSessionEntry): Promise<void> {
-    const channelId = entry.info.boundChannelId;
-    if (channelId === undefined) {
-      throw new Error("channel-less sessions not yet supported");
-    }
-
+  private async runSession(entry: PhysicalSessionEntry): Promise<void> {
     const { tools: channelTools } = createChannelTools({
-      channelId,
+      sessionId: entry.sessionId,
       keepaliveTimeoutMs: this.keepaliveTimeoutMs,
       abortSignal: entry.abortController.signal,
       onStatusChange: (status) => {
@@ -321,7 +301,6 @@ export class AgentSessionManager {
             hookName,
             sessionId: entry.sessionId,
             copilotSessionId: invocation?.sessionId,
-            channelId,
             input: input as Record<string, unknown>,
           });
           gatewayReachable = true;
@@ -349,7 +328,7 @@ export class AgentSessionManager {
         // Fallback: agent-autonomous behavior when gateway is offline.
         // Only onPostToolUse has meaningful fallback (keepalive reminder).
         if (hookName === "onPostToolUse") {
-          return this.postToolUseFallback(channelId, shouldRemind);
+          return this.postToolUseFallback(entry.sessionId, shouldRemind);
         }
         return;
       };
@@ -366,19 +345,6 @@ export class AgentSessionManager {
         onSessionEnd: makeHookHandler("onSessionEnd"),
         onErrorOccurred: makeHookHandler("onErrorOccurred"),
       },
-      // Debug mock copilot unsafe tools mode: restrict to safe built-in tools + copilotclaw_* + debug mock tools
-      ...(this.debugMockCopilotUnsafeTools ? {
-        availableTools: [
-          "copilotclaw_send_message",
-          "copilotclaw_wait",
-          "copilotclaw_list_messages",
-          "copilotclaw_debug_mock_read_file",
-          "copilotclaw_debug_mock_write_file",
-          "copilotclaw_debug_mock_shell_exec",
-          "WebFetch",
-          "WebSearch",
-        ],
-      } : {}),
     };
 
     // Use gateway-resolved model if available, otherwise fall back to local resolution
@@ -491,8 +457,8 @@ export class AgentSessionManager {
     session.on((event: { type: string; timestamp?: string; data?: unknown }) => {
       this.postToGateway({
         type: "session_event",
-        sessionId: session.sessionId,
-        channelId,
+        sessionId: entry.sessionId,
+        copilotSessionId: session.sessionId,
         eventType: event.type,
         timestamp: event.timestamp ?? new Date().toISOString(),
         data: (typeof event.data === "object" && event.data !== null) ? event.data : {},
@@ -525,27 +491,25 @@ export class AgentSessionManager {
     session.on("assistant.message", (event) => {
       const content = event.data.content;
       if (content.length > 0) {
-        this.postChannelMessage(channelId, content);
+        this.postMessage(entry.sessionId, content);
       }
     });
 
-    const logPrefix = channelId.slice(0, 8);
+    const logPrefix = entry.sessionId.slice(0, 8);
     await runSessionLoop({
       session: adaptCopilotSession(session),
       // System prompt is in the channel-operator custom agent's prompt field.
       // initialPrompt is the first user-turn message that kicks off the session.
       initialPrompt: this.initialPrompt,
-      onMessage: (content) => { console.log(`[ch:${logPrefix}] ${content}`); },
+      onMessage: (content) => { console.log(`[sess:${logPrefix}] ${content}`); },
       log: (message) => { this.log(`[${logPrefix}] ${message}`); },
       shouldStop: () => entry.abortController.signal.aborted,
     });
   }
 
-  /** Resolve which model to use for session creation.
-   * Queries available models via SDK and selects based on config:
-   * - zeroPremium: picks cheapest non-premium model (billing.multiplier === 0)
-   * - model unset: picks model with lowest billing.multiplier
-   * - model set: uses that model (zeroPremium may override if it's premium) */
+  /** Resolve which model to use for session creation (fallback only).
+   * Gateway normally sends resolvedModel; this runs only when gateway didn't provide one.
+   * Queries available models via SDK and picks the cheapest. */
   private async resolveModel(client: CopilotClient): Promise<string> {
     try {
       // Ensure the CLI process is started before accessing client.rpc.
@@ -555,39 +519,18 @@ export class AgentSessionManager {
       const { models } = await client.rpc.models.list();
       if (models.length === 0) {
         this.logError("no models available from SDK, falling back to gpt-4.1");
-        return this.model ?? "gpt-4.1";
+        return "gpt-4.1";
       }
 
       // Sort by billing multiplier (ascending — cheapest first)
       const sorted = [...models].sort((a, b) =>
         (a.billing?.multiplier ?? Infinity) - (b.billing?.multiplier ?? Infinity),
       );
-      const nonPremium = sorted.filter((m) => m.billing?.multiplier === 0);
 
-      if (this.zeroPremium) {
-        if (nonPremium.length === 0) {
-          this.logError("zeroPremium: no non-premium models available");
-          throw new Error("zeroPremium is enabled but no non-premium models are available");
-        }
-        if (this.model !== undefined) {
-          const modelInfo = models.find((m) => m.id === this.model);
-          if (modelInfo !== undefined && modelInfo.billing?.multiplier !== 0) {
-            this.log(`zeroPremium: overriding premium model ${this.model} → ${nonPremium[0]!.id}`);
-            return nonPremium[0]!.id;
-          }
-          return this.model;
-        }
-        return nonPremium[0]!.id;
-      }
-
-      if (this.model !== undefined) return this.model;
-
-      // No model specified: pick the one with lowest premium cost
       return sorted[0]!.id;
     } catch (err: unknown) {
-      if (err instanceof Error && err.message.includes("zeroPremium")) throw err;
       this.logError(`failed to list models from SDK, falling back to gpt-4.1: ${err instanceof Error ? err.message : String(err)}`);
-      return this.model ?? "gpt-4.1";
+      return "gpt-4.1";
     }
   }
 
@@ -596,14 +539,14 @@ export class AgentSessionManager {
    *  This ensures physical sessions survive gateway downtime.
    *  @param shouldRemind - pre-consumed reminder flag (consumed synchronously before the RPC call). */
   private async postToolUseFallback(
-    channelId: string,
+    sessionId: string,
     shouldRemind: boolean,
   ): Promise<{ additionalContext: string } | void> {
     const parts: string[] = [];
 
     // Check for pending user messages via IPC (will fail if gateway is down — that's OK)
     try {
-      const peekResult = await requestFromGateway({ type: "peek_pending", channelId });
+      const peekResult = await requestFromGateway({ type: "peek_pending", sessionId });
       if (peekResult !== null && peekResult !== undefined) {
         parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
       }
@@ -625,25 +568,25 @@ export class AgentSessionManager {
    *  Token accumulation and physical session history are managed by gateway's
    *  SessionOrchestrator (via physical_session_ended message). Agent only clears
    *  its local references. */
-  suspendSessionState(entry: AgentSessionEntry): void {
+  suspendPhysicalSessionState(entry: PhysicalSessionEntry): void {
     entry.info.status = "suspended";
     entry.copilotSession = undefined;
     // copilotSessionId is preserved for resumeSession on revival
   }
 
-  private suspendSession(entry: AgentSessionEntry): void {
-    this.suspendSessionState(entry);
+  private suspendPhysicalSession(entry: PhysicalSessionEntry): void {
+    this.suspendPhysicalSessionState(entry);
   }
 
   /** Explicitly stop a session — fully removes the abstract session. */
-  stopSession(sessionId: string): void {
+  stopPhysicalSession(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return;
     entry.abortController.abort();
     this.sessions.delete(sessionId);
   }
 
-  async stopAll(): Promise<void> {
+  async stopAllPhysicalSessions(): Promise<void> {
     const promises: Promise<void>[] = [];
     const entries = [...this.sessions.entries()];
     for (const [sessionId, entry] of entries) {
@@ -663,7 +606,7 @@ export class AgentSessionManager {
    *  Returns { action: "stop"|"reinject"|"wait", clearCopilotSessionId?: boolean }.
    *  If gateway is unreachable, defaults to "wait" (keep session alive). */
   private async queryLifecycleAction(
-    entry: AgentSessionEntry,
+    entry: PhysicalSessionEntry,
     event: "idle" | "error",
     elapsedMs: number,
     error?: string,
@@ -673,7 +616,6 @@ export class AgentSessionManager {
         type: "lifecycle",
         event,
         sessionId: entry.sessionId,
-        channelId: entry.info.boundChannelId,
         elapsedMs,
         ...(error !== undefined ? { error } : {}),
       });
@@ -695,10 +637,9 @@ export class AgentSessionManager {
   /** Attach lifecycle handlers to a session's runSession promise.
    *  On idle/error, asks gateway what to do (stop/reinject/wait).
    *  Default (gateway offline): keep session alive (don't destroy). */
-  private attachSessionLifecycle(entry: AgentSessionEntry, clientToStop: CopilotClient): Promise<void> {
+  private attachSessionLifecycle(entry: PhysicalSessionEntry, clientToStop: CopilotClient): Promise<void> {
     const startTime = Date.now();
     const sessionId = entry.sessionId;
-    const boundChannelId = entry.info.boundChannelId;
 
     const MAX_REINJECT = 10;
 
@@ -707,7 +648,7 @@ export class AgentSessionManager {
       const elapsed = Date.now() - startTime;
 
       if (event === "idle") {
-        this.log(`session ${sessionId.slice(0, 8)} idle exit after ${Math.round(elapsed / 1000)}s (channel ${boundChannelId?.slice(0, 8) ?? "none"})`);
+        this.log(`session ${sessionId.slice(0, 8)} idle exit after ${Math.round(elapsed / 1000)}s`);
       } else {
         this.logError(`session ${sessionId.slice(0, 8)} error: ${error ?? "unknown"}`);
       }
@@ -738,7 +679,7 @@ export class AgentSessionManager {
       switch (effectiveAction) {
         case "stop":
           this.sendPhysicalSessionEnded(entry, event, elapsed, error);
-          this.suspendSession(entry);
+          this.suspendPhysicalSession(entry);
           clientToStop.stop().catch(() => {});
           break;
         case "reinject":
@@ -767,7 +708,7 @@ export class AgentSessionManager {
 
   /** Send physical_session_ended notification to gateway. */
   sendPhysicalSessionEnded(
-    entry: AgentSessionEntry,
+    entry: PhysicalSessionEntry,
     reason: "idle" | "error" | "aborted",
     elapsedMs: number,
     error?: string,
@@ -788,8 +729,8 @@ export class AgentSessionManager {
     sendToGateway(msg);
   }
 
-  private postChannelMessage(channelId: string, message: string): void {
-    sendToGateway({ type: "channel_message", channelId, sender: "agent", message });
+  private postMessage(sessionId: string, message: string): void {
+    sendToGateway({ type: "channel_message", sessionId, sender: "agent", message });
   }
 
 }

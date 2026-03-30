@@ -46,32 +46,41 @@ async function main(): Promise<void> {
   });
   const promptConfig = getAgentPromptConfig();
 
+  // Helper: resolve sessionId → channelId via orchestrator.
+  // Agent sends opaque sessionId; gateway looks up the bound channelId.
+  const resolveChannelId = (sessionId: string): string | undefined => {
+    return orchestrator.getSessionStatuses()[sessionId]?.channelId;
+  };
+
   // Set up IPC stream message handlers before connecting
   agentManager.setStreamMessageHandler({
     onToolCall: (request) => {
       // Gateway-side tool handler. All dynamic tools dispatch here via RPC.
       // Adding/modifying tools only requires gateway restart (no agent update).
+      const channelId = resolveChannelId(request.sessionId);
+      if (channelId === undefined) {
+        return { error: `No channel bound to session ${request.sessionId}` };
+      }
       switch (request.toolName) {
         case "copilotclaw_send_message": {
           const message = request.args["message"] as string ?? "";
-          store.addMessage(request.channelId, "agent", message);
+          store.addMessage(channelId, "agent", message);
           serverHandle?.sseBroadcaster?.broadcast({
             type: "new_message",
-            channelId: request.channelId,
+            channelId,
             data: { sender: "agent", message },
           });
           return { status: "sent" };
         }
         case "copilotclaw_list_messages": {
           const limit = (request.args["limit"] as number) ?? 5;
-          const messages = store.listMessages(request.channelId, limit);
+          const messages = store.listMessages(channelId, limit);
           return { messages };
         }
         case "copilotclaw_wait": {
           // Wait tool: check for pending messages.
           // The full keepalive loop lives in agent (built-in fallback),
           // but gateway can provide the drain+wait logic here.
-          const channelId = request.channelId;
           const drained = store.drainPending(channelId);
           if (drained.length > 0) {
             const combined = drained.map((m) => {
@@ -112,11 +121,13 @@ async function main(): Promise<void> {
       // Gateway-side hook handler. All SDK hooks are forwarded here via RPC.
       // Return a result object to control the hook's output, or null for no-op.
       // Adding new hook logic only requires gateway restart (no agent update).
+      const hookChannelId = resolveChannelId(request.sessionId);
       switch (request.hookName) {
         case "onPostToolUse": {
           const parts: string[] = [];
           // Check for pending user messages
-          const oldest = store.peekOldestPending(request.channelId);
+          if (hookChannelId === undefined) return null;
+          const oldest = store.peekOldestPending(hookChannelId);
           if (oldest !== undefined) {
             parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
           }
@@ -130,30 +141,36 @@ async function main(): Promise<void> {
           return null;
       }
     },
-    onChannelMessage: (channelId, sender, message) => {
+    onChannelMessage: (sessionId, sender, message) => {
+      const msgChannelId = resolveChannelId(sessionId);
+      if (msgChannelId === undefined) return;
       const senderType = sender === "user" ? "user" as const : sender === "cron" ? "cron" as const : sender === "system" ? "system" as const : "agent" as const;
-      store.addMessage(channelId, senderType, message);
+      store.addMessage(msgChannelId, senderType, message);
       // Broadcast to SSE clients (serverHandle.sseBroadcaster set after startServer)
       serverHandle?.sseBroadcaster?.broadcast({
         type: "new_message",
-        channelId,
+        channelId: msgChannelId,
         data: { sender: senderType, message },
       });
     },
-    onSessionEvent: (copilotSessionId, channelId, eventType, timestamp, data, parentId) => {
+    onSessionEvent: (sessionId, copilotSessionId, eventType, timestamp, data, parentId) => {
+      const eventChannelId = resolveChannelId(sessionId);
       const event: { type: string; timestamp: string; data: Record<string, unknown>; parentId?: string } = {
         type: eventType,
         timestamp,
         data,
       };
       if (parentId !== undefined) event.parentId = parentId;
-      sessionEventStore.appendEvent(copilotSessionId, event);
+      if (copilotSessionId !== undefined) {
+        sessionEventStore.appendEvent(copilotSessionId, event);
+      }
 
       // Update orchestrator's physical session state from forwarded SDK events.
       // This allows the gateway to maintain dashboard-visible state without
       // relying on the agent's IPC status RPC.
-      const orchSessionId = orchestrator.findSessionByCopilotId(copilotSessionId);
-      if (orchSessionId !== undefined) {
+      // Use sessionId (opaque token = orchestrator session ID) directly.
+      const orchSessionId = sessionId;
+      if (orchestrator.getSessionStatuses()[orchSessionId] !== undefined) {
         switch (eventType) {
           case "tool.execution_start":
             orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${data["toolName"] as string ?? "unknown"}`);
@@ -199,7 +216,7 @@ async function main(): Promise<void> {
       }
 
       // Subagent completion/failure: insert system message and notify agent
-      if (channelId !== undefined && (eventType === "subagent.completed" || eventType === "subagent.failed")) {
+      if (eventChannelId !== undefined && (eventType === "subagent.completed" || eventType === "subagent.failed")) {
         // Only notify for direct subagent calls (no parentToolCallId in the event data)
         // Nested subagent events carry parentToolCallId from the outer task tool
         if (data["parentToolCallId"] === undefined) {
@@ -207,8 +224,8 @@ async function main(): Promise<void> {
           const status = eventType === "subagent.completed" ? "completed" : "failed";
           const error = typeof data["error"] === "string" ? ` (error: ${data["error"]})` : "";
           const msg = `[SUBAGENT ${status.toUpperCase()}] ${agentName} ${status}${error}`;
-          store.addMessage(channelId, "system", msg);
-          agentManager.notifyAgent(channelId);
+          store.addMessage(eventChannelId, "system", msg);
+          agentManager.notifyAgent(sessionId);
         }
       }
     },
@@ -218,17 +235,25 @@ async function main(): Promise<void> {
     onSystemPromptSession: (sessionId, model, prompt) => {
       sessionEventStore.saveEffectivePrompt(sessionId, prompt, model);
     },
-    onDrainPending: (channelId) => {
-      return store.drainPending(channelId);
+    onDrainPending: (sessionId) => {
+      const ch = resolveChannelId(sessionId);
+      if (ch === undefined) return [];
+      return store.drainPending(ch);
     },
-    onPeekPending: (channelId) => {
-      return store.peekOldestPending(channelId) ?? null;
+    onPeekPending: (sessionId) => {
+      const ch = resolveChannelId(sessionId);
+      if (ch === undefined) return null;
+      return store.peekOldestPending(ch) ?? null;
     },
-    onFlushPending: (channelId) => {
-      return store.flushPending(channelId);
+    onFlushPending: (sessionId) => {
+      const ch = resolveChannelId(sessionId);
+      if (ch === undefined) return 0;
+      return store.flushPending(ch);
     },
-    onListMessages: (channelId, limit) => {
-      return store.listMessages(channelId, limit);
+    onListMessages: (sessionId, limit) => {
+      const ch = resolveChannelId(sessionId);
+      if (ch === undefined) return [];
+      return store.listMessages(ch, limit);
     },
     onRunningSessionsReport: (sessions) => {
       console.error(`[gateway] agent reports ${sessions.length} running session(s), reconciling with orchestrator`);
@@ -283,8 +308,6 @@ async function main(): Promise<void> {
   // Set config to push to agent when stream connects
   agentManager.setConfigToSend({
     model: config.model ?? null,
-    zeroPremium: config.zeroPremium ?? false,
-    debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools ?? false,
     stateDir: getStateDir(getProfileName()),
     workspaceRoot: getWorkspaceRoot(getProfileName()),
     auth: config.auth?.github ?? null,
@@ -335,7 +358,7 @@ async function main(): Promise<void> {
     }
 
     console.error(`[gateway] starting physical session for channel ${channelId.slice(0, 8)}, session=${sessionId.slice(0, 8)}, model=${resolvedModelName ?? "(agent-fallback)"}`);
-    agentManager.startPhysicalSession(sessionId, channelId, session?.copilotSessionId, resolvedModelName);
+    agentManager.startPhysicalSession(sessionId, session?.copilotSessionId, resolvedModelName);
   };
 
   // Helper: check all channels for pending messages and start sessions via orchestrator
@@ -380,7 +403,10 @@ async function main(): Promise<void> {
           console.error(`[gateway] cron ${job.id}: failed to start session:`, err);
         });
         // Fallback: also send agent_notify for backward compat
-        agentManager.notifyAgent(job.channelId);
+        const cronSessionId = orchestrator.getSessionIdForChannel(job.channelId);
+        if (cronSessionId !== undefined) {
+          agentManager.notifyAgent(cronSessionId);
+        }
       }
     }, job.intervalMs);
     timer.unref();

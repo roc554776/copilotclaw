@@ -40,7 +40,7 @@ const DEFAULT_TOOL_DEFS = [
 ];
 
 /** Helper: create channel tools and extract by name for test convenience. */
-function makeTools(deps: Partial<ChannelToolDeps> & { channelId: string }) {
+function makeTools(deps: Partial<ChannelToolDeps> & { sessionId: string }) {
   const { tools } = createChannelTools({
     keepaliveTimeoutMs: 25 * 60 * 1000,
     toolDefinitions: DEFAULT_TOOL_DEFS,
@@ -98,7 +98,7 @@ describe("channel tools — abort signal", () => {
     mockDrainEmpty();
 
     const { wait } = makeTools({
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
       abortSignal: controller.signal,
     });
 
@@ -115,7 +115,7 @@ describe("channel tools — abort signal", () => {
     mockGatewayDown();
 
     const { wait } = makeTools({
-      channelId: "ch-err",
+      sessionId: "ch-err",
       keepaliveTimeoutMs: 50,
     });
 
@@ -133,7 +133,7 @@ describe("channel tools — abort signal", () => {
 describe("copilotclaw_send_message", () => {
   it("sends message via gateway RPC and returns result", async () => {
     const { sendMessage } = makeTools({
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
@@ -143,7 +143,7 @@ describe("copilotclaw_send_message", () => {
     expect(requestFromGateway).toHaveBeenCalledWith({
       type: "tool_call",
       toolName: "copilotclaw_send_message",
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
       args: { message: "hello" },
     });
   });
@@ -152,7 +152,7 @@ describe("copilotclaw_send_message", () => {
     mockGatewayDown();
 
     const { sendMessage } = makeTools({
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
@@ -165,7 +165,7 @@ describe("copilotclaw_send_message", () => {
 
   it("has correct tool name", () => {
     const { sendMessage } = makeTools({
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
     });
     expect(sendMessage!.name).toBe("copilotclaw_send_message");
   });
@@ -179,7 +179,7 @@ describe("copilotclaw_wait", () => {
     ]);
 
     const { wait } = makeTools({
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
@@ -194,7 +194,7 @@ describe("copilotclaw_wait", () => {
     mockDrainEmpty();
 
     const { wait } = makeTools({
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
       keepaliveTimeoutMs: 20,
     });
 
@@ -222,7 +222,7 @@ describe("copilotclaw_wait", () => {
     });
 
     const { wait } = makeTools({
-      channelId: "ch-notify",
+      sessionId: "ch-notify",
       keepaliveTimeoutMs: 5000,
     });
 
@@ -230,7 +230,7 @@ describe("copilotclaw_wait", () => {
 
     // Emit agent_notify shortly after wait starts polling
     setTimeout(() => {
-      streamEvents.emit("agent_notify", { channelId: "ch-notify" });
+      streamEvents.emit("agent_notify", { sessionId: "ch-notify" });
     }, 30);
 
     const result = await wait.handler({}, invocation) as { userMessage: string };
@@ -244,7 +244,7 @@ describe("copilotclaw_wait", () => {
       { id: "sys-1", sender: "system", message: "[SUBAGENT COMPLETED] worker completed" },
     ]);
 
-    const { wait } = makeTools({ channelId: "ch-sys", keepaliveTimeoutMs: 100 });
+    const { wait } = makeTools({ sessionId: "ch-sys", keepaliveTimeoutMs: 100 });
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await wait.handler({}, invocation) as { userMessage: string };
     // Agent does NOT add [SYSTEM EVENT] prefix — gateway handles formatting
@@ -258,7 +258,7 @@ describe("copilotclaw_wait", () => {
       { id: "sys-1", sender: "system", message: "[SUBAGENT COMPLETED] worker completed" },
     ]);
 
-    const { wait } = makeTools({ channelId: "ch-mixed", keepaliveTimeoutMs: 100 });
+    const { wait } = makeTools({ sessionId: "ch-mixed", keepaliveTimeoutMs: 100 });
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await wait.handler({}, invocation) as { userMessage: string };
     expect(result.userMessage).toContain("hello");
@@ -271,7 +271,7 @@ describe("copilotclaw_wait", () => {
       { id: "c-1", sender: "cron", message: "[cron:daily] report task" },
     ]);
 
-    const { wait } = makeTools({ channelId: "ch-cron-fmt", keepaliveTimeoutMs: 100 });
+    const { wait } = makeTools({ sessionId: "ch-cron-fmt", keepaliveTimeoutMs: 100 });
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await wait.handler({}, invocation) as { userMessage: string };
     // Agent does NOT add [CRON TASK] prefix — message is passed as-is
@@ -288,7 +288,7 @@ describe("copilotclaw_wait — swallowed message detection", () => {
 
     const logErrorSpy = vi.fn();
     const { wait } = makeTools({
-      channelId: "ch-swallow",
+      sessionId: "ch-swallow",
       keepaliveTimeoutMs: 20,
       logError: logErrorSpy,
     });
@@ -327,7 +327,7 @@ describe("copilotclaw_wait — swallowed message detection", () => {
 
     const logErrorSpy = vi.fn();
     const { sendMessage, wait } = makeTools({
-      channelId: "ch-no-swallow",
+      sessionId: "ch-no-swallow",
       keepaliveTimeoutMs: 20,
       logError: logErrorSpy,
     });
@@ -355,7 +355,7 @@ describe("copilotclaw_wait — onStatusChange callback", () => {
 
     const statusChanges: string[] = [];
     const { wait } = makeTools({
-      channelId: "ch-status",
+      sessionId: "ch-status",
       keepaliveTimeoutMs: 20,
       onStatusChange: (status) => { statusChanges.push(status); },
     });
@@ -372,7 +372,7 @@ describe("copilotclaw_wait — onStatusChange callback", () => {
 
     const statusChanges: string[] = [];
     const { wait } = makeTools({
-      channelId: "ch-status-timeout",
+      sessionId: "ch-status-timeout",
       keepaliveTimeoutMs: 20,
       onStatusChange: (status) => { statusChanges.push(status); },
     });
@@ -395,7 +395,7 @@ describe("copilotclaw_wait — IPC returns non-array", () => {
     });
 
     const { wait } = makeTools({
-      channelId: "ch-nonarray",
+      sessionId: "ch-nonarray",
       keepaliveTimeoutMs: 20,
     });
 
@@ -413,7 +413,7 @@ describe("copilotclaw_wait — pre-aborted signal", () => {
     mockDrainEmpty();
 
     const { wait } = makeTools({
-      channelId: "ch-pre-abort",
+      sessionId: "ch-pre-abort",
       abortSignal: controller.signal,
       keepaliveTimeoutMs: 5000,
     });
@@ -429,7 +429,7 @@ describe("copilotclaw_list_messages — error handling", () => {
     mockGatewayDown();
 
     const { listMessages } = makeTools({
-      channelId: "ch-err",
+      sessionId: "ch-err",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
@@ -443,7 +443,7 @@ describe("copilotclaw_list_messages — error handling", () => {
     (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
     const { listMessages } = makeTools({
-      channelId: "ch-null",
+      sessionId: "ch-null",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
@@ -457,14 +457,14 @@ describe("copilotclaw_list_messages", () => {
   it("dispatches to gateway via RPC and returns result", async () => {
     const mockMessages = {
       messages: [
-        { id: "m1", channelId: "ch-abc", sender: "user", message: "hi", createdAt: "2026-01-01T00:00:00Z" },
-        { id: "m2", channelId: "ch-abc", sender: "agent", message: "hello", createdAt: "2026-01-01T00:00:01Z" },
+        { id: "m1", sessionId: "ch-abc", sender: "user", message: "hi", createdAt: "2026-01-01T00:00:00Z" },
+        { id: "m2", sessionId: "ch-abc", sender: "agent", message: "hello", createdAt: "2026-01-01T00:00:01Z" },
       ],
     };
     (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue(mockMessages);
 
     const { listMessages } = makeTools({
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
@@ -474,7 +474,7 @@ describe("copilotclaw_list_messages", () => {
     expect(requestFromGateway).toHaveBeenCalledWith({
       type: "tool_call",
       toolName: "copilotclaw_list_messages",
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
       args: {},
     });
   });
@@ -483,7 +483,7 @@ describe("copilotclaw_list_messages", () => {
     (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue({ messages: [] });
 
     const { listMessages } = makeTools({
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
@@ -492,14 +492,14 @@ describe("copilotclaw_list_messages", () => {
     expect(requestFromGateway).toHaveBeenCalledWith({
       type: "tool_call",
       toolName: "copilotclaw_list_messages",
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
       args: { limit: 10 },
     });
   });
 
   it("has correct tool name", () => {
     const { listMessages } = makeTools({
-      channelId: "ch-abc",
+      sessionId: "ch-abc",
     });
     expect(listMessages!.name).toBe("copilotclaw_list_messages");
   });

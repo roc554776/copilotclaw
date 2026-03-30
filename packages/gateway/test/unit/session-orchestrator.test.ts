@@ -458,38 +458,33 @@ describe("SessionOrchestrator", () => {
       orch.suspendSession(sessionId);
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);
 
-      orch.reconcileWithAgent([{ sessionId, channelId: "ch-1", status: "waiting" }]);
+      orch.reconcileWithAgent([{ sessionId, status: "waiting" }]);
 
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(true);
       const session = orch.getSessionStatuses()[sessionId];
       expect(session.status).toBe("waiting");
     });
 
-    it("adopts unknown session reported by agent", () => {
+    it("skips unknown session reported by agent", () => {
       const orch = new SessionOrchestrator();
-      orch.reconcileWithAgent([{ sessionId: "agent-sess-1", channelId: "ch-new", status: "processing" }]);
+      orch.reconcileWithAgent([{ sessionId: "agent-sess-1", status: "processing" }]);
 
-      expect(orch.hasActiveSessionForChannel("ch-new")).toBe(true);
+      // Unknown sessions are skipped — not adopted
       const session = orch.getSessionStatuses()["agent-sess-1"];
-      expect(session).toBeDefined();
-      expect(session.status).toBe("processing");
-      expect(session.channelId).toBe("ch-new");
+      expect(session).toBeUndefined();
     });
 
-    it("remaps sessionId when agent's id differs from orchestrator's", () => {
+    it("does not remap sessionId for unknown sessions", () => {
       const orch = new SessionOrchestrator();
       const orchSessionId = orch.startSession("ch-1");
       orch.suspendSession(orchSessionId);
 
-      orch.reconcileWithAgent([{ sessionId: "agent-different-id", channelId: "ch-1", status: "waiting" }]);
+      orch.reconcileWithAgent([{ sessionId: "agent-different-id", status: "waiting" }]);
 
-      // Old id should be gone
-      expect(orch.getSessionStatuses()[orchSessionId]).toBeUndefined();
-      // New id should exist
-      const session = orch.getSessionStatuses()["agent-different-id"];
-      expect(session).toBeDefined();
-      expect(session.status).toBe("waiting");
-      expect(orch.getSessionIdForChannel("ch-1")).toBe("agent-different-id");
+      // Old id should still exist (suspended)
+      expect(orch.getSessionStatuses()[orchSessionId]).toBeDefined();
+      // Unknown id should not be adopted
+      expect(orch.getSessionStatuses()["agent-different-id"]).toBeUndefined();
     });
 
     it("does not affect already-active sessions", () => {
@@ -497,7 +492,7 @@ describe("SessionOrchestrator", () => {
       const sessionId = orch.startSession("ch-1");
       orch.updateSessionStatus(sessionId, "processing");
 
-      orch.reconcileWithAgent([{ sessionId, channelId: "ch-1", status: "waiting" }]);
+      orch.reconcileWithAgent([{ sessionId, status: "waiting" }]);
 
       // Should remain processing (already active, no change needed)
       const session = orch.getSessionStatuses()[sessionId];

@@ -37,7 +37,7 @@ vi.mock("@github/copilot-sdk", () => {
   return { CopilotClient, approveAll, defineTool };
 });
 
-import { AgentSessionManager } from "../src/agent-session-manager.js";
+import { PhysicalSessionManager } from "../src/physical-session-manager.js";
 import { CopilotClient } from "@github/copilot-sdk";
 import { sendToGateway, requestFromGateway } from "../src/ipc-server.js";
 
@@ -126,10 +126,10 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-async function waitForSessionReady(manager: AgentSessionManager, timeoutMs = 2000): Promise<void> {
+async function waitForSessionReady(manager: PhysicalSessionManager, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const statuses = manager.getSessionStatuses();
+    const statuses = manager.getPhysicalSessionStatuses();
     const session = Object.values(statuses)[0];
     if (session !== undefined && session.status !== "starting") return;
     await wait(5);
@@ -150,7 +150,7 @@ function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
   });
 }
 
-describe("AgentSessionManager — physical session lifecycle", () => {
+describe("PhysicalSessionManager — physical session lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -158,28 +158,28 @@ describe("AgentSessionManager — physical session lifecycle", () => {
   it("suspends session when physical session ends normally (idle, unaborted)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-idle" });
+    const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
 
     await wait(50);
 
     // Session should be suspended (not deleted)
-    const statuses = manager.getSessionStatuses();
+    const statuses = manager.getPhysicalSessionStatuses();
     expect(statuses[sessionId]?.status).toBe("suspended");
   });
 
   it("suspends session when physical session throws an error (unaborted)", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("error")));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-error" });
+    const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
 
     await wait(50);
 
     // Session should be suspended (not deleted)
-    const statuses = manager.getSessionStatuses();
+    const statuses = manager.getPhysicalSessionStatuses();
     expect(statuses[sessionId]?.status).toBe("suspended");
   });
 
@@ -188,16 +188,16 @@ describe("AgentSessionManager — physical session lifecycle", () => {
     mockSession.send.mockImplementation(async () => "msg-id");
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-explicit-stop" });
+    const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
-    manager.stopSession(sessionId);
+    manager.stopPhysicalSession(sessionId);
     await wait(30);
 
     // Fully removed — not just suspended
-    expect(manager.getSessionStatuses()[sessionId]).toBeUndefined();
+    expect(manager.getPhysicalSessionStatuses()[sessionId]).toBeUndefined();
 
     mockSession.emit("session.idle");
     await wait(30);
@@ -208,12 +208,12 @@ describe("AgentSessionManager — physical session lifecycle", () => {
     const pendingCreate = new Promise<object>((res) => { resolveCreate = res; });
     installClientMock(vi.fn().mockReturnValue(pendingCreate));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-abort" });
+    const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
 
     // Abort immediately before createSession resolves
-    manager.stopSession(sessionId);
+    manager.stopPhysicalSession(sessionId);
 
     // Now resolve — the aborted signal will cause runSession to be short-circuited
     resolveCreate(makeMockCopilotSession("idle"));
@@ -227,21 +227,19 @@ describe("AgentSessionManager — physical session lifecycle", () => {
     expect(notifyCalls).toHaveLength(0);
   });
 
-  it("does not crash when channel-less session errors immediately", async () => {
+  it("session without extra options works normally", async () => {
     installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    // No boundChannelId — runSession throws "channel-less sessions not yet supported"
-    manager.startSession({ sessionId: nextSessionId() });
+    // Session with only sessionId (no copilotSessionId, no resolvedModel) should work
+    const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
 
     await wait(50);
 
-    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
-    const notifyCalls = ipcSendSpy.mock.calls.filter(
-      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
-    );
-    expect(notifyCalls).toHaveLength(0);
+    // Session should complete and be suspended after idle exit
+    const statuses = manager.getPhysicalSessionStatuses();
+    expect(statuses[sessionId]?.status).toBe("suspended");
   });
 
   describe("gateway lifecycle action routing", () => {
@@ -269,13 +267,13 @@ describe("AgentSessionManager — physical session lifecycle", () => {
 
       installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-wait" });
+      const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
 
       await wait(50);
 
       // Session must NOT be suspended — "wait" means keep alive
-      const status = manager.getSessionStatuses()[sessionId]?.status;
+      const status = manager.getPhysicalSessionStatuses()[sessionId]?.status;
       expect(status).not.toBe("suspended");
       // physical_session_ended must NOT be sent
       const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
@@ -294,13 +292,13 @@ describe("AgentSessionManager — physical session lifecycle", () => {
 
       installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-offline" });
+      const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
 
       await wait(50);
 
       // Must survive gateway failure without crashing, and session must not be suspended
-      const status = manager.getSessionStatuses()[sessionId]?.status;
+      const status = manager.getPhysicalSessionStatuses()[sessionId]?.status;
       expect(status).not.toBe("suspended");
       const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
       const endedCalls = ipcSendSpy.mock.calls.filter(
@@ -318,12 +316,12 @@ describe("AgentSessionManager — physical session lifecycle", () => {
 
       installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-stop-explicit" });
+      const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
 
       await wait(50);
 
-      expect(manager.getSessionStatuses()[sessionId]?.status).toBe("suspended");
+      expect(manager.getPhysicalSessionStatuses()[sessionId]?.status).toBe("suspended");
     });
 
     it("reinjects once when gateway returns reinject then stop", async () => {
@@ -343,14 +341,14 @@ describe("AgentSessionManager — physical session lifecycle", () => {
       // Each createSession/resumeSession call returns a fresh idle session
       installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-reinject" });
+      const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
 
       // Allow enough time for two idle cycles
       await wait(200);
 
       // After reinject then stop, session should be suspended
-      expect(manager.getSessionStatuses()[sessionId]?.status).toBe("suspended");
+      expect(manager.getPhysicalSessionStatuses()[sessionId]?.status).toBe("suspended");
       // lifecycle RPC should have been called at least twice
       expect(callCount).toBeGreaterThanOrEqual(2);
     });
@@ -365,14 +363,14 @@ describe("AgentSessionManager — physical session lifecycle", () => {
 
       installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
 
-      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-cap" });
+      const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
 
       // Allow time for cap to be hit (MAX_REINJECT idle cycles at ~5ms each)
       await wait(500);
 
       // After hitting cap, session must be in "wait" state (not suspended, not deleted)
-      const statuses = manager.getSessionStatuses();
+      const statuses = manager.getPhysicalSessionStatuses();
       const status = statuses[sessionId]?.status;
       expect(status).not.toBe("suspended");
       // RPC should have been called at most MAX_REINJECT + 1 times (cap prevents further loops)
@@ -384,7 +382,7 @@ describe("AgentSessionManager — physical session lifecycle", () => {
   });
 });
 
-describe("AgentSessionManager — assistant.message to channel timeline", () => {
+describe("PhysicalSessionManager — assistant.message to channel timeline", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -396,9 +394,9 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-assistant-msg" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     mockSession.emit("assistant.message", { data: { content: "Hello from assistant" } });
@@ -423,9 +421,9 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-empty-msg" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     mockSession.emit("assistant.message", { data: { content: "" } });
@@ -442,7 +440,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
   });
 });
 
-describe("AgentSessionManager — assistant.usage token accumulation", () => {
+describe("PhysicalSessionManager — assistant.usage token accumulation", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -453,9 +451,9 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-usage" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 }, timestamp: "2026-01-01T00:00:00Z" });
@@ -476,9 +474,9 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-cumul" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     // Emit usage before session ends
@@ -500,7 +498,7 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
   });
 });
 
-describe("AgentSessionManager — catch-all SDK event forwarding", () => {
+describe("PhysicalSessionManager — catch-all SDK event forwarding", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -511,9 +509,9 @@ describe("AgentSessionManager — catch-all SDK event forwarding", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-catchall" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     // session.truncation was NOT on the old forwardedEvents list — must now be forwarded
@@ -528,7 +526,6 @@ describe("AgentSessionManager — catch-all SDK event forwarding", () => {
     expect(eventCalls[0]![0]).toMatchObject({
       type: "session_event",
       eventType: "session.truncation",
-      channelId: "ch-catchall",
       data: { removedMessages: 5, reason: "context_limit" },
     });
 
@@ -542,9 +539,9 @@ describe("AgentSessionManager — catch-all SDK event forwarding", () => {
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-catchall-known" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     // session.model_change was on the old forwardedEvents list — must still be forwarded
@@ -563,7 +560,7 @@ describe("AgentSessionManager — catch-all SDK event forwarding", () => {
 });
 
 
-describe("AgentSessionManager — system prompt reinforcement via onPostToolUse", () => {
+describe("PhysicalSessionManager — system prompt reinforcement via onPostToolUse", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -572,7 +569,7 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
   async function setupWithHookCapture(): Promise<{
     mockSession: ReturnType<typeof makeMockCopilotSession>;
     createSessionSpy: ReturnType<typeof vi.fn>;
-    manager: AgentSessionManager;
+    manager: PhysicalSessionManager;
   }> {
     const mockSession = makeMockCopilotSession("idle");
     // Suppress automatic idle emit so we can control events manually.
@@ -581,9 +578,9 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
     installClientMock(createSessionSpy);
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-reminder" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     return { mockSession, createSessionSpy, manager };
@@ -675,7 +672,7 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
   });
 });
 
-describe("AgentSessionManager — custom agents configuration", () => {
+describe("PhysicalSessionManager — custom agents configuration", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -688,9 +685,9 @@ describe("AgentSessionManager — custom agents configuration", () => {
     installClientMock(createSessionSpy);
 
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-agents" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     const config = createSessionSpy.mock.calls[0]![0] as {
@@ -721,7 +718,7 @@ describe("AgentSessionManager — custom agents configuration", () => {
   });
 });
 
-describe("AgentSessionManager — gateway passthrough config (clientOptions, sessionConfigOverrides)", () => {
+describe("PhysicalSessionManager — gateway passthrough config (clientOptions, sessionConfigOverrides)", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -731,7 +728,7 @@ describe("AgentSessionManager — gateway passthrough config (clientOptions, ses
     mockSession.send.mockImplementation(async () => "msg-id");
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({
+    const manager = new PhysicalSessionManager({
       prompts: {
         ...TEST_PROMPTS,
         clientOptions: { enterpriseHostname: "my.ghes.com", otherOpt: 42 },
@@ -739,7 +736,7 @@ describe("AgentSessionManager — gateway passthrough config (clientOptions, ses
       githubToken: "tok-test",
     });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-client-opts" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     // CopilotClient should have been constructed with merged options
@@ -763,14 +760,14 @@ describe("AgentSessionManager — gateway passthrough config (clientOptions, ses
     const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
     installClientMock(createSessionSpy);
 
-    const manager = new AgentSessionManager({
+    const manager = new PhysicalSessionManager({
       prompts: {
         ...TEST_PROMPTS,
         sessionConfigOverrides: { extraFeatureFlag: true, agent: "custom-primary" },
       },
     });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-session-overrides" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     const config = createSessionSpy.mock.calls[0]![0] as Record<string, unknown>;
@@ -784,7 +781,7 @@ describe("AgentSessionManager — gateway passthrough config (clientOptions, ses
   });
 });
 
-describe("AgentSessionManager — suspend clears physical session (history is gateway's responsibility)", () => {
+describe("PhysicalSessionManager — suspend clears physical session (history is gateway's responsibility)", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -795,16 +792,16 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-hist" });
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     // End session → suspended
     mockSession.emit("session.idle");
     await wait(30);
 
-    const statuses = manager.getSessionStatuses();
+    const statuses = manager.getPhysicalSessionStatuses();
     const session = Object.values(statuses)[0];
     expect(session?.status).toBe("suspended");
 
@@ -823,21 +820,21 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    const sid = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-running" });
+    const sid = manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
-    const running = manager.getRunningSessionsSummary();
+    const running = manager.getRunningPhysicalSessionsSummary();
     expect(running).toHaveLength(1);
     expect(running[0]!.sessionId).toBe(sid);
-    expect(running[0]!.channelId).toBe("ch-running");
+    expect(running[0]!.status).toBeTruthy();
 
     // After suspend, no longer in running list
     mockSession.emit("session.idle");
     await wait(30);
 
-    const runningAfter = manager.getRunningSessionsSummary();
+    const runningAfter = manager.getRunningPhysicalSessionsSummary();
     expect(runningAfter).toHaveLength(0);
   });
 
@@ -846,14 +843,14 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
     mockSession.send.mockImplementation(async () => "msg-id");
     installClientMock(vi.fn().mockResolvedValue(mockSession));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
     const gatewaySessionId = "gateway-assigned-id-123";
-    const returnedId = manager.startSession({ sessionId: gatewaySessionId, boundChannelId: "ch-id" });
+    const returnedId = manager.startPhysicalSession({ sessionId: gatewaySessionId });
 
     expect(returnedId).toBe(gatewaySessionId);
 
-    const statuses = manager.getSessionStatuses();
+    const statuses = manager.getPhysicalSessionStatuses();
     expect(statuses[gatewaySessionId]).toBeDefined();
 
     mockSession.emit("session.idle");
@@ -866,9 +863,9 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
     const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
     installClientMock(createSessionSpy);
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-model", resolvedModel: "gpt-4.1-mini" });
+    manager.startPhysicalSession({ sessionId: nextSessionId(), resolvedModel: "gpt-4.1-mini" });
     await waitForSessionReady(manager);
 
     // The createSession call should use the gateway-resolved model
@@ -881,7 +878,7 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
   });
 });
 
-describe("AgentSessionManager — session status tracking via onStatusChange", () => {
+describe("PhysicalSessionManager — session status tracking via onStatusChange", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -918,13 +915,13 @@ describe("AgentSessionManager — session status tracking via onStatusChange", (
 
     (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-state" });
+    const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     // Session should be in "waiting" status after session creation
-    const statuses = manager.getSessionStatuses();
+    const statuses = manager.getPhysicalSessionStatuses();
     expect(statuses[sessionId]?.status).toBe("waiting");
 
     // Find the copilotclaw_wait tool handler
@@ -934,14 +931,14 @@ describe("AgentSessionManager — session status tracking via onStatusChange", (
     await wait(10);
 
     // Status should still be "waiting" after copilotclaw_wait is called
-    expect(manager.getSessionStatuses()[sessionId]?.status).toBe("waiting");
+    expect(manager.getPhysicalSessionStatuses()[sessionId]?.status).toBe("waiting");
 
-    manager.stopSession(sessionId);
+    manager.stopPhysicalSession(sessionId);
     await waitPromise.catch(() => {});
   });
 });
 
-describe("AgentSessionManager — generic hook RPC dispatch", () => {
+describe("PhysicalSessionManager — generic hook RPC dispatch", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -985,9 +982,9 @@ describe("AgentSessionManager — generic hook RPC dispatch", () => {
     // Gateway returns a hook response
     (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue({ additionalContext: "from-gateway" });
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-hook" });
+    const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     // All 6 hooks should be registered
@@ -1011,10 +1008,9 @@ describe("AgentSessionManager — generic hook RPC dispatch", () => {
       type: "hook",
       hookName: "onPostToolUse",
       sessionId,
-      channelId: "ch-hook",
     });
 
-    manager.stopSession(sessionId);
+    manager.stopPhysicalSession(sessionId);
     await wait(30);
   });
 
@@ -1057,9 +1053,9 @@ describe("AgentSessionManager — generic hook RPC dispatch", () => {
     // Gateway is unreachable
     (requestFromGateway as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("IPC stream not connected"));
 
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
-    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-fallback" });
+    const sessionId = manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     // onPostToolUse should not throw even when gateway is down
@@ -1070,7 +1066,7 @@ describe("AgentSessionManager — generic hook RPC dispatch", () => {
     // Fallback returns undefined when gateway is down and no pending messages or reminders are queued
     expect(result).toBeUndefined();
 
-    manager.stopSession(sessionId);
+    manager.stopPhysicalSession(sessionId);
     await wait(30);
   });
 });

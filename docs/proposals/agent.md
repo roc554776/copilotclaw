@@ -536,7 +536,7 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
   - 前提制約: ツール RPC 失敗が物理セッション破壊につながる設計は許されない
 - 物理セッションのライフサイクル判断を gateway に委ねる（v0.52.0 で実現済み）: SDK の `session.idle`（LLM がツールを呼ばずにターンを終了）や error 発生時に、agent は gateway に lifecycle RPC（`{ type: "lifecycle", event: "idle"|"error", sessionId, channelId, elapsedMs, error? }`）を送り、gateway が `{ action: "stop"|"reinject"|"wait", clearCopilotSessionId? }` で応答する。gateway が `stop` を返した場合のみ agent が `client.stop()` で物理セッションを破棄する。`reinject` の場合は `session.send()` で再投入してセッションを継続する。gateway 不在時のデフォルトは `wait`（物理セッションを破棄しない）
 
-残存する設計違反 — agent が channel 概念を知っている（未実現）:
+残存する設計違反 — agent が channel 概念を知っていた（v0.54.0 で解決済み）:
 - agent の `startSession` が `boundChannelId` を必須とする（ないと例外）
 - ツールが `channelId` で pending メッセージをフィルタリング（`drain_pending`, `peek_pending` が `channelId` をキーにする）
 - `agent_notify` が `channelId` でフィルタリング
@@ -544,12 +544,12 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
 - channel は gateway/dashboard の概念であり、agent が知るべきではない。agent は gateway が割り当てた不透明なセッショントークンだけで動作すべき。そのトークンが内部的に抽象セッション ID であるかどうかは gateway の事情であり、agent は関知しない
 - 対応方針: agent の IPC プロトコルから `channelId` を除去し、gateway が `start_physical_session` で渡すセッショントークンのみで動作するようにする。`drain_pending`, `peek_pending`, `agent_notify`, `tool_call`, `hook`, `lifecycle` は全てこのトークンをキーにする。gateway がトークンと channelId のマッピングを管理し、agent は channel の存在を知らない
 
-残存する設計違反 — agent のコードで抽象セッションと物理セッションの区別が曖昧（未実現）:
+残存する設計違反 — agent のコードで抽象セッションと物理セッションの区別が曖昧だった（v0.54.0 で解決済み）:
 - agent 内の変数名・メソッド名で「session」が抽象セッションと物理セッションのどちらを指すか不明確。例: `startSession`, `StartSessionOptions`, `sessionId`, `getSessionStatuses`, `suspendSession` 等
 - agent は物理セッションだけを扱うため、agent 内の session 関連の命名は全て物理セッションであることを明示すべき
 - 対応方針: agent 内の命名を全て physical を明示する形に変更する。例: `startSession` → `startPhysicalSession`, `StartSessionOptions` → `PhysicalSessionOptions`。抽象セッションと物理セッションの両方を指す場合のみ「session」を使う
 
-残存する設計違反 — agent に gateway のポリシー判断情報が直接渡されている（未実現）:
+残存する設計違反 — agent に gateway のポリシー判断情報が直接渡されていた（v0.54.0 で解決済み）:
 - `zeroPremium` が agent に渡されている。これはモデル選択ポリシーであり、gateway が `resolveModel` で解決してモデル名を渡すだけでいい。agent 内の `resolveModel()` fallback にも zeroPremium 判定ロジックが残存している
 - `debugMockCopilotUnsafeTools` が agent に渡されている。これはツール選択ポリシーであり、gateway が `toolDefinitions` で使えるツールを決めて渡すだけでいい。agent 内に `availableTools` フィルタリングロジックが残存している
 - 対応方針: `zeroPremium` と `debugMockCopilotUnsafeTools` を agent の config から除去。agent は gateway から渡された解決済みの結果（モデル名、ツール定義リスト）をそのまま SDK に渡すパススルーになる

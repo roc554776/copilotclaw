@@ -142,11 +142,9 @@
 
 - Gateway-Agent 責務の再配置 — agent のメッセージ種別解釈を削除（v0.53.0）: combineMessages から sender 種別判定を削除。フォーマットは gateway の onToolCall ハンドラが担当。
 
+- Gateway-Agent 責務の再配置（v0.54.0）: agent から channelId 概念を除去（IPC は sessionId のみ）、命名を物理セッション明示に変更（PhysicalSessionManager 等）、ポリシー情報（zeroPremium, debugMockCopilotUnsafeTools）を agent から除去。MIN_AGENT_VERSION を 0.54.0 に引き上げ。
+
 **未実現:**
-- Gateway-Agent 責務の再配置 — モデル選択ポリシーの部分移行残存（v0.50.0 で部分解決: gateway が resolveModel を実行し agent に渡すよう変更済みだが、agent 内に fallback 用の resolveModel が残存）
-- Gateway-Agent 責務の再配置 — agent が channel 概念を知っている（channelId が IPC プロトコル・ツール・lifecycle に浸透。agent は gateway が渡す不透明なセッショントークンのみで動作すべき）
-- Gateway-Agent 責務の再配置 — agent のコードで抽象セッションと物理セッションの区別が曖昧（startSession, sessionId 等の命名が物理セッションであることを明示していない）
-- Gateway-Agent 責務の再配置 — agent に gateway のポリシー判断情報が直接渡されている（zeroPremium, debugMockCopilotUnsafeTools。gateway が解決済みの結果だけ渡すべき）
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
 **今後の課題:**

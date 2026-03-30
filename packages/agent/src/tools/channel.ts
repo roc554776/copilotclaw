@@ -28,7 +28,7 @@ export interface ToolDefinition {
 }
 
 export interface ChannelToolDeps {
-  channelId: string;
+  sessionId: string;
   /** Keepalive timeout in milliseconds. Sent from gateway via config. */
   keepaliveTimeoutMs: number;
   abortSignal?: AbortSignal;
@@ -47,9 +47,9 @@ interface NextInputResponse {
 }
 
 /** Drain pending messages via IPC. Returns messages or empty array. */
-async function drainPendingViaIpc(channelId: string): Promise<NextInputResponse[]> {
+async function drainPendingViaIpc(sessionId: string): Promise<NextInputResponse[]> {
   try {
-    const data = await requestFromGateway({ type: "drain_pending", channelId });
+    const data = await requestFromGateway({ type: "drain_pending", sessionId });
     if (Array.isArray(data)) return data as NextInputResponse[];
   } catch {
     // IPC error — treat as no messages
@@ -59,7 +59,7 @@ async function drainPendingViaIpc(channelId: string): Promise<NextInputResponse[
 
 /** Wait for agent_notify from gateway, with keepalive timeout.
  *  Returns true if notified, false on timeout or abort. */
-function waitForPendingNotify(channelId: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+function waitForPendingNotify(sessionId: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
     if (signal?.aborted) { resolve(false); return; }
 
@@ -75,7 +75,7 @@ function waitForPendingNotify(channelId: string, timeoutMs: number, signal?: Abo
     timer.unref();
 
     const onNotify = (msg: Record<string, unknown>) => {
-      if (msg["channelId"] === channelId) {
+      if (msg["sessionId"] === sessionId) {
         settle(true);
       }
     };
@@ -95,19 +95,19 @@ function waitForPendingNotify(channelId: string, timeoutMs: number, signal?: Abo
 
 /** Poll for inputs via IPC: drain, if empty wait for notify, drain again.
  *  Returns messages or empty array (on keepalive timeout). */
-async function pollNextInputs(channelId: string, keepaliveTimeoutMs: number, signal?: AbortSignal): Promise<NextInputResponse[]> {
+async function pollNextInputs(sessionId: string, keepaliveTimeoutMs: number, signal?: AbortSignal): Promise<NextInputResponse[]> {
   if (signal?.aborted) return [];
 
   // First attempt: drain immediately
-  const immediate = await drainPendingViaIpc(channelId);
+  const immediate = await drainPendingViaIpc(sessionId);
   if (immediate.length > 0) return immediate;
 
   // No messages — wait for push notification or timeout
-  const notified = await waitForPendingNotify(channelId, keepaliveTimeoutMs, signal);
+  const notified = await waitForPendingNotify(sessionId, keepaliveTimeoutMs, signal);
   if (!notified) return []; // timeout or abort
 
   // Notified — drain again
-  return drainPendingViaIpc(channelId);
+  return drainPendingViaIpc(sessionId);
 }
 
 /** Combine messages into a single string for the LLM.
@@ -123,7 +123,7 @@ function combineMessages(inputs: NextInputResponse[]): string {
  *  instead of throwing (to preserve physical session). */
 function createGatewayToolHandler(
   toolName: string,
-  channelId: string,
+  sessionId: string,
   logError: (message: string) => void,
 ): (args: Record<string, unknown>) => Promise<unknown> {
   return async (args: Record<string, unknown>) => {
@@ -131,7 +131,7 @@ function createGatewayToolHandler(
       const result = await requestFromGateway({
         type: "tool_call",
         toolName,
-        channelId,
+        sessionId,
         args,
       });
       return result ?? { status: "ok" };
@@ -180,7 +180,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
           const gatewayResult = await requestFromGateway({
             type: "tool_call",
             toolName: WAIT_TOOL_NAME,
-            channelId: deps.channelId,
+            sessionId: deps.sessionId,
             args: {},
           });
           if (gatewayResult !== null && gatewayResult !== undefined && typeof gatewayResult === "object") {
@@ -199,7 +199,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
 
         // Fallback: agent-autonomous keepalive cycle (gateway offline)
         const keepaliveTimeout = deps.keepaliveTimeoutMs;
-        const inputs = await pollNextInputs(deps.channelId, keepaliveTimeout, deps.abortSignal);
+        const inputs = await pollNextInputs(deps.sessionId, keepaliveTimeout, deps.abortSignal);
 
         if (inputs.length === 0) {
           return { userMessage: KEEPALIVE_INSTRUCTION };
@@ -226,7 +226,7 @@ export function createChannelTools(deps: ChannelToolDeps) {
     // Skip copilotclaw_wait if listed in toolDefinitions (it's built-in)
     if (def.name === WAIT_TOOL_NAME) return null;
 
-    const gatewayHandler = createGatewayToolHandler(def.name, deps.channelId, logError);
+    const gatewayHandler = createGatewayToolHandler(def.name, deps.sessionId, logError);
 
     // For the send-message tool: wrap the handler to clear pendingReplyExpected.
     // Without this, the swallowed-message guard fires on every second wait even

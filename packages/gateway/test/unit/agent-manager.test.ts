@@ -61,7 +61,7 @@ describe("AgentManager — stream message handler dispatch", () => {
 
     invokeHandleAgentMessage(manager, {
       type: "channel_message",
-      channelId: "ch-1",
+      sessionId: "ch-1",
       sender: "agent",
       message: "hello",
     });
@@ -77,14 +77,14 @@ describe("AgentManager — stream message handler dispatch", () => {
     invokeHandleAgentMessage(manager, {
       type: "session_event",
       sessionId: "s-1",
-      channelId: "ch-1",
+      copilotSessionId: "cs-1",
       eventType: "tool.execution_start",
       timestamp: "2026-01-01T00:00:00Z",
       data: { toolName: "Read" },
     });
 
     expect(onSessionEvent).toHaveBeenCalledWith(
-      "s-1", "ch-1", "tool.execution_start", "2026-01-01T00:00:00Z",
+      "s-1", "cs-1", "tool.execution_start", "2026-01-01T00:00:00Z",
       { toolName: "Read" }, undefined,
     );
   });
@@ -154,7 +154,7 @@ describe("AgentManager — stream message handler dispatch", () => {
 
     invokeHandleAgentMessage(manager, {
       type: "drain_pending",
-      channelId: "ch-1",
+      sessionId: "ch-1",
       id: "req-123",
     });
 
@@ -176,7 +176,7 @@ describe("AgentManager — stream message handler dispatch", () => {
 
     invokeHandleAgentMessage(manager, {
       type: "peek_pending",
-      channelId: "ch-1",
+      sessionId: "ch-1",
       id: "req-456",
     });
 
@@ -197,7 +197,7 @@ describe("AgentManager — stream message handler dispatch", () => {
 
     invokeHandleAgentMessage(manager, {
       type: "flush_pending",
-      channelId: "ch-1",
+      sessionId: "ch-1",
       id: "req-789",
     });
 
@@ -219,7 +219,7 @@ describe("AgentManager — stream message handler dispatch", () => {
 
     invokeHandleAgentMessage(manager, {
       type: "list_messages",
-      channelId: "ch-1",
+      sessionId: "ch-1",
       id: "req-list",
       limit: 10,
     });
@@ -241,7 +241,7 @@ describe("AgentManager — stream message handler dispatch", () => {
 
     invokeHandleAgentMessage(manager, {
       type: "list_messages",
-      channelId: "ch-1",
+      sessionId: "ch-1",
       id: "req-default",
     });
 
@@ -262,7 +262,7 @@ describe("AgentManager — stream message handler dispatch", () => {
     const manager = new AgentManager();
     // No setStreamMessageHandler called — handler is null
     // Should not throw
-    invokeHandleAgentMessage(manager, { type: "channel_message", channelId: "ch-1", sender: "agent", message: "hi" });
+    invokeHandleAgentMessage(manager, { type: "channel_message", sessionId: "ch-1", sender: "agent", message: "hi" });
   });
 
   it("ignores messages with no type field", () => {
@@ -270,7 +270,7 @@ describe("AgentManager — stream message handler dispatch", () => {
     const onChannelMessage = vi.fn();
     manager.setStreamMessageHandler({ onChannelMessage });
 
-    invokeHandleAgentMessage(manager, { channelId: "ch-1", sender: "agent", message: "hi" });
+    invokeHandleAgentMessage(manager, { sessionId: "ch-1", sender: "agent", message: "hi" });
     expect(onChannelMessage).not.toHaveBeenCalled();
   });
 });
@@ -291,7 +291,7 @@ describe("AgentManager — notifyAgent", () => {
     };
 
     manager.notifyAgent("ch-1");
-    expect(streamSend).toHaveBeenCalledWith({ type: "agent_notify", channelId: "ch-1" });
+    expect(streamSend).toHaveBeenCalledWith({ type: "agent_notify", sessionId: "ch-1" });
   });
 
   it("does not send when stream exists but is disconnected", () => {
@@ -402,11 +402,10 @@ describe("AgentManager — physical session IPC", () => {
       isConnected: () => true,
     };
 
-    manager.startPhysicalSession("ps-1", "ch-1", "cs-1", "gpt-4.1");
+    manager.startPhysicalSession("ps-1", "cs-1", "gpt-4.1");
     expect(streamSend).toHaveBeenCalledWith({
       type: "start_physical_session",
       sessionId: "ps-1",
-      channelId: "ch-1",
       copilotSessionId: "cs-1",
       model: "gpt-4.1",
     });
@@ -420,11 +419,10 @@ describe("AgentManager — physical session IPC", () => {
       isConnected: () => true,
     };
 
-    manager.startPhysicalSession("ps-1", "ch-1");
+    manager.startPhysicalSession("ps-1");
     expect(streamSend).toHaveBeenCalledWith({
       type: "start_physical_session",
       sessionId: "ps-1",
-      channelId: "ch-1",
     });
   });
 
@@ -436,14 +434,14 @@ describe("AgentManager — physical session IPC", () => {
       isConnected: () => false,
     };
 
-    manager.startPhysicalSession("ps-1", "ch-1");
+    manager.startPhysicalSession("ps-1");
     expect(streamSend).not.toHaveBeenCalled();
   });
 
   it("does not send start_physical_session when no stream exists", () => {
     const manager = new AgentManager();
     // Should not throw
-    manager.startPhysicalSession("ps-1", "ch-1");
+    manager.startPhysicalSession("ps-1");
   });
 
   it("sends stop_physical_session via stream", () => {
@@ -507,14 +505,14 @@ describe("AgentManager — running_sessions dispatch", () => {
     invokeHandleAgentMessage(manager, {
       type: "running_sessions",
       sessions: [
-        { sessionId: "s-1", channelId: "ch-1", status: "waiting" },
-        { sessionId: "s-2", channelId: "ch-2", status: "processing" },
+        { sessionId: "s-1", status: "waiting" },
+        { sessionId: "s-2", status: "processing" },
       ],
     });
 
     expect(onRunningSessionsReport).toHaveBeenCalledWith([
-      { sessionId: "s-1", channelId: "ch-1", status: "waiting" },
-      { sessionId: "s-2", channelId: "ch-2", status: "processing" },
+      { sessionId: "s-1", status: "waiting" },
+      { sessionId: "s-2", status: "processing" },
     ]);
   });
 });

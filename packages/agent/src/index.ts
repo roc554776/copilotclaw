@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
+import { PhysicalSessionManager, type PhysicalSessionManagerOptions } from "./physical-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { flushSendQueue, initSendQueue, listenIpc, sendToGateway, setMaxQueueSize, streamEvents } from "./ipc-server.js";
 import { initOtel, getLogger, shutdownOtel } from "./otel.js";
@@ -42,8 +42,6 @@ interface AgentPromptConfig {
 
 interface GatewayConfig {
   model: string | null;
-  zeroPremium: boolean;
-  debugMockCopilotUnsafeTools: boolean;
   stateDir: string | null;
   workspaceRoot: string | null;
   auth: AuthConfig | null;
@@ -84,7 +82,7 @@ function waitForConfig(timeoutMs = 30_000): Promise<GatewayConfig> {
 
     const timer = setTimeout(() => {
       log("config push not received within timeout, using defaults");
-      settle({ model: null, zeroPremium: false, debugMockCopilotUnsafeTools: false, stateDir: null, workspaceRoot: null, auth: null, otel: null, debug: null, prompts: null });
+      settle({ model: null, stateDir: null, workspaceRoot: null, auth: null, otel: null, debug: null, prompts: null });
     }, timeoutMs);
     timer.unref();
 
@@ -130,7 +128,7 @@ async function main(): Promise<void> {
   // Wait for gateway stream connection and config push
   log("waiting for gateway stream connection and config...");
   const config = await waitForConfig();
-  log(`config: model=${config.model ?? "(auto)"}, zeroPremium=${config.zeroPremium}, debugMockCopilotUnsafeTools=${config.debugMockCopilotUnsafeTools}`);
+  log(`config: model=${config.model ?? "(auto)"}`);
 
   // Initialize OpenTelemetry (before structured logger, so bridge is available)
   const otelEndpoints = config.otel?.endpoints ?? [];
@@ -164,20 +162,17 @@ async function main(): Promise<void> {
     }
   }
 
-  const managerOpts: AgentSessionManagerOptions = {
-    zeroPremium: config.zeroPremium,
-    debugMockCopilotUnsafeTools: config.debugMockCopilotUnsafeTools,
+  const managerOpts: PhysicalSessionManagerOptions = {
     debugLogLevel: config.debug?.logLevel ?? "info",
     prompts: config.prompts!,
     log,
     logError,
   };
   if (githubToken !== undefined) managerOpts.githubToken = githubToken;
-  if (config.model !== null) managerOpts.model = config.model;
   if (config.workspaceRoot !== null) {
     managerOpts.workingDirectory = config.workspaceRoot;
   }
-  const sessionManager = new AgentSessionManager(managerOpts);
+  const sessionManager = new PhysicalSessionManager(managerOpts);
   ipc.setSessionManager(sessionManager);
 
   // Report running sessions when gateway (re)connects stream.
@@ -189,7 +184,7 @@ async function main(): Promise<void> {
     // that occurred while it was offline, fulfilling the "no information loss" requirement.
     flushSendQueue();
 
-    const running = sessionManager.getRunningSessionsSummary();
+    const running = sessionManager.getRunningPhysicalSessionsSummary();
     log(`stream connected, reporting ${running.length} running session(s)`);
     sendToGateway({ type: "running_sessions", sessions: running });
   };
@@ -198,14 +193,13 @@ async function main(): Promise<void> {
   // Gateway-driven physical session commands (Phase 3)
   const startPhysicalSessionHandler = (msg: Record<string, unknown>) => {
     const sessionId = msg["sessionId"] as string;
-    const channelId = msg["channelId"] as string;
     const copilotSessionId = msg["copilotSessionId"] as string | undefined;
     const resolvedModel = msg["model"] as string | undefined;
-    log(`start_physical_session: session=${sessionId.slice(0, 8)}, channel=${channelId.slice(0, 8)}, copilotSession=${copilotSessionId ?? "(new)"}, model=${resolvedModel ?? "(auto)"}`);
-    const opts: import("./agent-session-manager.js").StartSessionOptions = { sessionId, boundChannelId: channelId };
+    log(`start_physical_session: session=${sessionId.slice(0, 8)}, copilotSession=${copilotSessionId ?? "(new)"}, model=${resolvedModel ?? "(auto)"}`);
+    const opts: import("./physical-session-manager.js").StartPhysicalSessionOptions = { sessionId };
     if (copilotSessionId !== undefined) opts.copilotSessionId = copilotSessionId;
     if (resolvedModel !== undefined) opts.resolvedModel = resolvedModel;
-    sessionManager.startSession(opts);
+    sessionManager.startPhysicalSession(opts);
   };
   streamEvents.on("start_physical_session", startPhysicalSessionHandler);
 
@@ -213,9 +207,9 @@ async function main(): Promise<void> {
     const sessionId = msg["sessionId"] as string;
     log(`stop_physical_session: session=${sessionId.slice(0, 8)}`);
     // Find session by sessionId and stop it
-    const status = sessionManager.getSessionStatus(sessionId);
+    const status = sessionManager.getPhysicalSessionStatus(sessionId);
     if (status !== undefined) {
-      sessionManager.stopSession(sessionId);
+      sessionManager.stopPhysicalSession(sessionId);
     } else {
       log(`stop_physical_session: session ${sessionId.slice(0, 8)} not found, ignoring`);
     }
@@ -238,7 +232,7 @@ async function main(): Promise<void> {
   streamEvents.removeListener("stream_connected", streamConnectedHandler);
   streamEvents.removeListener("start_physical_session", startPhysicalSessionHandler);
   streamEvents.removeListener("stop_physical_session", stopPhysicalSessionHandler);
-  await sessionManager.stopAll();
+  await sessionManager.stopAllPhysicalSessions();
   await ipc.close();
   await shutdownOtel();
 }

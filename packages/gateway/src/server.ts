@@ -336,8 +336,11 @@ function createRequestHandler(
           provider.onMessage?.(channelId, sender, msg.message);
         }
         // Notify agent via IPC stream when a user or cron message arrives
-        if ((sender === "user" || sender === "cron") && agentManager !== null) {
-          agentManager.notifyAgent(channelId);
+        if ((sender === "user" || sender === "cron") && agentManager !== null && sessionOrchestrator !== null) {
+          const notifySessionId = sessionOrchestrator.getSessionIdForChannel(channelId);
+          if (notifySessionId !== undefined) {
+            agentManager.notifyAgent(notifySessionId);
+          }
         }
         json(res, 201, msg);
         return;

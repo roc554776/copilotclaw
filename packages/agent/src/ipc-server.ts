@@ -4,7 +4,7 @@ import { type Server, createConnection, createServer, type Socket } from "node:n
 import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentSessionManager } from "./agent-session-manager.js";
+import type { PhysicalSessionManager } from "./physical-session-manager.js";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string };
@@ -20,7 +20,7 @@ export interface AgentIpcServerHandle {
   socketPath: string;
   state: AgentIpcState;
   close: () => Promise<void>;
-  setSessionManager: (mgr: AgentSessionManager) => void;
+  setSessionManager: (mgr: PhysicalSessionManager) => void;
 }
 
 interface IpcRequest {
@@ -208,7 +208,7 @@ function handleStreamMessage(msg: Record<string, unknown>): void {
 function handleConnection(
   socket: Socket,
   state: AgentIpcState,
-  sessionManagerRef: { current: AgentSessionManager | null },
+  sessionManagerRef: { current: PhysicalSessionManager | null },
   onStop: () => void,
 ): void {
   let buffer = "";
@@ -264,7 +264,7 @@ function handleConnection(
 
         switch (req.method) {
           case "status": {
-            const sessions = sessionManagerRef.current?.getSessionStatuses() ?? {};
+            const sessions = sessionManagerRef.current?.getPhysicalSessionStatuses() ?? {};
             socket.write(JSON.stringify({
               version: AGENT_VERSION,
               bootId: state.bootId,
@@ -279,7 +279,7 @@ function handleConnection(
               socket.write(JSON.stringify({ error: "missing sessionId" }) + "\n");
               break;
             }
-            const info = sessionManagerRef.current?.getSessionStatus(sessionId);
+            const info = sessionManagerRef.current?.getPhysicalSessionStatus(sessionId);
             if (info === undefined) {
               socket.write(JSON.stringify({ status: "not_running" }) + "\n");
             } else {
@@ -322,7 +322,7 @@ function handleConnection(
               break;
             }
             if (sessionManagerRef.current !== null) {
-              sessionManagerRef.current.getSessionMessages(sid).then((messages) => {
+              sessionManagerRef.current.getPhysicalSessionMessages(sid).then((messages) => {
                 socket.write(JSON.stringify(messages ?? { error: "session not found" }) + "\n");
               }).catch(() => {
                 socket.write(JSON.stringify({ error: "messages fetch failed" }) + "\n");
@@ -346,12 +346,12 @@ export type ListenResult =
   | { kind: "server"; handle: AgentIpcServerHandle }
   | { kind: "already-running" };
 
-function createHandle(server: Server, socketPath: string, state: AgentIpcState, sessionManagerRef: { current: AgentSessionManager | null }): AgentIpcServerHandle {
+function createHandle(server: Server, socketPath: string, state: AgentIpcState, sessionManagerRef: { current: PhysicalSessionManager | null }): AgentIpcServerHandle {
   return {
     server,
     socketPath,
     state,
-    setSessionManager: (mgr: AgentSessionManager) => { sessionManagerRef.current = mgr; },
+    setSessionManager: (mgr: PhysicalSessionManager) => { sessionManagerRef.current = mgr; },
     close: () => {
       const closePromise = new Promise<void>((res) => {
         server.close(() => {
@@ -374,7 +374,7 @@ function createHandle(server: Server, socketPath: string, state: AgentIpcState, 
 export function listenIpc(
   socketPath: string,
   onStop: () => void,
-  sessionManager?: AgentSessionManager | null,
+  sessionManager?: PhysicalSessionManager | null,
 ): Promise<ListenResult> {
   const sessionManagerRef = { current: sessionManager ?? null };
   const state: AgentIpcState = {

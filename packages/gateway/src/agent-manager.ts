@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.53.0";
+export const MIN_AGENT_VERSION = "0.54.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -26,14 +26,12 @@ export interface AgentManagerOptions {
 
 export interface RunningSessionReport {
   sessionId: string;
-  channelId: string;
   status: string;
 }
 
 export interface LifecycleRequest {
   event: "idle" | "error";
   sessionId: string;
-  channelId?: string | undefined;
   elapsedMs: number;
   error?: string | undefined;
 }
@@ -45,7 +43,7 @@ export interface LifecycleResponse {
 
 export interface ToolCallRequest {
   toolName: string;
-  channelId: string;
+  sessionId: string;
   args: Record<string, unknown>;
 }
 
@@ -53,7 +51,6 @@ export interface HookRequest {
   hookName: string;
   sessionId: string;
   copilotSessionId?: string | undefined;
-  channelId: string;
   input: Record<string, unknown>;
 }
 
@@ -61,17 +58,17 @@ export interface StreamMessageHandler {
   onToolCall?: (request: ToolCallRequest) => unknown | Promise<unknown>;
   onLifecycle?: (request: LifecycleRequest) => LifecycleResponse;
   onHook?: (request: HookRequest) => Record<string, unknown> | null;
-  onChannelMessage?: (channelId: string, sender: string, message: string) => void;
-  onSessionEvent?: (sessionId: string, channelId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
+  onChannelMessage?: (sessionId: string, sender: string, message: string) => void;
+  onSessionEvent?: (sessionId: string, copilotSessionId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
   onSystemPromptOriginal?: (model: string, prompt: string, capturedAt: string) => void;
   onSystemPromptSession?: (sessionId: string, model: string, prompt: string) => void;
   onPhysicalSessionStarted?: (sessionId: string, copilotSessionId: string, model: string) => void;
   onPhysicalSessionEnded?: (sessionId: string, reason: "idle" | "error" | "aborted", copilotSessionId: string, elapsedMs: number, error?: string) => void;
   onRunningSessionsReport?: (sessions: RunningSessionReport[]) => void;
-  onDrainPending?: (channelId: string) => unknown[];
-  onPeekPending?: (channelId: string) => unknown | null;
-  onFlushPending?: (channelId: string) => number;
-  onListMessages?: (channelId: string, limit: number) => unknown[];
+  onDrainPending?: (sessionId: string) => unknown[];
+  onPeekPending?: (sessionId: string) => unknown | null;
+  onFlushPending?: (sessionId: string) => number;
+  onListMessages?: (sessionId: string, limit: number) => unknown[];
 }
 
 export class AgentManager {
@@ -163,7 +160,7 @@ export class AgentManager {
         const id = msg["id"] as string;
         const toolCallRequest: ToolCallRequest = {
           toolName: msg["toolName"] as string,
-          channelId: msg["channelId"] as string,
+          sessionId: msg["sessionId"] as string,
           args: (msg["args"] as Record<string, unknown>) ?? {},
         };
         // Await the result to support async tool handlers. Sending the response
@@ -184,7 +181,6 @@ export class AgentManager {
         const lifecycleRequest: LifecycleRequest = {
           event: msg["event"] as "idle" | "error",
           sessionId: msg["sessionId"] as string,
-          channelId: typeof msg["channelId"] === "string" ? msg["channelId"] : undefined,
           elapsedMs: (msg["elapsedMs"] as number) ?? 0,
           error: typeof msg["error"] === "string" ? msg["error"] : undefined,
         };
@@ -198,7 +194,6 @@ export class AgentManager {
           hookName: msg["hookName"] as string,
           sessionId: msg["sessionId"] as string,
           copilotSessionId: msg["copilotSessionId"] as string | undefined,
-          channelId: msg["channelId"] as string,
           input: (msg["input"] as Record<string, unknown>) ?? {},
         };
         const result = handler.onHook?.(hookRequest) ?? null;
@@ -206,20 +201,20 @@ export class AgentManager {
         break;
       }
       case "channel_message": {
-        const channelId = msg["channelId"] as string;
+        const sessionId = msg["sessionId"] as string;
         const sender = msg["sender"] as string;
         const message = msg["message"] as string;
-        handler.onChannelMessage?.(channelId, sender, message);
+        handler.onChannelMessage?.(sessionId, sender, message);
         break;
       }
       case "session_event": {
         const sessionId = msg["sessionId"] as string;
-        const channelId = typeof msg["channelId"] === "string" ? msg["channelId"] as string : undefined;
+        const copilotSessionId = typeof msg["copilotSessionId"] === "string" ? msg["copilotSessionId"] as string : undefined;
         const eventType = (msg["eventType"] as string) ?? "unknown";
         const timestamp = (msg["timestamp"] as string) ?? new Date().toISOString();
         const data = (typeof msg["data"] === "object" && msg["data"] !== null ? msg["data"] : {}) as Record<string, unknown>;
         const parentId = typeof msg["parentId"] === "string" ? msg["parentId"] as string : undefined;
-        handler.onSessionEvent?.(sessionId, channelId, eventType, timestamp, data, parentId);
+        handler.onSessionEvent?.(sessionId, copilotSessionId, eventType, timestamp, data, parentId);
         break;
       }
       case "system_prompt_original": {
@@ -237,31 +232,31 @@ export class AgentManager {
         break;
       }
       case "drain_pending": {
-        const channelId = msg["channelId"] as string;
+        const sessionId = msg["sessionId"] as string;
         const id = msg["id"] as string;
-        const data = handler.onDrainPending?.(channelId) ?? [];
+        const data = handler.onDrainPending?.(sessionId) ?? [];
         this.stream?.send({ type: "response", id, data });
         break;
       }
       case "peek_pending": {
-        const channelId = msg["channelId"] as string;
+        const sessionId = msg["sessionId"] as string;
         const id = msg["id"] as string;
-        const data = handler.onPeekPending?.(channelId) ?? null;
+        const data = handler.onPeekPending?.(sessionId) ?? null;
         this.stream?.send({ type: "response", id, data });
         break;
       }
       case "flush_pending": {
-        const channelId = msg["channelId"] as string;
+        const sessionId = msg["sessionId"] as string;
         const id = msg["id"] as string;
-        const flushed = handler.onFlushPending?.(channelId) ?? 0;
+        const flushed = handler.onFlushPending?.(sessionId) ?? 0;
         this.stream?.send({ type: "response", id, data: { flushed } });
         break;
       }
       case "list_messages": {
-        const channelId = msg["channelId"] as string;
+        const sessionId = msg["sessionId"] as string;
         const id = msg["id"] as string;
         const limit = typeof msg["limit"] === "number" ? msg["limit"] as number : 5;
-        const data = handler.onListMessages?.(channelId, limit) ?? [];
+        const data = handler.onListMessages?.(sessionId, limit) ?? [];
         this.stream?.send({ type: "response", id, data });
         break;
       }
@@ -295,15 +290,15 @@ export class AgentManager {
   /** Send a generic agent_notify to the agent via the stream.
    *  Used for all notification types: pending messages, subagent completion, etc.
    *  Agent side listens for this single event type and drains pending queue. */
-  notifyAgent(channelId: string): void {
+  notifyAgent(sessionId: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
-    this.stream.send({ type: "agent_notify", channelId });
+    this.stream.send({ type: "agent_notify", sessionId });
   }
 
   /** Send a start_physical_session command to the agent via the stream. */
-  startPhysicalSession(sessionId: string, channelId: string, copilotSessionId?: string, model?: string): void {
+  startPhysicalSession(sessionId: string, copilotSessionId?: string, model?: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
-    const msg: Record<string, unknown> = { type: "start_physical_session", sessionId, channelId };
+    const msg: Record<string, unknown> = { type: "start_physical_session", sessionId };
     if (copilotSessionId !== undefined) msg["copilotSessionId"] = copilotSessionId;
     if (model !== undefined) msg["model"] = model;
     this.stream.send(msg);
