@@ -144,7 +144,7 @@
 
 **未実現:**
 - Gateway-Agent 責務の再配置 — モデル選択ポリシーの部分移行残存（v0.50.0 で部分解決: gateway が resolveModel を実行し agent に渡すよう変更済みだが、agent 内に fallback 用の resolveModel が残存）
-- Gateway-Agent 責務の再配置 — agent が channel 概念を知っている（channelId が IPC プロトコル・ツール・lifecycle に浸透。agent は sessionId のみで動作すべき）
+- Gateway-Agent 責務の再配置 — agent が channel 概念を知っている（channelId が IPC プロトコル・ツール・lifecycle に浸透。agent は抽象セッション ID のみで動作すべき）
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
 **今後の課題:**

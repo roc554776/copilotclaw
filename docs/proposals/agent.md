@@ -541,8 +541,9 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
 - ツールが `channelId` で pending メッセージをフィルタリング（`drain_pending`, `peek_pending` が `channelId` をキーにする）
 - `agent_notify` が `channelId` でフィルタリング
 - lifecycle RPC に `channelId` を含める
-- channel は gateway/dashboard の概念であり、agent が知るべきではない。agent は `sessionId` だけで動作すべき
-- 対応方針: agent の IPC プロトコルから `channelId` を除去し、`sessionId` のみで動作するようにする。`drain_pending`, `peek_pending`, `agent_notify` は `sessionId` をキーにする。gateway が `sessionId` → `channelId` のマッピングを管理し、agent は channel の存在を知らない
+- channel は gateway/dashboard の概念であり、agent が知るべきではない。agent は抽象セッション ID（gateway の SessionOrchestrator が割り当てた ID）だけで動作すべき
+- 対応方針: agent の IPC プロトコルから `channelId` を除去し、抽象セッション ID のみで動作するようにする。`drain_pending`, `peek_pending`, `agent_notify` は抽象セッション ID をキーにする。gateway が抽象セッション ID → channelId のマッピングを管理し、agent は channel の存在を知らない
+- 注: 抽象セッション ID は gateway が `start_physical_session` で agent に渡す ID。物理セッション ID（SDK の `copilotSessionId`）は agent と SDK の間の内部詳細であり、gateway との通信には抽象セッション ID を使う
 
 残存する設計違反 — agent がメッセージ種別を解釈していた（v0.53.0 で解決済み）:
 - agent の `combineMessages()` が sender 種別（cron, system, user）を見て `[CRON TASK]`、`[SYSTEM EVENT]` 等のプレフィクスを付与している。これは gateway 停止時の copilotclaw_wait フォールバックパスで使われる
