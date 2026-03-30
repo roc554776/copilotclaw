@@ -104,3 +104,184 @@ describe("daemon onSessionEvent — subagent completion", () => {
     expect(notifyAgent).not.toHaveBeenCalled();
   });
 });
+
+import { SessionOrchestrator } from "../../src/session-orchestrator.js";
+
+/**
+ * Replicates the orchestrator routing block added to daemon.ts onSessionEvent.
+ * Dispatches SDK event types to the appropriate orchestrator methods via findSessionByCopilotId.
+ */
+function routeEventToOrchestrator(
+  orchestrator: SessionOrchestrator,
+  copilotSessionId: string,
+  eventType: string,
+  timestamp: string,
+  data: Record<string, unknown>,
+): void {
+  const orchSessionId = orchestrator.findSessionByCopilotId(copilotSessionId);
+  if (orchSessionId === undefined) return;
+
+  switch (eventType) {
+    case "tool.execution_start":
+      orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${data["toolName"] as string ?? "unknown"}`);
+      break;
+    case "tool.execution_complete":
+    case "session.idle":
+      orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
+      break;
+    case "session.usage_info":
+      orchestrator.updatePhysicalSessionTokens(
+        orchSessionId,
+        data["currentTokens"] as number ?? 0,
+        data["tokenLimit"] as number ?? 0,
+      );
+      break;
+    case "assistant.usage":
+      orchestrator.accumulateUsageTokens(
+        orchSessionId,
+        data["inputTokens"] as number ?? 0,
+        data["outputTokens"] as number ?? 0,
+        data["quotaSnapshots"] as Record<string, unknown> | undefined,
+      );
+      break;
+    case "session.model_change":
+      orchestrator.updatePhysicalSessionModel(orchSessionId, data["newModel"] as string ?? "unknown");
+      break;
+    case "subagent.started":
+      orchestrator.addSubagentSession(orchSessionId, {
+        toolCallId: data["toolCallId"] as string ?? "",
+        agentName: data["agentName"] as string ?? "unknown",
+        agentDisplayName: data["agentDisplayName"] as string ?? "unknown",
+        status: "running",
+        startedAt: timestamp,
+      });
+      break;
+    case "subagent.completed":
+      orchestrator.updateSubagentStatus(orchSessionId, data["toolCallId"] as string ?? "", "completed");
+      break;
+    case "subagent.failed":
+      orchestrator.updateSubagentStatus(orchSessionId, data["toolCallId"] as string ?? "", "failed");
+      break;
+  }
+}
+
+describe("daemon onSessionEvent — orchestrator routing via findSessionByCopilotId", () => {
+  it("routes assistant.usage to accumulateUsageTokens after physical_session_started", () => {
+    const orch = new SessionOrchestrator();
+    const sessionId = orch.startSession("ch-routing");
+    orch.updatePhysicalSession(sessionId, {
+      sessionId: "copilot-xyz",
+      model: "gpt-4.1",
+      startedAt: "2026-01-01T00:00:00Z",
+      currentState: "idle",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+    });
+
+    routeEventToOrchestrator(orch, "copilot-xyz", "assistant.usage", "2026-01-01T00:00:01Z", {
+      inputTokens: 100,
+      outputTokens: 50,
+    });
+    routeEventToOrchestrator(orch, "copilot-xyz", "assistant.usage", "2026-01-01T00:00:02Z", {
+      inputTokens: 200,
+      outputTokens: 75,
+    });
+
+    const session = orch.getSessionStatuses()[sessionId];
+    expect(session?.physicalSession?.totalInputTokens).toBe(300);
+    expect(session?.physicalSession?.totalOutputTokens).toBe(125);
+  });
+
+  it("routes tool.execution_start to updatePhysicalSessionState", () => {
+    const orch = new SessionOrchestrator();
+    const sessionId = orch.startSession("ch-tool");
+    orch.updatePhysicalSession(sessionId, {
+      sessionId: "copilot-abc",
+      model: "gpt-4.1",
+      startedAt: "2026-01-01T00:00:00Z",
+      currentState: "idle",
+    });
+
+    routeEventToOrchestrator(orch, "copilot-abc", "tool.execution_start", "2026-01-01T00:00:01Z", {
+      toolName: "read_file",
+    });
+
+    const session = orch.getSessionStatuses()[sessionId];
+    expect(session?.physicalSession?.currentState).toBe("tool:read_file");
+  });
+
+  it("resets currentState to idle on tool.execution_complete", () => {
+    const orch = new SessionOrchestrator();
+    const sessionId = orch.startSession("ch-idle");
+    orch.updatePhysicalSession(sessionId, {
+      sessionId: "copilot-idle",
+      model: "gpt-4.1",
+      startedAt: "2026-01-01T00:00:00Z",
+      currentState: "tool:read_file",
+    });
+
+    routeEventToOrchestrator(orch, "copilot-idle", "tool.execution_complete", "2026-01-01T00:00:02Z", {});
+
+    const session = orch.getSessionStatuses()[sessionId];
+    expect(session?.physicalSession?.currentState).toBe("idle");
+  });
+
+  it("silently discards events when no physical session matches the copilot sessionId", () => {
+    const orch = new SessionOrchestrator();
+    orch.startSession("ch-no-match");
+    // No updatePhysicalSession — so findSessionByCopilotId returns undefined
+
+    expect(() =>
+      routeEventToOrchestrator(orch, "copilot-unknown", "assistant.usage", "2026-01-01T00:00:00Z", {
+        inputTokens: 100,
+        outputTokens: 50,
+      }),
+    ).not.toThrow();
+  });
+
+  it("routes session.model_change to updatePhysicalSessionModel", () => {
+    const orch = new SessionOrchestrator();
+    const sessionId = orch.startSession("ch-model");
+    orch.updatePhysicalSession(sessionId, {
+      sessionId: "copilot-model",
+      model: "gpt-4",
+      startedAt: "2026-01-01T00:00:00Z",
+      currentState: "idle",
+    });
+
+    routeEventToOrchestrator(orch, "copilot-model", "session.model_change", "2026-01-01T00:00:01Z", {
+      newModel: "gpt-4.1",
+    });
+
+    const session = orch.getSessionStatuses()[sessionId];
+    expect(session?.physicalSession?.model).toBe("gpt-4.1");
+  });
+
+  it("routes subagent.started and subagent.completed through the orchestrator", () => {
+    const orch = new SessionOrchestrator();
+    const sessionId = orch.startSession("ch-sub");
+    orch.updatePhysicalSession(sessionId, {
+      sessionId: "copilot-sub",
+      model: "gpt-4.1",
+      startedAt: "2026-01-01T00:00:00Z",
+      currentState: "idle",
+    });
+
+    routeEventToOrchestrator(orch, "copilot-sub", "subagent.started", "2026-01-01T00:00:01Z", {
+      toolCallId: "tc-1",
+      agentName: "worker",
+      agentDisplayName: "Worker",
+    });
+
+    let session = orch.getSessionStatuses()[sessionId];
+    expect(session?.subagentSessions).toHaveLength(1);
+    expect(session?.subagentSessions?.[0]?.status).toBe("running");
+
+    routeEventToOrchestrator(orch, "copilot-sub", "subagent.completed", "2026-01-01T00:00:02Z", {
+      toolCallId: "tc-1",
+    });
+
+    session = orch.getSessionStatuses()[sessionId];
+    expect(session?.subagentSessions?.[0]?.status).toBe("completed");
+  });
+});

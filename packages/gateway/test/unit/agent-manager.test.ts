@@ -372,11 +372,9 @@ describe("AgentManager — physical session IPC", () => {
       reason: "idle",
       copilotSessionId: "cs-1",
       elapsedMs: 5000,
-      totalInputTokens: 100,
-      totalOutputTokens: 200,
     });
 
-    expect(onPhysicalSessionEnded).toHaveBeenCalledWith("ps-1", "idle", "cs-1", 5000, 100, 200, undefined);
+    expect(onPhysicalSessionEnded).toHaveBeenCalledWith("ps-1", "idle", "cs-1", 5000, undefined);
   });
 
   it("dispatches physical_session_ended with error field", () => {
@@ -390,12 +388,10 @@ describe("AgentManager — physical session IPC", () => {
       reason: "error",
       copilotSessionId: "cs-2",
       elapsedMs: 1000,
-      totalInputTokens: 50,
-      totalOutputTokens: 0,
       error: "rate limited",
     });
 
-    expect(onPhysicalSessionEnded).toHaveBeenCalledWith("ps-2", "error", "cs-2", 1000, 50, 0, "rate limited");
+    expect(onPhysicalSessionEnded).toHaveBeenCalledWith("ps-2", "error", "cs-2", 1000, "rate limited");
   });
 
   it("sends start_physical_session via stream with all fields", () => {

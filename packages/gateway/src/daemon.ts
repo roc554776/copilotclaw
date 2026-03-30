@@ -165,7 +165,7 @@ async function main(): Promise<void> {
       });
 
     },
-    onPhysicalSessionEnded: (sessionId, reason, _copilotSessionId, elapsedMs, _totalInputTokens, _totalOutputTokens, error) => {
+    onPhysicalSessionEnded: (sessionId, reason, _copilotSessionId, elapsedMs, error) => {
       console.error(`[gateway] physical session ended: session=${sessionId.slice(0, 8)}, reason=${reason}, elapsed=${Math.round(elapsedMs / 1000)}s`);
 
       // Check for rapid failure and record backoff
