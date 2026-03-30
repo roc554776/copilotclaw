@@ -62,7 +62,7 @@ Environment variables:
 - Force-restart flow: ensureAgent returns old bootId on force-restart → daemon calls waitForNewAgent to poll until different bootId appears before proceeding
 - Gateway stop → gateway only (agent process NOT stopped)
 - Gateway restart → POST /api/stop, wait for port free, then start (restart.ts)
-- Agent ↔ Gateway: IPC stream (v0.35.0) — persistent bidirectional connection; gateway pushes config and agent_notify; agent pushes channel messages, session events, system prompts; agent sends request-response for drain/peek/flush/list_messages
+- Agent ↔ Gateway: IPC stream (v0.35.0) — persistent bidirectional connection; gateway pushes config and agent_notify; agent pushes channel messages, session events, system prompts; agent sends request-response for drain/peek/flush/list_messages and hook RPCs (SDK hooks forwarded to gateway for centralized processing)
 - Gateway SessionOrchestrator manages abstract sessions (channel bindings, suspend/revive, backoff, max age); sends start_physical_session/stop_physical_session commands to agent via IPC stream
 - Agent listens for start_physical_session/stop_physical_session from gateway; sends physical_session_started/physical_session_ended back to gateway
 - User message POST triggers gateway to check orchestrator and start physical session via agent (push-based, no polling)
