@@ -303,11 +303,10 @@ describe("copilotclaw_wait — swallowed message detection", () => {
     expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("swallowed message"));
   });
 
-  it("still triggers swallowed-message even after send_message (dynamic tool has no access to flag)", async () => {
-    // In the dynamic tool architecture, send_message is dispatched generically
-    // via createGatewayToolHandler and cannot clear pendingReplyExpected.
-    // The swallowed-message guard fires on any consecutive wait without the
-    // built-in wait handler itself resetting the flag.
+  it("does NOT trigger swallowed-message after send_message is called (dynamic tool clears flag)", async () => {
+    // The dynamic send_message tool wraps its gateway handler to clear
+    // pendingReplyExpected, so the swallowed-message guard is not falsely
+    // triggered when the agent correctly replied via send_message.
     let drainCallCount = 0;
     (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(async (msg: Record<string, unknown>) => {
       if (msg.type === "tool_call") {
@@ -335,13 +334,13 @@ describe("copilotclaw_wait — swallowed message detection", () => {
     // First wait: returns user message, sets pendingReplyExpected = true
     await wait.handler({}, invocation);
 
-    // Call send_message — does NOT clear pendingReplyExpected (dynamic tool)
+    // Call send_message — clears pendingReplyExpected (dynamic tool wrapper)
     await sendMessage!.handler({ message: "reply" }, invocation);
 
-    // Second wait: swallowed-message guard still fires
+    // Second wait: swallowed-message guard should NOT fire
     const result2 = await wait.handler({}, invocation) as { userMessage: string };
-    expect(result2.userMessage).toContain("CRITICAL");
-    expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("swallowed message"));
+    expect(result2.userMessage).not.toContain("CRITICAL");
+    expect(logErrorSpy).not.toHaveBeenCalledWith(expect.stringContaining("swallowed message"));
   });
 });
 

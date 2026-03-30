@@ -216,15 +216,34 @@ export function createChannelTools(deps: ChannelToolDeps) {
     skipPermission: true,
   });
 
+  // The conventional send-message tool name. When the dynamic tool list includes
+  // this tool, its handler is wrapped to clear pendingReplyExpected so the
+  // swallowed-message guard is not falsely triggered on the next wait call.
+  const SEND_MESSAGE_TOOL_NAME = "copilotclaw_send_message";
+
   // --- Dynamic tools from gateway config ---
   const dynamicTools = (deps.toolDefinitions ?? []).map((def) => {
     // Skip copilotclaw_wait if listed in toolDefinitions (it's built-in)
     if (def.name === WAIT_TOOL_NAME) return null;
 
+    const gatewayHandler = createGatewayToolHandler(def.name, deps.channelId, logError);
+
+    // For the send-message tool: wrap the handler to clear pendingReplyExpected.
+    // Without this, the swallowed-message guard fires on every second wait even
+    // when the agent correctly replied — because the dynamic tool has no direct
+    // access to the flag inside the wait closure.
+    const handler = def.name === SEND_MESSAGE_TOOL_NAME
+      ? async (args: Record<string, unknown>) => {
+          const result = await gatewayHandler(args);
+          pendingReplyExpected = false;
+          return result;
+        }
+      : gatewayHandler;
+
     return defineTool(def.name, {
       description: def.description,
       parameters: def.parameters,
-      handler: createGatewayToolHandler(def.name, deps.channelId, logError),
+      handler,
       skipPermission: def.skipPermission ?? true,
     });
   }).filter((t): t is NonNullable<typeof t> => t !== null);

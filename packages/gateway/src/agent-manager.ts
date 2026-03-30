@@ -58,7 +58,7 @@ export interface HookRequest {
 }
 
 export interface StreamMessageHandler {
-  onToolCall?: (request: ToolCallRequest) => unknown;
+  onToolCall?: (request: ToolCallRequest) => unknown | Promise<unknown>;
   onLifecycle?: (request: LifecycleRequest) => LifecycleResponse;
   onHook?: (request: HookRequest) => Record<string, unknown> | null;
   onChannelMessage?: (channelId: string, sender: string, message: string) => void;
@@ -166,8 +166,17 @@ export class AgentManager {
           channelId: msg["channelId"] as string,
           args: (msg["args"] as Record<string, unknown>) ?? {},
         };
-        const toolResult = handler.onToolCall?.(toolCallRequest) ?? null;
-        this.stream?.send({ type: "response", id, data: toolResult });
+        // Await the result to support async tool handlers. Sending the response
+        // synchronously when the handler returns a Promise would serialize the
+        // Promise object itself, not its resolved value, causing the agent to
+        // receive garbage data without any error.
+        Promise.resolve(handler.onToolCall?.(toolCallRequest) ?? null)
+          .then((toolResult) => {
+            this.stream?.send({ type: "response", id, data: toolResult });
+          })
+          .catch(() => {
+            this.stream?.send({ type: "response", id, data: { error: "Tool handler failed" } });
+          });
         break;
       }
       case "lifecycle": {
