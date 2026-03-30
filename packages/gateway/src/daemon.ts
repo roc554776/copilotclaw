@@ -122,7 +122,7 @@ async function main(): Promise<void> {
 
   // Need to capture serverHandle for SSE broadcaster access in stream handler
   let serverHandle: Awaited<ReturnType<typeof startServer>> | undefined;
-  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore });
+  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, stateDir: getStateDir(getProfileName()) });
 
   // Cron scheduler: periodically send cron messages to channels
   const cronJobs = config.cron ?? [];
