@@ -922,8 +922,8 @@ describe("AgentSessionManager — generic hook RPC dispatch", () => {
     const onPostToolUse = hooks["onPostToolUse"] as (input: unknown) => Promise<unknown>;
     const result = await onPostToolUse({ toolName: "grep" });
 
-    // Fallback returns void (no pending messages, no reminder needed)
-    expect(result === undefined || result === null || (typeof result === "object" && result !== null)).toBe(true);
+    // Fallback returns undefined when gateway is down and no pending messages or reminders are queued
+    expect(result).toBeUndefined();
 
     manager.stopSession(sessionId);
     await wait(30);

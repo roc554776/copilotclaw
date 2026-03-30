@@ -295,8 +295,22 @@ export class AgentSessionManager {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return async (input: any, invocation?: { sessionId?: string }) => {
         if (signal.aborted) return;
+
+        // For onPostToolUse, consume reminderState synchronously before any await
+        // to prevent concurrent hook calls from duplicating reminder injection (TOCTOU).
+        let shouldRemind = false;
+        if (hookName === "onPostToolUse") {
+          shouldRemind = reminderState.needsReminder;
+          if (shouldRemind) {
+            reminderState.needsReminder = false;
+            reminderState.lastReminderPercent = reminderState.currentUsagePercent;
+          }
+        }
+
+        let gatewayResult: unknown = undefined;
+        let gatewayReachable = false;
         try {
-          const result = await requestFromGateway({
+          gatewayResult = await requestFromGateway({
             type: "hook",
             hookName,
             sessionId: entry.sessionId,
@@ -304,16 +318,32 @@ export class AgentSessionManager {
             channelId,
             input: input as Record<string, unknown>,
           });
-          if (result !== null && result !== undefined && typeof result === "object") {
-            return result;
-          }
+          gatewayReachable = true;
         } catch {
           // Gateway unreachable — use fallback behavior below
         }
+
+        if (gatewayReachable) {
+          // Gateway online: use its result, but always inject agent-side reminder for onPostToolUse.
+          if (hookName === "onPostToolUse" && shouldRemind) {
+            const existingContext = (gatewayResult !== null && gatewayResult !== undefined && typeof gatewayResult === "object")
+              ? (gatewayResult as Record<string, unknown>)["additionalContext"] as string | undefined
+              : undefined;
+            const parts: string[] = [];
+            if (existingContext !== undefined && existingContext !== "") parts.push(existingContext);
+            parts.push(this.systemReminder);
+            return { additionalContext: parts.join("\n\n") };
+          }
+          if (gatewayResult !== null && gatewayResult !== undefined && typeof gatewayResult === "object") {
+            return gatewayResult;
+          }
+          return;
+        }
+
         // Fallback: agent-autonomous behavior when gateway is offline.
         // Only onPostToolUse has meaningful fallback (keepalive reminder).
         if (hookName === "onPostToolUse") {
-          return this.postToolUseFallback(channelId, reminderState);
+          return this.postToolUseFallback(channelId, shouldRemind);
         }
         return;
       };
@@ -557,18 +587,13 @@ export class AgentSessionManager {
 
   /** Fallback onPostToolUse behavior when gateway is unreachable.
    *  Maintains keepalive by checking pending messages and injecting reminders.
-   *  This ensures physical sessions survive gateway downtime. */
+   *  This ensures physical sessions survive gateway downtime.
+   *  @param shouldRemind - pre-consumed reminder flag (consumed synchronously before the RPC call). */
   private async postToolUseFallback(
     channelId: string,
-    reminderState: { needsReminder: boolean; lastReminderPercent: number; currentUsagePercent: number },
+    shouldRemind: boolean,
   ): Promise<{ additionalContext: string } | void> {
     const parts: string[] = [];
-
-    const shouldRemind = reminderState.needsReminder;
-    if (shouldRemind) {
-      reminderState.needsReminder = false;
-      reminderState.lastReminderPercent = reminderState.currentUsagePercent;
-    }
 
     // Check for pending user messages via IPC (will fail if gateway is down — that's OK)
     try {
