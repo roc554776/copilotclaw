@@ -521,7 +521,7 @@ LOW — 運用:
 
 未実現 — ロジックの gateway 移行:
 - ツールロジックを gateway の RPC コールバックに委譲する（未実現）: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
-- onPostToolUse の判断ロジックのデータ駆動化（未実現）: 何をチェックして何を返すかの制御構造を gateway config または RPC で駆動する。gateway 停止時は agent が自律的にデフォルト動作（keepalive + リマインダー）を実行する
+- SDK フックを gateway RPC 経由にする汎用機構（未実現）: `onPostToolUse` 等の SDK フックを個別に対処するのではなく、SDK フック全般を gateway 経由で処理する汎用的な仕組みを設ける。agent はフック発火時に gateway に RPC を送り、gateway が応答（additionalContext 等）を返す。gateway 停止時は agent がフォールバック動作（keepalive リマインダー等の最低限の動作）を自律実行する。これにより、新しいフックタイプが SDK に追加されても agent は同じ汎用機構で対応でき、フックのロジック変更も gateway 更新のみで反映される
 - セッションライフサイクルの判断を gateway の IPC コマンドに委ねる（未実現）: 現在 agent 内にある suspend/resume 条件判定を gateway の明示的コマンドに置き換える。agent のデフォルト動作は「コマンドが来ない限りセッションを維持し続ける」。gateway はコマンドで能動的に停止・suspend を指示する。gateway 停止中はコマンドが届かないので、物理セッションは自然に維持される
 
 **v0.49.0 移行の経緯:**
