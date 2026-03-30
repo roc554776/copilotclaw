@@ -340,6 +340,143 @@ describe("AgentManager — setConfigToSend", () => {
   });
 });
 
+describe("AgentManager — physical session IPC", () => {
+  function invokeHandleAgentMessage(manager: AgentManager, msg: Record<string, unknown>): void {
+    (manager as unknown as { handleAgentMessage: (msg: Record<string, unknown>) => void }).handleAgentMessage(msg);
+  }
+
+  it("dispatches physical_session_started to onPhysicalSessionStarted handler", () => {
+    const manager = new AgentManager();
+    const onPhysicalSessionStarted = vi.fn();
+    manager.setStreamMessageHandler({ onPhysicalSessionStarted });
+
+    invokeHandleAgentMessage(manager, {
+      type: "physical_session_started",
+      sessionId: "ps-1",
+      copilotSessionId: "cs-1",
+      model: "gpt-4.1",
+    });
+
+    expect(onPhysicalSessionStarted).toHaveBeenCalledWith("ps-1", "cs-1", "gpt-4.1");
+  });
+
+  it("dispatches physical_session_ended to onPhysicalSessionEnded handler", () => {
+    const manager = new AgentManager();
+    const onPhysicalSessionEnded = vi.fn();
+    manager.setStreamMessageHandler({ onPhysicalSessionEnded });
+
+    invokeHandleAgentMessage(manager, {
+      type: "physical_session_ended",
+      sessionId: "ps-1",
+      reason: "idle",
+      copilotSessionId: "cs-1",
+      elapsedMs: 5000,
+      totalInputTokens: 100,
+      totalOutputTokens: 200,
+    });
+
+    expect(onPhysicalSessionEnded).toHaveBeenCalledWith("ps-1", "idle", "cs-1", 5000, 100, 200, undefined);
+  });
+
+  it("dispatches physical_session_ended with error field", () => {
+    const manager = new AgentManager();
+    const onPhysicalSessionEnded = vi.fn();
+    manager.setStreamMessageHandler({ onPhysicalSessionEnded });
+
+    invokeHandleAgentMessage(manager, {
+      type: "physical_session_ended",
+      sessionId: "ps-2",
+      reason: "error",
+      copilotSessionId: "cs-2",
+      elapsedMs: 1000,
+      totalInputTokens: 50,
+      totalOutputTokens: 0,
+      error: "rate limited",
+    });
+
+    expect(onPhysicalSessionEnded).toHaveBeenCalledWith("ps-2", "error", "cs-2", 1000, 50, 0, "rate limited");
+  });
+
+  it("sends start_physical_session via stream with all fields", () => {
+    const manager = new AgentManager();
+    const streamSend = vi.fn();
+    (manager as unknown as { stream: { send: typeof streamSend; isConnected: () => boolean } | null }).stream = {
+      send: streamSend,
+      isConnected: () => true,
+    };
+
+    manager.startPhysicalSession("ps-1", "ch-1", "cs-1", "gpt-4.1");
+    expect(streamSend).toHaveBeenCalledWith({
+      type: "start_physical_session",
+      sessionId: "ps-1",
+      channelId: "ch-1",
+      copilotSessionId: "cs-1",
+      model: "gpt-4.1",
+    });
+  });
+
+  it("sends start_physical_session without optional fields", () => {
+    const manager = new AgentManager();
+    const streamSend = vi.fn();
+    (manager as unknown as { stream: { send: typeof streamSend; isConnected: () => boolean } | null }).stream = {
+      send: streamSend,
+      isConnected: () => true,
+    };
+
+    manager.startPhysicalSession("ps-1", "ch-1");
+    expect(streamSend).toHaveBeenCalledWith({
+      type: "start_physical_session",
+      sessionId: "ps-1",
+      channelId: "ch-1",
+    });
+  });
+
+  it("does not send start_physical_session when stream is not connected", () => {
+    const manager = new AgentManager();
+    const streamSend = vi.fn();
+    (manager as unknown as { stream: { send: typeof streamSend; isConnected: () => boolean } | null }).stream = {
+      send: streamSend,
+      isConnected: () => false,
+    };
+
+    manager.startPhysicalSession("ps-1", "ch-1");
+    expect(streamSend).not.toHaveBeenCalled();
+  });
+
+  it("does not send start_physical_session when no stream exists", () => {
+    const manager = new AgentManager();
+    // Should not throw
+    manager.startPhysicalSession("ps-1", "ch-1");
+  });
+
+  it("sends stop_physical_session via stream", () => {
+    const manager = new AgentManager();
+    const streamSend = vi.fn();
+    (manager as unknown as { stream: { send: typeof streamSend; isConnected: () => boolean } | null }).stream = {
+      send: streamSend,
+      isConnected: () => true,
+    };
+
+    manager.stopPhysicalSession("ps-1");
+    expect(streamSend).toHaveBeenCalledWith({
+      type: "stop_physical_session",
+      sessionId: "ps-1",
+    });
+  });
+
+  it("does not send stop_physical_session when stream is not connected", () => {
+    const manager = new AgentManager();
+    const streamSend = vi.fn();
+    (manager as unknown as { stream: { send: typeof streamSend; isConnected: () => boolean } | null }).stream = {
+      send: streamSend,
+      isConnected: () => false,
+    };
+
+    manager.stopPhysicalSession("ps-1");
+    expect(streamSend).not.toHaveBeenCalled();
+  });
+});
+
 describe("AgentManager — closeStream", () => {
   it("closes and nullifies the stream", () => {
     const manager = new AgentManager();

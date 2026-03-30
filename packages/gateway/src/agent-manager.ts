@@ -29,6 +29,8 @@ export interface StreamMessageHandler {
   onSessionEvent?: (sessionId: string, channelId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
   onSystemPromptOriginal?: (model: string, prompt: string, capturedAt: string) => void;
   onSystemPromptSession?: (sessionId: string, model: string, prompt: string) => void;
+  onPhysicalSessionStarted?: (sessionId: string, copilotSessionId: string, model: string) => void;
+  onPhysicalSessionEnded?: (sessionId: string, reason: "idle" | "error" | "aborted", copilotSessionId: string, elapsedMs: number, totalInputTokens: number, totalOutputTokens: number, error?: string) => void;
   onDrainPending?: (channelId: string) => unknown[];
   onPeekPending?: (channelId: string) => unknown | null;
   onFlushPending?: (channelId: string) => number;
@@ -170,6 +172,24 @@ export class AgentManager {
         this.stream?.send({ type: "response", id, data });
         break;
       }
+      case "physical_session_started": {
+        const sessionId = msg["sessionId"] as string;
+        const copilotSessionId = msg["copilotSessionId"] as string;
+        const model = msg["model"] as string;
+        handler.onPhysicalSessionStarted?.(sessionId, copilotSessionId, model);
+        break;
+      }
+      case "physical_session_ended": {
+        const sessionId = msg["sessionId"] as string;
+        const reason = msg["reason"] as "idle" | "error" | "aborted";
+        const copilotSessionId = msg["copilotSessionId"] as string;
+        const elapsedMs = msg["elapsedMs"] as number;
+        const totalInputTokens = msg["totalInputTokens"] as number;
+        const totalOutputTokens = msg["totalOutputTokens"] as number;
+        const error = typeof msg["error"] === "string" ? msg["error"] as string : undefined;
+        handler.onPhysicalSessionEnded?.(sessionId, reason, copilotSessionId, elapsedMs, totalInputTokens, totalOutputTokens, error);
+        break;
+      }
       default:
         // Unknown message type — ignore
         break;
@@ -182,6 +202,21 @@ export class AgentManager {
   notifyAgent(channelId: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
     this.stream.send({ type: "agent_notify", channelId });
+  }
+
+  /** Send a start_physical_session command to the agent via the stream. */
+  startPhysicalSession(sessionId: string, channelId: string, copilotSessionId?: string, model?: string): void {
+    if (this.stream === null || !this.stream.isConnected()) return;
+    const msg: Record<string, unknown> = { type: "start_physical_session", sessionId, channelId };
+    if (copilotSessionId !== undefined) msg["copilotSessionId"] = copilotSessionId;
+    if (model !== undefined) msg["model"] = model;
+    this.stream.send(msg);
+  }
+
+  /** Send a stop_physical_session command to the agent via the stream. */
+  stopPhysicalSession(sessionId: string): void {
+    if (this.stream === null || !this.stream.isConnected()) return;
+    this.stream.send({ type: "stop_physical_session", sessionId });
   }
 
   /** Ensure agent process is running and compatible.

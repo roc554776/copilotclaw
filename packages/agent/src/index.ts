@@ -187,6 +187,22 @@ async function main(): Promise<void> {
   };
   streamEvents.on("agent_notify", pendingHandler);
 
+  // Phase 2 IPC: listen for physical session commands from gateway (wiring in Phase 3)
+  const startPhysicalSessionHandler = (msg: Record<string, unknown>) => {
+    const sessionId = msg["sessionId"] as string;
+    const channelId = msg["channelId"] as string;
+    const copilotSessionId = msg["copilotSessionId"] as string | undefined;
+    const model = msg["model"] as string | undefined;
+    log(`received start_physical_session: session=${sessionId}, channel=${channelId.slice(0, 8)}, copilotSession=${copilotSessionId ?? "(new)"}, model=${model ?? "(auto)"}`);
+  };
+  streamEvents.on("start_physical_session", startPhysicalSessionHandler);
+
+  const stopPhysicalSessionHandler = (msg: Record<string, unknown>) => {
+    const sessionId = msg["sessionId"] as string;
+    log(`received stop_physical_session: session=${sessionId}`);
+  };
+  streamEvents.on("stop_physical_session", stopPhysicalSessionHandler);
+
   // Check all suspended sessions for pending messages and revive as needed.
   // Called on startup, stream reconnect, and periodically as reliability backstop.
   const checkAllPending = async () => {
@@ -264,6 +280,8 @@ async function main(): Promise<void> {
 
   log("shutting down");
   streamEvents.removeListener("agent_notify", pendingHandler);
+  streamEvents.removeListener("start_physical_session", startPhysicalSessionHandler);
+  streamEvents.removeListener("stop_physical_session", stopPhysicalSessionHandler);
   clearInterval(staleCheckTimer);
   await sessionManager.stopAll();
   await ipc.close();
