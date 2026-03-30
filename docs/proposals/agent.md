@@ -307,6 +307,30 @@ gateway が停止している間に agent process で発生した情報が消失
 - フラッシュは `running_sessions` 報告の前に実行され、gateway は欠落していたイベントを先に受信する
 - バッファサイズ上限: 10,000 メッセージ。超過時は古いものから破棄する
 
+**残存する配達保証の限界（未実現）:**
+
+現在の send queue は WAL（write-ahead log）の前半のみの実装。gateway 停止中のバッファリングと復元は実現しているが、flush 時の配達保証がない。
+
+問題: `flushSendQueue()` は `socket.write()` 後に即座にディスクファイルをクリアする。Unix domain socket の `socket.write()` はデータをカーネルバッファに入れるだけで、gateway アプリケーションが読み取ったことを保証しない。flush 中に gateway がクラッシュすると、カーネルバッファ内のデータが消え、ディスクファイルも既にクリア済みのため、復元不可能になる。
+
+対応方針: アプリケーションレイヤーの ACK プロトコルを導入する。
+
+```
+agent                              gateway
+  │                                  │
+  │  flush_batch (batchId, messages) │
+  │─────────────────────────────────>│
+  │                                  │ ← 処理完了
+  │  flush_ack (batchId)             │
+  │<─────────────────────────────────│
+  │                                  │
+  │ ← WAL から該当メッセージを削除   │
+```
+
+- agent は flush 時にディスクファイルをクリアしない。ACK 受信後に削除する
+- ACK が来なければリトライする
+- gateway 側はメッセージの重複を冪等処理する（session_event は ID + timestamp で識別可能）
+
 ### Agent Session の実行中タイムアウト（stale session）
 
 agent session が待機中ではなく実行中（processing）のまま一定時間（デフォルト 10 分）経過した場合:
