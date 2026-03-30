@@ -104,11 +104,11 @@ describe("IPC stream — bidirectional messaging", () => {
       });
     });
 
-    sendToGateway({ type: "channel_message", channelId: "ch-test", sender: "agent", message: "hello" });
+    sendToGateway({ type: "channel_message", sessionId: "sess-test", sender: "agent", message: "hello" });
 
     const received = await messageReceived;
     expect(received["type"]).toBe("channel_message");
-    expect(received["channelId"]).toBe("ch-test");
+    expect(received["sessionId"]).toBe("sess-test");
     expect(received["message"]).toBe("hello");
 
     client.destroy();
@@ -160,7 +160,7 @@ describe("IPC stream — bidirectional messaging", () => {
     });
 
     // Agent makes a request
-    const response = await requestFromGateway({ type: "drain_pending", channelId: "ch-test" });
+    const response = await requestFromGateway({ type: "drain_pending", sessionId: "sess-test" });
     expect(response).toEqual([{ id: "msg-1", message: "test message" }]);
 
     client.destroy();

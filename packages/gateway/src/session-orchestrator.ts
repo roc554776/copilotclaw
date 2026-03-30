@@ -278,15 +278,6 @@ export class SessionOrchestrator {
     return result;
   }
 
-  /** Find the orchestrator sessionId that currently holds a physical session with the given copilot sessionId.
-   *  Used to route forwarded SDK events (which reference copilot sessionId) to the correct abstract session. */
-  findSessionByCopilotId(copilotSessionId: string): string | undefined {
-    for (const [sessionId, session] of this.sessions) {
-      if (session.physicalSession?.sessionId === copilotSessionId) return sessionId;
-    }
-    return undefined;
-  }
-
   /** Whether any session (active or suspended) is bound to the channel. */
   hasSessionForChannel(channelId: string): boolean {
     return this.channelBindings.has(channelId);

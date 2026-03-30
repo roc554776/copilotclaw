@@ -109,17 +109,17 @@ import { SessionOrchestrator } from "../../src/session-orchestrator.js";
 
 /**
  * Replicates the orchestrator routing block added to daemon.ts onSessionEvent.
- * Dispatches SDK event types to the appropriate orchestrator methods via findSessionByCopilotId.
+ * Uses sessionId (opaque gateway token) directly, matching the new daemon routing logic.
  */
 function routeEventToOrchestrator(
   orchestrator: SessionOrchestrator,
-  copilotSessionId: string,
+  sessionId: string,
   eventType: string,
   timestamp: string,
   data: Record<string, unknown>,
 ): void {
-  const orchSessionId = orchestrator.findSessionByCopilotId(copilotSessionId);
-  if (orchSessionId === undefined) return;
+  if (orchestrator.getSessionStatuses()[sessionId] === undefined) return;
+  const orchSessionId = sessionId;
 
   switch (eventType) {
     case "tool.execution_start":
@@ -165,7 +165,7 @@ function routeEventToOrchestrator(
   }
 }
 
-describe("daemon onSessionEvent — orchestrator routing via findSessionByCopilotId", () => {
+describe("daemon onSessionEvent — orchestrator routing via sessionId", () => {
   it("routes assistant.usage to accumulateUsageTokens after physical_session_started", () => {
     const orch = new SessionOrchestrator();
     const sessionId = orch.startSession("ch-routing");
@@ -178,11 +178,11 @@ describe("daemon onSessionEvent — orchestrator routing via findSessionByCopilo
       totalOutputTokens: 0,
     });
 
-    routeEventToOrchestrator(orch, "copilot-xyz", "assistant.usage", "2026-01-01T00:00:01Z", {
+    routeEventToOrchestrator(orch, sessionId, "assistant.usage", "2026-01-01T00:00:01Z", {
       inputTokens: 100,
       outputTokens: 50,
     });
-    routeEventToOrchestrator(orch, "copilot-xyz", "assistant.usage", "2026-01-01T00:00:02Z", {
+    routeEventToOrchestrator(orch, sessionId, "assistant.usage", "2026-01-01T00:00:02Z", {
       inputTokens: 200,
       outputTokens: 75,
     });
@@ -202,7 +202,7 @@ describe("daemon onSessionEvent — orchestrator routing via findSessionByCopilo
       currentState: "idle",
     });
 
-    routeEventToOrchestrator(orch, "copilot-abc", "tool.execution_start", "2026-01-01T00:00:01Z", {
+    routeEventToOrchestrator(orch, sessionId, "tool.execution_start", "2026-01-01T00:00:01Z", {
       toolName: "read_file",
     });
 
@@ -220,19 +220,19 @@ describe("daemon onSessionEvent — orchestrator routing via findSessionByCopilo
       currentState: "tool:read_file",
     });
 
-    routeEventToOrchestrator(orch, "copilot-idle", "tool.execution_complete", "2026-01-01T00:00:02Z", {});
+    routeEventToOrchestrator(orch, sessionId, "tool.execution_complete", "2026-01-01T00:00:02Z", {});
 
     const session = orch.getSessionStatuses()[sessionId];
     expect(session?.physicalSession?.currentState).toBe("idle");
   });
 
-  it("silently discards events when no physical session matches the copilot sessionId", () => {
+  it("silently discards events when the sessionId is not known to the orchestrator", () => {
     const orch = new SessionOrchestrator();
     orch.startSession("ch-no-match");
-    // No updatePhysicalSession — so findSessionByCopilotId returns undefined
+    // Pass an unknown sessionId — orchestrator has no session for it
 
     expect(() =>
-      routeEventToOrchestrator(orch, "copilot-unknown", "assistant.usage", "2026-01-01T00:00:00Z", {
+      routeEventToOrchestrator(orch, "session-unknown-00000000", "assistant.usage", "2026-01-01T00:00:00Z", {
         inputTokens: 100,
         outputTokens: 50,
       }),
@@ -249,7 +249,7 @@ describe("daemon onSessionEvent — orchestrator routing via findSessionByCopilo
       currentState: "idle",
     });
 
-    routeEventToOrchestrator(orch, "copilot-model", "session.model_change", "2026-01-01T00:00:01Z", {
+    routeEventToOrchestrator(orch, sessionId, "session.model_change", "2026-01-01T00:00:01Z", {
       newModel: "gpt-4.1",
     });
 
@@ -267,7 +267,7 @@ describe("daemon onSessionEvent — orchestrator routing via findSessionByCopilo
       currentState: "idle",
     });
 
-    routeEventToOrchestrator(orch, "copilot-sub", "subagent.started", "2026-01-01T00:00:01Z", {
+    routeEventToOrchestrator(orch, sessionId, "subagent.started", "2026-01-01T00:00:01Z", {
       toolCallId: "tc-1",
       agentName: "worker",
       agentDisplayName: "Worker",
@@ -277,7 +277,7 @@ describe("daemon onSessionEvent — orchestrator routing via findSessionByCopilo
     expect(session?.subagentSessions).toHaveLength(1);
     expect(session?.subagentSessions?.[0]?.status).toBe("running");
 
-    routeEventToOrchestrator(orch, "copilot-sub", "subagent.completed", "2026-01-01T00:00:02Z", {
+    routeEventToOrchestrator(orch, sessionId, "subagent.completed", "2026-01-01T00:00:02Z", {
       toolCallId: "tc-1",
     });
 

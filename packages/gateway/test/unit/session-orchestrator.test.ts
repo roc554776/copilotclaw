@@ -431,15 +431,6 @@ describe("SessionOrchestrator", () => {
       expect(session.subagentSessions![0]!.status).toBe("completed");
     });
 
-    it("findSessionByCopilotId returns correct orchestrator sessionId", () => {
-      const orch = new SessionOrchestrator();
-      const sessionId = orch.startSession("ch-1");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ sessionId: "copilot-abc" }));
-
-      expect(orch.findSessionByCopilotId("copilot-abc")).toBe(sessionId);
-      expect(orch.findSessionByCopilotId("nonexistent")).toBeUndefined();
-    });
-
     it("does nothing for unknown session", () => {
       const orch = new SessionOrchestrator();
       expect(() => orch.updatePhysicalSessionState("nonexistent", "idle")).not.toThrow();
