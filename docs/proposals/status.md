@@ -141,6 +141,7 @@
 **未実現:**
 - Gateway-Agent 責務の再配置 — モデル選択ポリシーの部分移行残存（gateway が resolveModel を実行し agent に渡すよう変更済みだが、agent 内に fallback 用の resolveModel が残存）
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
+- Gateway-Agent 責務の再配置 — gateway-configurable 範囲の拡大（ツールロジックの RPC 委譲、SDK イベントの全件無条件 forward、セッションライフサイクル判断の IPC コマンド化）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）

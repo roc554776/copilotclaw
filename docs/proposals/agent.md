@@ -503,6 +503,14 @@ LOW — 運用:
 - セッション終了を gateway に報告する（成功/失敗/idle exit）
 - gateway から受け取った設定でセッションを構成する（プロンプト、ツール、hooks）
 
+**今後の refactoring 方針 — gateway-configurable 範囲の拡大（未実現）:**
+
+現在、設定値（プロンプト、タイミング、モデル選択）は gateway-configurable だが、振る舞い（ツールロジック、イベント購読、セッションライフサイクル判断）は agent にハードコードされている。以下の refactoring により、agent 更新なしで変更可能な範囲をさらに拡大できる:
+
+- ツールロジックを gateway の RPC コールバックに委譲する: agent のツールハンドラを generic dispatcher にし、実際の判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。agent は gateway から返された結果をそのまま SDK に返す
+- SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: 現在は agent 内で `forwardedEvents` リストに列挙されたイベントのみを forward しているが、SDK が発火する全イベントを無条件に forward するようにすれば、新しいイベントタイプへの対応が gateway 更新のみで可能になる
+- セッションライフサイクルの判断を gateway の IPC コマンドに委ねる: 現在 agent 内にある suspend/resume 条件判定（idle exit 時の suspend、error 時の copilotSessionId クリア等）を、gateway からの明示的コマンドに置き換える
+
 **v0.49.0 移行の経緯:**
 
 v0.44.0〜v0.48.0 にかけて、設計原則（agent はミニマル、gateway が制御する）に反して agent 側に pending ポーリング、flush ロジック、stream 再接続時の pending チェック、バックオフ等を場当たり的に追加してしまった。その結果、cron が止まる問題が繰り返し発生し、gateway を更新しても agent を再起動しない限り修正が反映されない状態に陥った。v0.49.0 ではこれらのアドホックなコードを全て削除し、gateway 側の SessionOrchestrator に一元化する大規模な修正を行った。
