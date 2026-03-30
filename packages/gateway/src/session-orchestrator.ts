@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
+import Database from "better-sqlite3";
 
 import type { PhysicalSessionSummary, SubagentInfo } from "./ipc-client.js";
 
@@ -20,31 +21,195 @@ export interface AbstractSession {
   processingStartedAt?: string | undefined;
 }
 
-interface SessionSnapshot {
-  sessionId: string;
-  status: AbstractSessionStatus;
-  channelId?: string | undefined;
-  startedAt: string;
-  copilotSessionId?: string | undefined;
-  cumulativeInputTokens: number;
-  cumulativeOutputTokens: number;
-  physicalSessionHistory: PhysicalSessionSummary[];
-}
-
-interface PersistenceSnapshot {
-  sessions: SessionSnapshot[];
-  channelBindings: Record<string, string>;
-  channelBackoff: Record<string, number>;
+export interface SessionOrchestratorOptions {
+  /** Path to SQLite database file. When omitted, uses in-memory database. */
+  persistPath?: string;
+  /** Path to legacy agent-bindings.json for one-time migration. */
+  legacyBindingsPath?: string;
 }
 
 export class SessionOrchestrator {
   private readonly sessions = new Map<string, AbstractSession>();
   private readonly channelBindings = new Map<string, string>(); // channelId → sessionId
   private readonly channelBackoff = new Map<string, number>(); // channelId → expiresAt timestamp
-  private readonly persistPath: string | undefined;
+  private readonly db: Database.Database;
 
-  constructor(options?: { persistPath?: string }) {
-    this.persistPath = options?.persistPath;
+  constructor(options?: SessionOrchestratorOptions) {
+    const dbPath = options?.persistPath ?? ":memory:";
+    if (dbPath !== ":memory:") {
+      mkdirSync(dirname(dbPath), { recursive: true });
+    }
+    this.db = new Database(dbPath);
+    this.db.pragma("journal_mode = WAL");
+    this.initSchema();
+    this.loadFromDb();
+
+    // One-time migration from legacy agent-bindings.json
+    if (options?.legacyBindingsPath !== undefined) {
+      this.migrateFromLegacyBindings(options.legacyBindingsPath);
+    }
+  }
+
+  private initSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS abstract_sessions (
+        sessionId TEXT PRIMARY KEY,
+        channelId TEXT,
+        status TEXT NOT NULL,
+        startedAt TEXT NOT NULL,
+        copilotSessionId TEXT,
+        cumulativeInputTokens INTEGER NOT NULL DEFAULT 0,
+        cumulativeOutputTokens INTEGER NOT NULL DEFAULT 0,
+        physicalSessionHistory TEXT NOT NULL DEFAULT '[]'
+      )
+    `);
+  }
+
+  /** Load all sessions from SQLite into in-memory maps on construction. */
+  private loadFromDb(): void {
+    const rows = this.db.prepare(
+      "SELECT sessionId, channelId, status, startedAt, copilotSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory FROM abstract_sessions",
+    ).all() as Array<{
+      sessionId: string;
+      channelId: string | null;
+      status: string;
+      startedAt: string;
+      copilotSessionId: string | null;
+      cumulativeInputTokens: number;
+      cumulativeOutputTokens: number;
+      physicalSessionHistory: string;
+    }>;
+
+    for (const row of rows) {
+      let history: PhysicalSessionSummary[] = [];
+      try {
+        history = JSON.parse(row.physicalSessionHistory) as PhysicalSessionSummary[];
+      } catch {
+        // Invalid JSON — use empty array
+      }
+
+      const session: AbstractSession = {
+        sessionId: row.sessionId,
+        status: (row.status as AbstractSessionStatus) ?? "suspended",
+        channelId: row.channelId ?? undefined,
+        startedAt: row.startedAt,
+        copilotSessionId: row.copilotSessionId ?? undefined,
+        cumulativeInputTokens: row.cumulativeInputTokens,
+        cumulativeOutputTokens: row.cumulativeOutputTokens,
+        physicalSessionHistory: history,
+      };
+      this.sessions.set(session.sessionId, session);
+
+      if (session.channelId !== undefined) {
+        this.channelBindings.set(session.channelId, session.sessionId);
+      }
+    }
+  }
+
+  /** Persist a single session to SQLite (upsert). */
+  private persistSession(session: AbstractSession): void {
+    this.db.prepare(`
+      INSERT INTO abstract_sessions (sessionId, channelId, status, startedAt, copilotSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(sessionId) DO UPDATE SET
+        channelId = excluded.channelId,
+        status = excluded.status,
+        startedAt = excluded.startedAt,
+        copilotSessionId = excluded.copilotSessionId,
+        cumulativeInputTokens = excluded.cumulativeInputTokens,
+        cumulativeOutputTokens = excluded.cumulativeOutputTokens,
+        physicalSessionHistory = excluded.physicalSessionHistory
+    `).run(
+      session.sessionId,
+      session.channelId ?? null,
+      session.status,
+      session.startedAt,
+      session.copilotSessionId ?? null,
+      session.cumulativeInputTokens,
+      session.cumulativeOutputTokens,
+      JSON.stringify(session.physicalSessionHistory),
+    );
+  }
+
+  /** Remove a session from SQLite. */
+  private deleteSessionFromDb(sessionId: string): void {
+    this.db.prepare("DELETE FROM abstract_sessions WHERE sessionId = ?").run(sessionId);
+  }
+
+  /** Migrate data from legacy agent-bindings.json if it exists. */
+  private migrateFromLegacyBindings(jsonPath: string): void {
+    if (!existsSync(jsonPath)) return;
+
+    // Only migrate if DB has no sessions (fresh DB)
+    const count = this.db.prepare("SELECT COUNT(*) as c FROM abstract_sessions").get() as { c: number };
+    if (count.c > 0) return;
+
+    try {
+      const raw = readFileSync(jsonPath, "utf-8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+      // Legacy format: { sessions: [...], channelBindings: {...}, ... }
+      // or the old agent-bindings format: { entries: [...] }
+      const sessions = parsed["sessions"] as Array<Record<string, unknown>> | undefined;
+      const entries = parsed["entries"] as Array<Record<string, unknown>> | undefined;
+
+      const insertStmt = this.db.prepare(`
+        INSERT OR IGNORE INTO abstract_sessions (sessionId, channelId, status, startedAt, copilotSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      let migrated = 0;
+
+      this.db.transaction(() => {
+        if (Array.isArray(sessions)) {
+          for (const s of sessions) {
+            if (typeof s["sessionId"] !== "string") continue;
+            insertStmt.run(
+              s["sessionId"],
+              typeof s["channelId"] === "string" ? s["channelId"] : null,
+              typeof s["status"] === "string" ? s["status"] : "suspended",
+              typeof s["startedAt"] === "string" ? s["startedAt"] : new Date().toISOString(),
+              typeof s["copilotSessionId"] === "string" ? s["copilotSessionId"] : null,
+              typeof s["cumulativeInputTokens"] === "number" ? s["cumulativeInputTokens"] : 0,
+              typeof s["cumulativeOutputTokens"] === "number" ? s["cumulativeOutputTokens"] : 0,
+              Array.isArray(s["physicalSessionHistory"]) ? JSON.stringify(s["physicalSessionHistory"]) : "[]",
+            );
+            migrated++;
+          }
+        } else if (Array.isArray(entries)) {
+          // Old agent-bindings.json format
+          for (const e of entries) {
+            if (typeof e["sessionId"] !== "string") continue;
+            insertStmt.run(
+              e["sessionId"],
+              typeof e["channelId"] === "string" ? e["channelId"] : null,
+              typeof e["status"] === "string" ? e["status"] : "suspended",
+              typeof e["startedAt"] === "string" ? e["startedAt"] : new Date().toISOString(),
+              typeof e["copilotSessionId"] === "string" ? e["copilotSessionId"] : null,
+              typeof e["cumulativeInputTokens"] === "number" ? e["cumulativeInputTokens"] : 0,
+              typeof e["cumulativeOutputTokens"] === "number" ? e["cumulativeOutputTokens"] : 0,
+              Array.isArray(e["physicalSessionHistory"]) ? JSON.stringify(e["physicalSessionHistory"]) : "[]",
+            );
+            migrated++;
+          }
+        }
+      })();
+
+      if (migrated > 0) {
+        // Reload from DB to populate in-memory state
+        this.loadFromDb();
+        console.error(`[orchestrator] migrated ${migrated} sessions from legacy bindings`);
+      }
+
+      // Rename the file to prevent re-migration
+      try {
+        renameSync(jsonPath, `${jsonPath}.migrated`);
+      } catch {
+        // Best-effort rename
+      }
+    } catch (err: unknown) {
+      console.error(`[orchestrator] WARNING: failed to migrate legacy bindings: ${String(err)}`);
+    }
   }
 
   /**
@@ -60,6 +225,7 @@ export class SessionOrchestrator {
           // Revive
           existing.status = "starting";
           existing.channelId = channelId;
+          this.persistSession(existing);
           return existingSessionId;
         }
         // Already active — return as-is
@@ -79,6 +245,7 @@ export class SessionOrchestrator {
     };
     this.sessions.set(sessionId, session);
     this.channelBindings.set(channelId, sessionId);
+    this.persistSession(session);
     return sessionId;
   }
 
@@ -99,6 +266,7 @@ export class SessionOrchestrator {
     session.subagentSessions = undefined;
     session.processingStartedAt = undefined;
     session.status = "suspended";
+    this.persistSession(session);
   }
 
   /** Return a snapshot of all sessions keyed by sessionId. */
@@ -160,6 +328,7 @@ export class SessionOrchestrator {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     session.physicalSession = physicalSession;
+    this.persistSession(session);
   }
 
   /** Update the status of an abstract session. */
@@ -167,6 +336,7 @@ export class SessionOrchestrator {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     session.status = status;
+    this.persistSession(session);
   }
 
   /** Fully remove a session and its channel binding. */
@@ -177,114 +347,24 @@ export class SessionOrchestrator {
       this.channelBindings.delete(session.channelId);
     }
     this.sessions.delete(sessionId);
+    this.deleteSessionFromDb(sessionId);
   }
 
-  /** Persist orchestrator state to a JSON file. */
-  saveState(path?: string): void {
-    const filePath = path ?? this.persistPath;
-    if (filePath === undefined) return;
-
-    const sessions: SessionSnapshot[] = [];
-    for (const [, session] of this.sessions) {
-      sessions.push({
-        sessionId: session.sessionId,
-        status: session.status,
-        channelId: session.channelId,
-        startedAt: session.startedAt,
-        copilotSessionId: session.copilotSessionId,
-        cumulativeInputTokens: session.cumulativeInputTokens,
-        cumulativeOutputTokens: session.cumulativeOutputTokens,
-        physicalSessionHistory: session.physicalSessionHistory,
-      });
-    }
-
-    const channelBindingsObj: Record<string, string> = {};
-    for (const [k, v] of this.channelBindings) {
-      channelBindingsObj[k] = v;
-    }
-
-    const channelBackoffObj: Record<string, number> = {};
-    for (const [k, v] of this.channelBackoff) {
-      channelBackoffObj[k] = v;
-    }
-
-    const snapshot: PersistenceSnapshot = {
-      sessions,
-      channelBindings: channelBindingsObj,
-      channelBackoff: channelBackoffObj,
-    };
-
-    try {
-      mkdirSync(dirname(filePath), { recursive: true });
-      const tmp = `${filePath}.tmp`;
-      writeFileSync(tmp, JSON.stringify(snapshot), "utf-8");
-      renameSync(tmp, filePath);
-    } catch {
-      // Caller can handle errors; this matches agent's saveBindings pattern.
+  /**
+   * Suspend all non-suspended sessions.
+   * Used when the agent stream disconnects (agent restart) to mark all
+   * physical sessions as ended while keeping abstract sessions alive.
+   */
+  suspendAllActive(): void {
+    for (const [sessionId, session] of this.sessions) {
+      if (session.status !== "suspended") {
+        this.suspendSession(sessionId);
+      }
     }
   }
 
-  /** Load orchestrator state from a JSON file. */
-  loadState(path?: string): void {
-    const filePath = path ?? this.persistPath;
-    if (filePath === undefined) return;
-
-    let raw: string;
-    try {
-      raw = readFileSync(filePath, "utf-8");
-    } catch {
-      return; // File not found or unreadable — normal on first run.
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return; // Invalid JSON — skip.
-    }
-
-    if (typeof parsed !== "object" || parsed === null) return;
-    const snap = parsed as Partial<PersistenceSnapshot>;
-
-    // Restore sessions
-    if (Array.isArray(snap.sessions)) {
-      for (const s of snap.sessions) {
-        if (typeof s !== "object" || s === null) continue;
-        const rec = s as SessionSnapshot;
-        if (typeof rec.sessionId !== "string" || typeof rec.startedAt !== "string") continue;
-        const session: AbstractSession = {
-          sessionId: rec.sessionId,
-          status: rec.status ?? "suspended",
-          channelId: rec.channelId,
-          startedAt: rec.startedAt,
-          copilotSessionId: rec.copilotSessionId,
-          cumulativeInputTokens: typeof rec.cumulativeInputTokens === "number" ? rec.cumulativeInputTokens : 0,
-          cumulativeOutputTokens: typeof rec.cumulativeOutputTokens === "number" ? rec.cumulativeOutputTokens : 0,
-          physicalSessionHistory: Array.isArray(rec.physicalSessionHistory)
-            ? rec.physicalSessionHistory
-            : [],
-        };
-        this.sessions.set(session.sessionId, session);
-      }
-    }
-
-    // Restore channel bindings
-    if (typeof snap.channelBindings === "object" && snap.channelBindings !== null) {
-      for (const [k, v] of Object.entries(snap.channelBindings)) {
-        if (typeof v === "string") {
-          this.channelBindings.set(k, v);
-        }
-      }
-    }
-
-    // Restore channel backoff (only future entries)
-    if (typeof snap.channelBackoff === "object" && snap.channelBackoff !== null) {
-      const now = Date.now();
-      for (const [k, v] of Object.entries(snap.channelBackoff)) {
-        if (typeof v === "number" && v > now) {
-          this.channelBackoff.set(k, v);
-        }
-      }
-    }
+  /** Close the database connection. */
+  close(): void {
+    this.db.close();
   }
 }

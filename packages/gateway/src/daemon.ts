@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentPromptConfig } from "./agent-config.js";
 import { AgentManager } from "./agent-manager.js";
@@ -35,10 +36,14 @@ async function main(): Promise<void> {
   const sessionEventStore = new SessionEventStore(getDataDir(getProfileName()));
 
   // Session orchestrator: manages abstract session lifecycle on the gateway side
+  // Legacy migration: try session-orchestrator.json first (most recent), then agent-bindings.json (oldest)
+  const dataDir = getDataDir(getProfileName());
+  const legacyOrchestratorJson = join(dataDir, "session-orchestrator.json");
+  const legacyBindingsJson = join(dataDir, "agent-bindings.json");
   const orchestrator = new SessionOrchestrator({
-    persistPath: join(getDataDir(getProfileName()), "session-orchestrator.json"),
+    persistPath: join(dataDir, "session-orchestrator.db"),
+    legacyBindingsPath: existsSync(legacyOrchestratorJson) ? legacyOrchestratorJson : legacyBindingsJson,
   });
-  orchestrator.loadState();
   const promptConfig = getAgentPromptConfig();
 
   // Set up IPC stream message handlers before connecting
@@ -103,7 +108,7 @@ async function main(): Promise<void> {
         startedAt: new Date().toISOString(),
         currentState: "idle",
       });
-      orchestrator.saveState();
+
     },
     onPhysicalSessionEnded: (sessionId, reason, copilotSessionId, elapsedMs, totalInputTokens, totalOutputTokens, error) => {
       console.error(`[gateway] physical session ended: session=${sessionId.slice(0, 8)}, reason=${reason}, elapsed=${Math.round(elapsedMs / 1000)}s`);
@@ -126,7 +131,7 @@ async function main(): Promise<void> {
         totalOutputTokens,
       });
       orchestrator.suspendSession(sessionId);
-      orchestrator.saveState();
+
 
       // Notify channel about unexpected stop
       if (channelId !== undefined && reason !== "idle") {
@@ -188,7 +193,6 @@ async function main(): Promise<void> {
     const session = orchestrator.getSessionStatuses()[sessionId];
     console.error(`[gateway] starting physical session for channel ${channelId.slice(0, 8)}, session=${sessionId.slice(0, 8)}`);
     agentManager.startPhysicalSession(sessionId, channelId, session?.copilotSessionId);
-    orchestrator.saveState();
   };
 
   // Helper: check all channels for pending messages and start sessions via orchestrator
@@ -270,7 +274,7 @@ async function main(): Promise<void> {
         console.error(`[gateway] session ${sessionId.slice(0, 8)} exceeded max age, stopping`);
         agentManager.stopPhysicalSession(sessionId);
         orchestrator.suspendSession(sessionId);
-        orchestrator.saveState();
+  
       }
     }
   }, ORCHESTRATOR_CHECK_INTERVAL_MS);
@@ -282,9 +286,15 @@ async function main(): Promise<void> {
     checkAllChannelsPending();
   });
 
-  // Graceful OTel shutdown on process exit
+  // On stream "disconnected" event: suspend all active sessions (agent restart scenario)
+  agentManager.onStreamDisconnected(() => {
+    console.error("[gateway] stream disconnected, suspending all active sessions");
+    orchestrator.suspendAllActive();
+  });
+
+  // Graceful shutdown on process exit
   const gracefulShutdown = async (): Promise<void> => {
-    orchestrator.saveState();
+    orchestrator.close();
     agentManager.closeStream();
     await shutdownOtel();
     process.exit(0);

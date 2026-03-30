@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.48.0";
+export const MIN_AGENT_VERSION = "0.49.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -45,6 +45,7 @@ export class AgentManager {
   private streamMessageHandler: StreamMessageHandler | null = null;
   private configToSend: Record<string, unknown> | null = null;
   private streamConnectedCallbacks: Array<() => void> = [];
+  private streamDisconnectedCallbacks: Array<() => void> = [];
 
   constructor(options?: AgentManagerOptions) {
     const require = createRequire(import.meta.url);
@@ -94,6 +95,10 @@ export class AgentManager {
 
     this.stream.on("disconnected", () => {
       console.error("[gateway] IPC stream disconnected from agent");
+      // Fire registered disconnected callbacks
+      for (const cb of this.streamDisconnectedCallbacks) {
+        try { cb(); } catch { /* ignore callback errors */ }
+      }
     });
 
     this.stream.on("message", (msg: Record<string, unknown>) => {
@@ -349,6 +354,11 @@ export class AgentManager {
   /** Register a callback to be called when the stream connects. */
   onStreamConnected(callback: () => void): void {
     this.streamConnectedCallbacks.push(callback);
+  }
+
+  /** Register a callback to be called when the stream disconnects. */
+  onStreamDisconnected(callback: () => void): void {
+    this.streamDisconnectedCallbacks.push(callback);
   }
 
   /** Close the stream connection (for shutdown). */

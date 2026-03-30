@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -263,8 +263,40 @@ describe("SessionOrchestrator", () => {
     });
   });
 
-  describe("persistence (saveState / loadState)", () => {
-    const persistPath = join(TEST_DIR, "orchestrator-state.json");
+  describe("suspendAllActive", () => {
+    it("suspends all non-suspended sessions", () => {
+      const orch = new SessionOrchestrator();
+      const id1 = orch.startSession("ch-1");
+      const id2 = orch.startSession("ch-2");
+      orch.updateSessionStatus(id1, "processing");
+      orch.updateSessionStatus(id2, "waiting");
+
+      orch.suspendAllActive();
+
+      const statuses = orch.getSessionStatuses();
+      expect(statuses[id1].status).toBe("suspended");
+      expect(statuses[id2].status).toBe("suspended");
+    });
+
+    it("does not affect already suspended sessions", () => {
+      const orch = new SessionOrchestrator();
+      const id1 = orch.startSession("ch-1");
+      orch.suspendSession(id1);
+
+      expect(() => orch.suspendAllActive()).not.toThrow();
+
+      const statuses = orch.getSessionStatuses();
+      expect(statuses[id1].status).toBe("suspended");
+    });
+
+    it("handles empty orchestrator", () => {
+      const orch = new SessionOrchestrator();
+      expect(() => orch.suspendAllActive()).not.toThrow();
+    });
+  });
+
+  describe("SQLite persistence", () => {
+    const dbPath = join(TEST_DIR, "orchestrator-state.db");
 
     beforeEach(() => {
       mkdirSync(TEST_DIR, { recursive: true });
@@ -278,18 +310,16 @@ describe("SessionOrchestrator", () => {
       }
     });
 
-    it("round-trips sessions and channel bindings", () => {
-      const orch = new SessionOrchestrator();
+    it("round-trips sessions and channel bindings across restarts", () => {
+      const orch = new SessionOrchestrator({ persistPath: dbPath });
       const id1 = orch.startSession("ch-1");
       const id2 = orch.startSession("ch-2");
       orch.updatePhysicalSession(id1, makePhysicalSession({ totalInputTokens: 10, totalOutputTokens: 20 }));
       orch.suspendSession(id1);
       orch.updateSessionStatus(id2, "processing");
+      orch.close();
 
-      orch.saveState(persistPath);
-
-      const orch2 = new SessionOrchestrator();
-      orch2.loadState(persistPath);
+      const orch2 = new SessionOrchestrator({ persistPath: dbPath });
 
       const statuses = orch2.getSessionStatuses();
       expect(Object.keys(statuses)).toHaveLength(2);
@@ -302,54 +332,111 @@ describe("SessionOrchestrator", () => {
       expect(orch2.hasSessionForChannel("ch-1")).toBe(true);
       expect(orch2.getSessionIdForChannel("ch-1")).toBe(id1);
       expect(orch2.getSessionIdForChannel("ch-2")).toBe(id2);
+      orch2.close();
     });
 
-    it("skips expired backoff entries on load", () => {
-      vi.useFakeTimers();
+    it("persists stopSession deletions", () => {
+      const orch = new SessionOrchestrator({ persistPath: dbPath });
+      const id1 = orch.startSession("ch-1");
+      orch.stopSession(id1);
+      orch.close();
+
+      const orch2 = new SessionOrchestrator({ persistPath: dbPath });
+      expect(orch2.getSessionStatuses()[id1]).toBeUndefined();
+      expect(orch2.hasSessionForChannel("ch-1")).toBe(false);
+      orch2.close();
+    });
+
+    it("persists immediately on mutation", () => {
+      const orch = new SessionOrchestrator({ persistPath: dbPath });
+      const id1 = orch.startSession("ch-1");
+      // Do NOT call close — simulate a crash
+      // Re-open the DB
+      const orch2 = new SessionOrchestrator({ persistPath: dbPath });
+      expect(orch2.hasSessionForChannel("ch-1")).toBe(true);
+      expect(orch2.getSessionIdForChannel("ch-1")).toBe(id1);
+      orch.close();
+      orch2.close();
+    });
+  });
+
+  describe("legacy migration", () => {
+    const dbPath = join(TEST_DIR, "migration-test.db");
+    const legacyPath = join(TEST_DIR, "agent-bindings.json");
+
+    beforeEach(() => {
+      mkdirSync(TEST_DIR, { recursive: true });
+    });
+
+    afterEach(() => {
       try {
-        const orch = new SessionOrchestrator();
-        orch.recordBackoff("ch-expired", 1000);
-        orch.recordBackoff("ch-active", 60_000);
-        orch.saveState(persistPath);
-
-        vi.advanceTimersByTime(2000);
-
-        const orch2 = new SessionOrchestrator();
-        orch2.loadState(persistPath);
-
-        expect(orch2.isChannelInBackoff("ch-expired")).toBe(false);
-        expect(orch2.isChannelInBackoff("ch-active")).toBe(true);
-      } finally {
-        vi.useRealTimers();
+        rmSync(TEST_DIR, { recursive: true, force: true });
+      } catch {
+        // ignore
       }
     });
 
-    it("handles missing file gracefully", () => {
-      const orch = new SessionOrchestrator();
-      expect(() => orch.loadState(join(TEST_DIR, "nonexistent.json"))).not.toThrow();
+    it("migrates sessions from legacy orchestrator JSON format", () => {
+      const legacyData = {
+        sessions: [
+          {
+            sessionId: "sess-1",
+            channelId: "ch-1",
+            status: "suspended",
+            startedAt: "2026-01-01T00:00:00.000Z",
+            copilotSessionId: "copilot-1",
+            cumulativeInputTokens: 100,
+            cumulativeOutputTokens: 200,
+            physicalSessionHistory: [{ sessionId: "phys-1", model: "gpt-4", startedAt: "2026-01-01T00:00:00.000Z", currentState: "stopped" }],
+          },
+        ],
+        channelBindings: { "ch-1": "sess-1" },
+        channelBackoff: {},
+      };
+      writeFileSync(legacyPath, JSON.stringify(legacyData), "utf-8");
+
+      const orch = new SessionOrchestrator({ persistPath: dbPath, legacyBindingsPath: legacyPath });
+
+      expect(orch.hasSessionForChannel("ch-1")).toBe(true);
+      const session = orch.getSessionStatuses()["sess-1"];
+      expect(session).toBeDefined();
+      expect(session.status).toBe("suspended");
+      expect(session.cumulativeInputTokens).toBe(100);
+      expect(session.physicalSessionHistory).toHaveLength(1);
+      orch.close();
     });
 
-    it("handles invalid JSON gracefully", () => {
-      const badPath = join(TEST_DIR, "bad.json");
-      writeFileSyncHelper(badPath, "not json");
-      const orch = new SessionOrchestrator();
-      expect(() => orch.loadState(badPath)).not.toThrow();
+    it("renames legacy file after migration", () => {
+      writeFileSync(legacyPath, JSON.stringify({ sessions: [] }), "utf-8");
+      const orch = new SessionOrchestrator({ persistPath: dbPath, legacyBindingsPath: legacyPath });
+
+      const { existsSync } = require("node:fs");
+      expect(existsSync(legacyPath)).toBe(false);
+      expect(existsSync(`${legacyPath}.migrated`)).toBe(true);
+      orch.close();
     });
 
-    it("works with constructor persistPath", () => {
-      const path = join(TEST_DIR, "ctor-persist.json");
-      const orch = new SessionOrchestrator({ persistPath: path });
-      orch.startSession("ch-1");
-      orch.saveState();
+    it("skips migration when legacy file does not exist", () => {
+      const orch = new SessionOrchestrator({ persistPath: dbPath, legacyBindingsPath: join(TEST_DIR, "nonexistent.json") });
+      expect(Object.keys(orch.getSessionStatuses())).toHaveLength(0);
+      orch.close();
+    });
 
-      const orch2 = new SessionOrchestrator({ persistPath: path });
-      orch2.loadState();
-      expect(orch2.hasSessionForChannel("ch-1")).toBe(true);
+    it("skips migration when DB already has sessions", () => {
+      // Pre-populate DB
+      const orch1 = new SessionOrchestrator({ persistPath: dbPath });
+      orch1.startSession("ch-existing");
+      orch1.close();
+
+      // Write legacy file
+      writeFileSync(legacyPath, JSON.stringify({
+        sessions: [{ sessionId: "sess-legacy", channelId: "ch-legacy", status: "suspended", startedAt: "2026-01-01T00:00:00.000Z" }],
+      }), "utf-8");
+
+      const orch2 = new SessionOrchestrator({ persistPath: dbPath, legacyBindingsPath: legacyPath });
+      expect(orch2.hasSessionForChannel("ch-existing")).toBe(true);
+      expect(orch2.hasSessionForChannel("ch-legacy")).toBe(false);
+      orch2.close();
     });
   });
 });
-
-function writeFileSyncHelper(path: string, content: string): void {
-  const { writeFileSync: wfs } = require("node:fs");
-  wfs(path, content, "utf-8");
-}
