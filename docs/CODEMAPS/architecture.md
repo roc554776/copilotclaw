@@ -92,7 +92,7 @@ Environment variables:
 
 - SDK events `subagent.completed` and `subagent.failed` forwarded from agent to gateway via IPC stream session_event (with channelId)
 - Gateway detects direct subagent calls (no parentToolCallId in event data) and inserts `[SUBAGENT COMPLETED/FAILED]` system message into the channel's pending queue, then sends agent_notify
-- Agent receives system messages via normal pending drain in `copilotclaw_wait`; combineMessages prefixes system sender with `[SYSTEM EVENT]`
+- Agent receives system messages via normal pending drain in `copilotclaw_wait`; combineMessages joins messages as-is (no sender-type interpretation); message formatting (e.g., `[CRON TASK]`, `[SYSTEM EVENT]` prefixes) is gateway's responsibility (daemon.ts onToolCall handler)
 - Agent-side status tracking retained (subagent session status updated on events) for dashboard display only
 
 ## Session Lifecycle (v0.18.0: Persistent Channel Bindings, v0.49.0: Gateway-Side Orchestration)
