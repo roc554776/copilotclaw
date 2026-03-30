@@ -143,7 +143,7 @@
 **未実現:**
 - Gateway-Agent 責務の再配置 — モデル選択ポリシーの部分移行残存（v0.50.0 で部分解決: gateway が resolveModel を実行し agent に渡すよう変更済みだが、agent 内に fallback 用の resolveModel が残存）
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
-- Gateway-Agent 責務の再配置 — gateway-configurable 範囲の拡大 ロジック移行: ツール RPC 委譲, ライフサイクル IPC コマンド化（SDK フック gateway RPC 汎用機構は v0.51.0 で実現済み）（全ロジック移行は gateway 停止時のフォールバック動作を必須とする。config 化 5 項目 + SDK イベント全件 forward は v0.50.0 で実現済み）
+- Gateway-Agent 責務の再配置 — gateway-configurable 範囲の拡大 ロジック移行: ツール RPC 委譲、物理セッションのライフサイクル判断の gateway 委譲（idle exit 時の終了/再投入/待機、error 時の copilotSessionId クリア判断。agent デフォルトはセッション維持）。SDK フック gateway RPC 汎用機構は v0.51.0 で実現済み。全ロジック移行は gateway 停止時のフォールバック動作を必須とする
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
