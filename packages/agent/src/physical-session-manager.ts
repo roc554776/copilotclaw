@@ -156,6 +156,7 @@ export class PhysicalSessionManager {
   async getQuota(): Promise<Record<string, unknown> | null> {
     try {
       const client = this.getAnyClient();
+      await client.start();
       return await client.rpc.account.getQuota() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
       this.logError(`getQuota error: ${err instanceof Error ? err.message : String(err)}`);
@@ -166,6 +167,7 @@ export class PhysicalSessionManager {
   async getModels(): Promise<Record<string, unknown> | null> {
     try {
       const client = this.getAnyClient();
+      await client.start();
       return await client.rpc.models.list() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
       this.logError(`getModels error: ${err instanceof Error ? err.message : String(err)}`);
