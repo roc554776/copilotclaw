@@ -65,7 +65,7 @@ export function hasStream(): boolean {
 // Messages are persisted to disk so they survive agent process restarts.
 // On stream (re)connect, the queue is flushed before new messages are sent.
 
-const MAX_QUEUE_SIZE = 10_000; // max buffered messages (oldest dropped on overflow)
+export const MAX_QUEUE_SIZE = 10_000; // max buffered messages (oldest dropped on overflow)
 let sendQueue: Array<Record<string, unknown>> = [];
 let sendQueuePath: string | null = null; // set by initSendQueue()
 
@@ -138,13 +138,15 @@ export function sendToGateway(msg: Record<string, unknown>): void {
   if (streamSocket === null || streamSocket.destroyed) {
     // Stream not connected — buffer for later delivery
     sendQueue.push(msg);
-    if (sendQueue.length > MAX_QUEUE_SIZE) {
+    const evicted = sendQueue.length > MAX_QUEUE_SIZE;
+    if (evicted) {
       sendQueue.shift(); // drop oldest
     }
-    appendToQueue(msg);
-    // If queue overflowed, rewrite the whole file to reflect the trimmed queue
-    if (sendQueue.length === MAX_QUEUE_SIZE) {
+    if (evicted) {
+      // Queue overflowed: disk file has one extra line; rewrite to match trimmed queue.
       persistQueue();
+    } else {
+      appendToQueue(msg); // fast path: just append the new message
     }
     return;
   }

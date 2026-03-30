@@ -114,18 +114,30 @@ describe("send queue — buffering and persistence", () => {
   });
 
   it("drops oldest messages when queue exceeds size limit", async () => {
-    const { initSendQueue, sendToGateway } = await getModule();
-    initSendQueue(TEST_DIR);
+    const { initSendQueue, sendToGateway, MAX_QUEUE_SIZE } = await getModule();
 
-    // The MAX_QUEUE_SIZE is 10000 — too large for a unit test.
-    // Instead, verify the queue grows and the file is written.
-    for (let i = 0; i < 5; i++) {
-      sendToGateway({ type: "msg", index: i });
-    }
+    // Pre-populate the disk file with exactly MAX_QUEUE_SIZE lines so that the
+    // very next sendToGateway call triggers eviction without a 10000-message loop.
+    const queuePath = join(TEST_DIR, "send-queue.jsonl");
+    const preLines = Array.from({ length: MAX_QUEUE_SIZE }, (_, i) =>
+      JSON.stringify({ type: "old", index: i }),
+    );
+    writeFileSync(queuePath, preLines.join("\n") + "\n", "utf-8");
 
-    const content = readFileSync(join(TEST_DIR, "send-queue.jsonl"), "utf-8");
-    const lines = content.trim().split("\n");
-    expect(lines).toHaveLength(5);
+    initSendQueue(TEST_DIR); // restores MAX_QUEUE_SIZE messages from disk
+
+    // This push should evict the oldest (index: 0) and trigger a full disk rewrite.
+    sendToGateway({ type: "new", index: MAX_QUEUE_SIZE });
+
+    // Disk file must still contain exactly MAX_QUEUE_SIZE lines.
+    const diskContent = readFileSync(queuePath, "utf-8");
+    const diskLines = diskContent.trim().split("\n").filter((l) => l.trim() !== "");
+    expect(diskLines).toHaveLength(MAX_QUEUE_SIZE);
+
+    // The oldest message (index: 0) must be gone; the newest must be present.
+    const parsed = diskLines.map((l) => JSON.parse(l));
+    expect(parsed[0]).toMatchObject({ type: "old", index: 1 });
+    expect(parsed[MAX_QUEUE_SIZE - 1]).toMatchObject({ type: "new", index: MAX_QUEUE_SIZE });
   });
 
   it("handles missing queue file gracefully on init", async () => {
