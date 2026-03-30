@@ -861,9 +861,13 @@ export class AgentSessionManager {
     this.saveBindings();
     // Flush pending messages for the channel — if the session idle-exited without
     // calling copilotclaw_wait, pending messages would stay forever and block cron dedup.
+    // Uses requestFromGateway (not fire-and-forget) to ensure the flush actually reaches
+    // the gateway even during stream reconnection windows.
     const channelId = entry.info.boundChannelId;
     if (channelId !== undefined) {
-      this.postToGateway({ type: "flush_pending", channelId });
+      requestFromGateway({ type: "flush_pending", channelId }).catch(() => {
+        // IPC error — non-fatal, periodic poll will eventually handle it
+      });
     }
   }
 
