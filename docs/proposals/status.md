@@ -145,6 +145,8 @@
 - Gateway-Agent 責務の再配置（v0.54.0）: agent から channelId 概念を除去（IPC は sessionId のみ）、命名を物理セッション明示に変更（PhysicalSessionManager 等）、ポリシー情報（zeroPremium, debugMockCopilotUnsafeTools）を agent から除去。MIN_AGENT_VERSION を 0.54.0 に引き上げ。
 
 **未実現:**
+- agent 初期化シーケンスのタイミング問題（stream_connected ハンドラが config 受信後に登録されるため最初のイベントを逃す。band-aid コードが入っている）
+- pooled CopilotClient の初期化不完全（毎回 start() を呼んでいる。作成時に一度 start() すべき）
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
 **今後の課題:**

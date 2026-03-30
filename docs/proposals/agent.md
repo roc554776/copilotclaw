@@ -554,6 +554,16 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
 - `debugMockCopilotUnsafeTools` が agent に渡されている。これはツール選択ポリシーであり、gateway が `toolDefinitions` で使えるツールを決めて渡すだけでいい。agent 内に `availableTools` フィルタリングロジックが残存している
 - 対応方針: `zeroPremium` と `debugMockCopilotUnsafeTools` を agent の config から除去。agent は gateway から渡された解決済みの結果（モデル名、ツール定義リスト）をそのまま SDK に渡すパススルーになる
 
+残存する設計違反 — agent の初期化シーケンスにタイミング問題がある（未実現）:
+- IPC stream 接続 → config push → agent が PhysicalSessionManager 作成 → `stream_connected` ハンドラ登録、の順序で初期化される
+- `stream_connected` イベントはハンドラ登録前に発火するため、最初の接続で `running_sessions` report が送られない
+- 場当たり的な修正（ハンドラ登録直後に即座に `running_sessions` を送信）が入っている
+- 対応方針: `stream_connected` ハンドラを config 受信前に登録する。ハンドラ内で PhysicalSessionManager の存在を確認し、あれば `running_sessions` を送る。なければ初回接続と判断し、config 受信・PhysicalSessionManager 作成後に改めて送る。band-aid コードを削除する
+
+残存する設計違反 — pooled CopilotClient の初期化が不完全（未実現）:
+- `getModels()`/`getQuota()` で pooled client を使う際に毎回 `client.start()` を呼んでいる
+- 本来は client 作成時に一度 `start()` を呼び、以降は start 済みの client を再利用すべき
+
 残存する設計違反 — agent がメッセージ種別を解釈していた（v0.53.0 で解決済み）:
 - agent の `combineMessages()` が sender 種別（cron, system, user）を見て `[CRON TASK]`、`[SYSTEM EVENT]` 等のプレフィクスを付与している。これは gateway 停止時の copilotclaw_wait フォールバックパスで使われる
 - agent はメッセージの種別を知る必要がない。何を LLM に渡して何を渡さないかの判断、メッセージのフォーマットは gateway の責務
