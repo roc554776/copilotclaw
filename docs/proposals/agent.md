@@ -505,11 +505,13 @@ LOW — 運用:
 
 **今後の refactoring 方針 — gateway-configurable 範囲の拡大（未実現）:**
 
-現在、設定値（プロンプト、タイミング、モデル選択）は gateway-configurable だが、振る舞い（ツールロジック、イベント購読、セッションライフサイクル判断）は agent にハードコードされている。以下の refactoring により、agent 更新なしで変更可能な範囲をさらに拡大できる:
+現在、設定値（プロンプト、タイミング、モデル選択）は gateway-configurable だが、振る舞い（ツールロジック、イベント購読、セッションライフサイクル判断）は agent にハードコードされている。以下の refactoring により、agent 更新なしで変更可能な範囲をさらに拡大できる。
 
-- ツールロジックを gateway の RPC コールバックに委譲する: agent のツールハンドラを generic dispatcher にし、実際の判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。agent は gateway から返された結果をそのまま SDK に返す。ただし gateway 停止時に RPC が失敗するため、agent 側に「gateway 不在時でも物理セッションを延命できるフォールバック動作」が必須。copilotclaw_wait の keepalive cycle は gateway 停止中も維持されなければならない
-- SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: 現在は agent 内で `forwardedEvents` リストに列挙されたイベントのみを forward しているが、SDK が発火する全イベントを無条件に forward するようにすれば、新しいイベントタイプへの対応が gateway 更新のみで可能になる。これは fire-and-forget なので gateway 停止時の延命には影響しない
-- セッションライフサイクルの判断を gateway の IPC コマンドに委ねる: 現在 agent 内にある suspend/resume 条件判定（idle exit 時の suspend、error 時の copilotSessionId クリア等）を、gateway からの明示的コマンドに置き換える。ただし gateway 停止中はコマンドが届かないため、agent は「コマンドが来ない場合はセッションを維持し続ける」というデフォルト動作を持たなければならない。gateway 停止が物理セッションの破壊につながる設計は許されないという原則を常に守ること
+**前提制約: gateway 停止時の物理セッション延命は絶対要件。** gateway が停止していても agent は物理セッションを自律的に維持し続けなければならない。gateway の停止が物理セッションの破壊につながる設計は許されない。以下の全ての方針はこの制約の下で設計する。
+
+- SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: 現在は agent 内で `forwardedEvents` リストに列挙されたイベントのみを forward しているが、SDK が発火する全イベントを無条件に forward すれば、新しいイベントタイプへの対応が gateway 更新のみで可能になる。fire-and-forget なので gateway 停止時も物理セッションに影響しない
+- ツールロジックを gateway の RPC コールバックに委譲する: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。つまり agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
+- セッションライフサイクルの判断を gateway の IPC コマンドに委ねる: 現在 agent 内にある suspend/resume 条件判定を gateway の明示的コマンドに置き換える。agent のデフォルト動作は「コマンドが来ない限りセッションを維持し続ける」。gateway はコマンドで能動的に停止・suspend を指示する。gateway 停止中はコマンドが届かないので、物理セッションは自然に維持される
 
 **v0.49.0 移行の経緯:**
 
