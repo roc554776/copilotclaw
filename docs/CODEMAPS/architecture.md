@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.53.0 | Token estimate: ~2400 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.54.0 | Token estimate: ~2400 -->
 
 # Architecture
 
@@ -8,9 +8,9 @@
 ┌─────────────┐  HTTP   ┌─────────────────────────────┐  IPC (.sock)  ┌──────────────────────┐
 │   Browser    │◄──────►│          Gateway             │◄────────────►│        Agent         │
 │  (dashboard) │        │  ┌───────────────────────┐  │  (stream +    │  ┌────────────────┐  │
-└─────────────┘        │  │ SessionOrchestrator   │  │   short-lived) │  │ AgentSession   │  │
-                        │  │  sessions: sessId→…   │  │               │  │ Manager        │  │
-                        │  │  bindings: chId→sessId│  │               │  │ (physical only)│  │
+└─────────────┘        │  │ SessionOrchestrator   │  │   short-lived) │  │ Physical       │  │
+                        │  │  sessions: sessId→…   │  │               │  │ Session        │  │
+                        │  │  bindings: chId→sessId│  │               │  │ Manager        │  │
                         │  │  backoff: chId→expiry │  │               │  └────────────────┘  │
                         │  └───────────────────────┘  │               └──────────────────────┘
                         └─────────────────────────────┘                          │
@@ -18,7 +18,7 @@
                                                                           (mocked in tests)
 ```
 
-- **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, zeroPremium, debugMockCopilotUnsafeTools, stateDir, workspaceRoot, auth.github, otel, debug) via /api/status; proxies Copilot quota and models from agent via /api/quota and /api/models; serves recent logs via /api/logs (ring buffer); hosts observability infrastructure (session event store, system prompt snapshots, status page, events page); initializes OTel at startup (logs + metrics export via OTLP HTTP) and shuts down on exit
+- **Gateway**: singleton daemon (default port 19741, configurable via config file or COPILOTCLAW_PORT env var), manages channels, inputs, and messages; reports GATEWAY_VERSION (from package.json), agentCompatibility, profile, and config (model, stateDir, workspaceRoot, auth.github, otel, debug) via /api/status; proxies Copilot quota and models from agent via /api/quota and /api/models; serves recent logs via /api/logs (ring buffer); hosts observability infrastructure (session event store, system prompt snapshots, status page, events page); initializes OTel at startup (logs + metrics export via OTLP HTTP) and shuts down on exit
 - **Agent**: single process, executes physical sessions on behalf of gateway; communicates with gateway exclusively via IPC (stream for push-based messaging, short-lived connections for status/stop/quota/models); sendToGateway buffers messages to in-memory queue + JSONL file when stream disconnected (maxQueueSize configurable via gateway config, default 10000), queue restored from disk on init via initSendQueue(dataDir), flushed on stream connect via flushSendQueue(); receives OTel config from gateway via IPC stream config push and initializes its own OTel setup independently; does not manage abstract sessions, channel bindings, backoff, or persistence (moved to gateway SessionOrchestrator in v0.49.0)
 - **Agent Session**: wraps a Copilot SDK session with its own sessionId, optionally bound to a channel
 - **ChannelProvider**: plugin interface for chat mediums (built-in chat, Discord, Telegram, etc.); providers handle medium-specific routes and receive message notifications
@@ -50,8 +50,6 @@ Environment variables:
 - `COPILOTCLAW_UPSTREAM` — git remote URL for update command
 - `COPILOTCLAW_PORT` — override gateway HTTP port (takes precedence over config file)
 - `COPILOTCLAW_MODEL` — override Copilot SDK model
-- `COPILOTCLAW_ZERO_PREMIUM` — enable zero-premium mode (boolean: true/1/false/0)
-- `COPILOTCLAW_DEBUG_MOCK_COPILOT_UNSAFE_TOOLS` — enable debug mock copilot unsafe tools mode (boolean: true/1/false/0)
 
 ## Process Model
 
@@ -90,8 +88,8 @@ Environment variables:
 
 ## Subagent Completion Notification (v0.16.0+, gateway-handled v0.43.0)
 
-- SDK events `subagent.completed` and `subagent.failed` forwarded from agent to gateway via IPC stream session_event (with channelId)
-- Gateway detects direct subagent calls (no parentToolCallId in event data) and inserts `[SUBAGENT COMPLETED/FAILED]` system message into the channel's pending queue, then sends agent_notify
+- SDK events `subagent.completed` and `subagent.failed` forwarded from agent to gateway via IPC stream session_event (with sessionId)
+- Gateway detects direct subagent calls (no parentToolCallId in event data), looks up channelId from orchestrator, and inserts `[SUBAGENT COMPLETED/FAILED]` system message into the channel's pending queue, then sends agent_notify
 - Agent receives system messages via normal pending drain in `copilotclaw_wait`; combineMessages joins messages as-is (no sender-type interpretation); message formatting (e.g., `[CRON TASK]`, `[SYSTEM EVENT]` prefixes) is gateway's responsibility (daemon.ts onToolCall handler)
 - Agent-side status tracking retained (subagent session status updated on events) for dashboard display only
 
@@ -136,9 +134,9 @@ Environment variables:
 - Startup direction: always gateway → agent (agent never starts gateway)
 - Agent process ensure: gateway start time only (NOT on user message POST)
 - Agent session ensure: gateway responsibility via SessionOrchestrator (sends start_physical_session/stop_physical_session to agent via IPC stream)
-- Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION=0.53.0, exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
+- Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION=0.54.0, exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel; LogBuffer optionally writes structured JSON lines to file via enableFileOutput() (gateway.log); agent spawned with stderr redirected to agent.log; agent process initializes its own StructuredLogger writing to agent.log
-- Structured logging: StructuredLogger (intentionally duplicated in gateway and agent packages) writes JSON Lines (StructuredLogEntry: ts, level, component, msg, data?) to file via appendFileSync; bridges to OpenTelemetry via optional OtelLoggerBridge parameter (emits log records to OTel LoggerProvider when configured); agent uses structured JSON fallback pattern (console.error with JSON.stringify) before StructuredLogger is initialized — applies to index.ts module-level log/logError, AgentSessionManager defaultLog/defaultLogError, and channel.ts ChannelToolDeps logError
+- Structured logging: StructuredLogger (intentionally duplicated in gateway and agent packages) writes JSON Lines (StructuredLogEntry: ts, level, component, msg, data?) to file via appendFileSync; bridges to OpenTelemetry via optional OtelLoggerBridge parameter (emits log records to OTel LoggerProvider when configured); agent uses structured JSON fallback pattern (console.error with JSON.stringify) before StructuredLogger is initialized — applies to index.ts module-level log/logError, PhysicalSessionManager defaultLog/defaultLogError, and channel.ts ChannelToolDeps logError
 - OpenTelemetry: OTel setup module (otel.ts, intentionally duplicated in gateway and agent) initializes OTLP HTTP exporters for logs and metrics; gateway additionally defines application-level metrics (otel-metrics.ts: session count gauges, token usage counters); endpoints configured via config.otel.endpoints (empty = noop export); agent receives OTel config from gateway via IPC stream config push and initializes independently with serviceName "copilotclaw-agent"
 - Channel backoff: SessionOrchestrator tracks channelBackoff map (ephemeral, not persisted); gateway daemon records backoff in onPhysicalSessionEnded when elapsedMs < rapidFailureThresholdMs; isChannelInBackoff() checked before starting sessions (prevents retry storms)
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
