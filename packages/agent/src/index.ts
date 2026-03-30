@@ -187,9 +187,10 @@ async function main(): Promise<void> {
   };
   streamEvents.on("agent_notify", pendingHandler);
 
-  // When stream reconnects (gateway restarted), check all suspended sessions for pending messages
-  streamEvents.on("stream_connected", async () => {
-    log("stream reconnected — checking all channels for pending messages");
+  // Check all suspended sessions for pending messages and revive as needed.
+  // Called on startup and on stream reconnect (gateway restart).
+  const checkAllPending = async () => {
+    log("checking all channels for pending messages");
     const statuses = sessionManager.getSessionStatuses();
     for (const [, info] of Object.entries(statuses)) {
       const channelId = info.boundChannelId;
@@ -199,14 +200,18 @@ async function main(): Promise<void> {
       try {
         const peekResult = await requestFromGateway({ type: "peek_pending", channelId });
         if (peekResult !== null && peekResult !== undefined) {
-          log(`starting/reviving session for channel ${channelId.slice(0, 8)} (pending found after reconnect)`);
+          log(`starting/reviving session for channel ${channelId.slice(0, 8)} (pending found)`);
           sessionManager.startSession({ boundChannelId: channelId });
         }
       } catch {
         // IPC error — skip
       }
     }
-  });
+  };
+
+  streamEvents.on("stream_connected", checkAllPending);
+  // Also run immediately on startup (stream is already connected at this point)
+  checkAllPending();
 
   // Periodic stale session and max-age checks (still interval-based)
   const staleCheckTimer = setInterval(async () => {
