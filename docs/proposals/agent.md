@@ -496,16 +496,25 @@ MEDIUM — observability / 通知ポリシー:
 LOW — 運用:
 - workspace bootstrap（`ensureWorkspaceReady`, git init, bootstrap files 作成）
 
-**移行後の agent process の責務（あるべき姿）:**
+**移行後の agent process の責務（v0.51.0 時点の実態）:**
 - gateway から指示を受けて物理セッションを作成・実行・停止する
 - SDK との直接通信（Copilot CLI サブプロセスの管理）
 - ツールハンドラの実行（`copilotclaw_wait` 等のブロッキング処理）
 - セッション終了を gateway に報告する（成功/失敗/idle exit）
-- gateway から受け取った設定でセッションを構成する（プロンプト、ツール、hooks）
+- gateway から受け取った設定でセッションを構成する（プロンプト、カスタムエージェント、knownSections、clientOptions、sessionConfigOverrides — 全てパススルー）
+- SDK フック発火時に gateway に RPC を送り、応答をそのまま SDK に返す（gateway 停止時はフォールバック動作）
+- SDK イベントを全て無条件に gateway に forward する（catch-all）
+- gateway 停止時は物理セッションを自律的に延命する（keepalive cycle、フォールバック動作）
 
-**今後の refactoring 方針 — gateway-configurable 範囲の拡大（未実現）:**
+**agent 更新が必要になるケース（v0.51.0 時点）:**
+- SDK API 自体の変更（型変更、新しい必須引数等）
+- SDK に新しいフックタイプが追加された場合（makeHookHandler の登録に追加が必要）
+- IPC プロトコルの拡張（新メッセージタイプ、新 RPC メソッド）
+- 新しい copilotclaw_* ツールの追加、既存ツールのハンドラ変更
 
-現在、設定値（プロンプト、タイミング、モデル選択）は gateway-configurable だが、振る舞い（ツールロジック、イベント購読、セッションライフサイクル判断）は agent にハードコードされている。以下の refactoring により、agent 更新なしで変更可能な範囲をさらに拡大できる。
+**gateway-configurable 範囲の拡大（大部分実現済み、一部未実現）:**
+
+v0.50.0-v0.51.0 で、設定値だけでなく振る舞い（SDK イベント購読、SDK フックロジック、セッション設定）も gateway-configurable になった。以下に実現状況をまとめる。
 
 **前提制約: gateway 停止時の物理セッション延命は絶対要件。** gateway が停止していても agent は物理セッションを自律的に維持し続けなければならない。gateway の停止が物理セッションの破壊につながる設計は許されない。以下の全ての方針はこの制約の下で設計する。
 
@@ -519,9 +528,9 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
 - CopilotClient コンストラクタ引数のパラメトライズ: `clientOptions` で gateway から送信。agent は `githubToken` とマージして SDK に渡すパススルー構造
 - createSession config のパラメトライズ: `sessionConfigOverrides` で gateway から送信。agent が baseConfig にマージして SDK に渡す
 
-未実現 — ロジックの gateway 移行:
-- ツールロジックを gateway の RPC コールバックに委譲する（未実現）: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
+ロジックの gateway 移行:
 - SDK フックを gateway RPC 経由にする汎用機構（v0.51.0 で実現済み）: SDK の全フック（onPreToolUse, onPostToolUse, onUserPromptSubmitted, onSessionStart, onSessionEnd, onErrorOccurred）を事前に登録し、フック発火時に gateway に RPC（`{ type: "hook", hookName, sessionId, copilotSessionId, channelId, input }`）を送る。gateway が応答を返せばそれを使用、gateway 停止時は agent がフォールバック動作（onPostToolUse の場合は keepalive リマインダー）を自律実行。新しいフックタイプが SDK に追加された場合は agent の登録コードに追加が必要だが、フックのロジック変更は gateway 更新のみで反映される
+- ツールロジックを gateway の RPC コールバックに委譲する（未実現）: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
 - セッションライフサイクルの判断を gateway の IPC コマンドに委ねる（未実現）: 現在 agent 内にある suspend/resume 条件判定を gateway の明示的コマンドに置き換える。agent のデフォルト動作は「コマンドが来ない限りセッションを維持し続ける」。gateway はコマンドで能動的に停止・suspend を指示する。gateway 停止中はコマンドが届かないので、物理セッションは自然に維持される
 
 **v0.49.0 移行の経緯:**

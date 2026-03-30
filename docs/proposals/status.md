@@ -138,6 +138,8 @@
 
 - gateway 停止時の情報無損失（v0.50.0）: agent 側に send queue を導入。gateway 未接続時はメモリ + ディスク（send-queue.jsonl）にバッファリング。gateway 再接続時に flush。agent 再起動後もディスクから復元。
 
+- Gateway-Agent 責務の再配置 — gateway-configurable 範囲の拡大（v0.50.0-v0.51.0）: config 化 5 項目（knownSections, maxQueueSize, customAgents 動的リスト, clientOptions パススルー, sessionConfigOverrides パススルー）、SDK イベント全件無条件 forward（catch-all）、SDK フック gateway RPC 汎用機構（全 6 フック事前登録、sessionId 付き RPC、gateway 停止時フォールバック）。MIN_AGENT_VERSION を 0.51.0 に引き上げ。
+
 **未実現:**
 - Gateway-Agent 責務の再配置 — モデル選択ポリシーの部分移行残存（v0.50.0 で部分解決: gateway が resolveModel を実行し agent に渡すよう変更済みだが、agent 内に fallback 用の resolveModel が残存）
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
