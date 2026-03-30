@@ -865,9 +865,10 @@ export class AgentSessionManager {
     // the gateway even during stream reconnection windows.
     const channelId = entry.info.boundChannelId;
     if (channelId !== undefined) {
-      requestFromGateway({ type: "flush_pending", channelId }).catch(() => {
-        // IPC error — non-fatal, periodic poll will eventually handle it
-      });
+      requestFromGateway({ type: "flush_pending", channelId }).then(
+        (result) => { this.log(`flushed pending for channel ${channelId.slice(0, 8)}: ${JSON.stringify(result)}`); },
+        (err) => { this.logError(`flush_pending failed for channel ${channelId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`); },
+      );
     }
   }
 
