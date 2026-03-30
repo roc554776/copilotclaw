@@ -136,8 +136,9 @@
 
 - Gateway-Agent 責務の再配置（v0.49.0 で部分実現、v0.50.0 で追加移行）: SessionOrchestrator を gateway に新設し、チャンネルバインディング、suspended 永続化、復活、状態管理、バックオフ、stale 検出、max age、pending ポーリング、通知を gateway 側に移行。agent からは channelBindings, backoff, stale/maxAge, persistence, channel notification を削除。IPC に start_physical_session/stop_physical_session/physical_session_started/physical_session_ended/running_sessions を追加。SessionOrchestrator は SQLite 永続化。agent-bindings.json からの一括マイグレーション対応。v0.50.0: sessionId 不整合修正、gateway 再起動時の二重セッション防止（running_sessions reconciliation）、抽象セッション状態の二重管理削除、モデル選択ポリシーの gateway 移行、keepalive タイムアウト/リマインダーポリシーの config 化、workspace bootstrap の agent 削除、物理セッション状態追跡の gateway 移行（PhysicalSessionSummary/SubagentInfo を agent から削除し、gateway が session_event からリアルタイム構築。/api/status を orchestrator データに一元化）。MIN_AGENT_VERSION を 0.50.0 に引き上げ。
 
+- gateway 停止時の情報無損失（v0.50.0）: agent 側に send queue を導入。gateway 未接続時はメモリ + ディスク（send-queue.jsonl）にバッファリング。gateway 再接続時に flush。agent 再起動後もディスクから復元。
+
 **未実現:**
-- gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）
 - Gateway-Agent 責務の再配置 — モデル選択ポリシーの部分移行残存（gateway が resolveModel を実行し agent に渡すよう変更済みだが、agent 内に fallback 用の resolveModel が残存）
 
 **今後の課題:**

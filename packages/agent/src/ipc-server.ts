@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { type Server, createConnection, createServer, type Socket } from "node:net";
-import { unlinkSync } from "node:fs";
-import { readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentSessionManager } from "./agent-session-manager.js";
@@ -62,10 +61,91 @@ export function hasStream(): boolean {
   return streamSocket !== null && !streamSocket.destroyed;
 }
 
-/** Send a fire-and-forget message to the gateway via the stream. */
+// --- Send queue: buffer messages when gateway stream is disconnected ---
+// Messages are persisted to disk so they survive agent process restarts.
+// On stream (re)connect, the queue is flushed before new messages are sent.
+
+const MAX_QUEUE_SIZE = 10_000; // max buffered messages (oldest dropped on overflow)
+let sendQueue: Array<Record<string, unknown>> = [];
+let sendQueuePath: string | null = null; // set by initSendQueue()
+
+/** Initialize the persistent send queue. Call once after config is received.
+ *  Loads any buffered messages from a previous agent run. */
+export function initSendQueue(dataDir: string): void {
+  mkdirSync(dataDir, { recursive: true });
+  sendQueuePath = join(dataDir, "send-queue.jsonl");
+  // Restore from disk
+  if (existsSync(sendQueuePath)) {
+    try {
+      const raw = readFileSync(sendQueuePath, "utf-8");
+      for (const line of raw.split("\n")) {
+        if (line.trim() === "") continue;
+        try {
+          sendQueue.push(JSON.parse(line) as Record<string, unknown>);
+        } catch {
+          // skip malformed line
+        }
+      }
+      // Enforce size limit after loading
+      if (sendQueue.length > MAX_QUEUE_SIZE) {
+        sendQueue = sendQueue.slice(sendQueue.length - MAX_QUEUE_SIZE);
+      }
+    } catch {
+      // file read error — start with empty queue
+    }
+  }
+}
+
+/** Persist the entire queue to disk (atomic write). */
+function persistQueue(): void {
+  if (sendQueuePath === null) return;
+  try {
+    const content = sendQueue.map((m) => JSON.stringify(m)).join("\n") + (sendQueue.length > 0 ? "\n" : "");
+    writeFileSync(sendQueuePath, content, "utf-8");
+  } catch {
+    // disk error — non-fatal, queue is still in memory
+  }
+}
+
+/** Append a single message to the disk queue file (faster than full rewrite). */
+function appendToQueue(msg: Record<string, unknown>): void {
+  if (sendQueuePath === null) return;
+  try {
+    appendFileSync(sendQueuePath, JSON.stringify(msg) + "\n", "utf-8");
+  } catch {
+    // disk error — non-fatal
+  }
+}
+
+/** Flush all queued messages to the stream. Called on stream connect. */
+export function flushSendQueue(): void {
+  if (streamSocket === null || streamSocket.destroyed) return;
+  if (sendQueue.length === 0) return;
+
+  const toSend = sendQueue.splice(0);
+  for (const msg of toSend) {
+    streamSocket.write(JSON.stringify(msg) + "\n");
+  }
+  // Clear the disk file after successful flush
+  if (sendQueuePath !== null) {
+    try { writeFileSync(sendQueuePath, "", "utf-8"); } catch { /* non-fatal */ }
+  }
+}
+
+/** Send a fire-and-forget message to the gateway via the stream.
+ *  If stream is disconnected, buffer in the send queue for later delivery. */
 export function sendToGateway(msg: Record<string, unknown>): void {
   if (streamSocket === null || streamSocket.destroyed) {
-    // Stream not connected — drop silently (non-fatal)
+    // Stream not connected — buffer for later delivery
+    sendQueue.push(msg);
+    if (sendQueue.length > MAX_QUEUE_SIZE) {
+      sendQueue.shift(); // drop oldest
+    }
+    appendToQueue(msg);
+    // If queue overflowed, rewrite the whole file to reflect the trimmed queue
+    if (sendQueue.length === MAX_QUEUE_SIZE) {
+      persistQueue();
+    }
     return;
   }
   streamSocket.write(JSON.stringify(msg) + "\n");

@@ -295,24 +295,17 @@ gateway 再起動
 
 v0.49.0 以前はこの問題が「gateway の停止が物理セッションの破壊につながる設計は常に許されない」の間接的な違反であった。v0.50.0 の reconciliation により解消。
 
-### gateway 停止時の情報無損失（未実現）
+### gateway 停止時の情報無損失（v0.50.0 で実現済み）
 
 gateway が停止している間に agent process で発生した情報が消失しないようにする。
 
-**現状の問題（実装確認済み）:**
-- `sendToGateway()` は IPC stream が切断されていれば何もせず return する（fire-and-forget）
-- gateway 停止中に以下のデータが消失する:
-  - `session_event` — 全セッションイベント
-  - `channel_message` — agent の応答メッセージ（assistant.message auto-reflect、SYSTEM 通知）
-  - `system_prompt_original` / `system_prompt_session` — キャプチャしたシステムプロンプト
-- agent 側にバッファリングやローカル永続化の仕組みがない
-- gateway に再接続されないまま agent process が停止した場合も同様に全て失われる
-
-**対応方針:**
-- agent 側に send queue を導入し、gateway 未接続時はローカルにバッファリングする
-- バッファはディスクに永続化する（agent process 停止に備える）
-- gateway 再接続時にバッファを flush して送信する
-- バッファサイズの上限を設け、上限超過時は古いものから破棄する（無制限蓄積を防止）
+**実装（v0.50.0）:**
+- `sendToGateway()` は IPC stream 未接続時にメモリキューにバッファリングする
+- キューは JSONL ファイル（`{{dataDir}}/send-queue.jsonl`）にディスク永続化される
+- agent process が停止しても、次回起動時にディスクからキューを復元する（`initSendQueue()`）
+- gateway に再接続された時（`stream_connected` イベント）、`flushSendQueue()` でバッファを一括送信する
+- フラッシュは `running_sessions` 報告の前に実行され、gateway は欠落していたイベントを先に受信する
+- バッファサイズ上限: 10,000 メッセージ。超過時は古いものから破棄する
 
 ### Agent Session の実行中タイムアウト（stale session）
 

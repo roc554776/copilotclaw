@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
-import { listenIpc, sendToGateway, streamEvents } from "./ipc-server.js";
+import { flushSendQueue, initSendQueue, listenIpc, sendToGateway, streamEvents } from "./ipc-server.js";
 import { initOtel, getLogger, shutdownOtel } from "./otel.js";
 import { StructuredLogger } from "./structured-logger.js";
 import { type AuthConfig, resolveToken } from "./token-resolver.js";
@@ -132,12 +132,17 @@ async function main(): Promise<void> {
   initOtel({ endpoints: otelEndpoints, serviceName: "copilotclaw-agent" });
   const otelLoggerRaw = getLogger("agent");
 
-  // Initialize structured logger if state dir is available.
+  // Initialize structured logger and send queue if state dir is available.
   if (config.stateDir !== null) {
     const dataDir = join(config.stateDir, "data");
     const agentLogPath = join(dataDir, "agent.log");
     structuredLogger = new StructuredLogger(agentLogPath, "agent", otelLoggerRaw);
     log("structured logger initialized");
+
+    // Initialize persistent send queue for gateway disconnect resilience.
+    // Restores any buffered messages from a previous agent run.
+    initSendQueue(dataDir);
+    log("send queue initialized");
   }
 
   // Resolve auth token from gateway config (if configured)
@@ -171,6 +176,11 @@ async function main(): Promise<void> {
   // This allows gateway to reconcile its orchestrator state with actually-running
   // physical sessions, preventing dual-session on gateway restart.
   const streamConnectedHandler = () => {
+    // Flush any messages buffered during gateway downtime before reporting state.
+    // This ensures gateway receives events (session_event, channel_message, etc.)
+    // that occurred while it was offline, fulfilling the "no information loss" requirement.
+    flushSendQueue();
+
     const running = sessionManager.getRunningSessionsSummary();
     log(`stream connected, reporting ${running.length} running session(s)`);
     sendToGateway({ type: "running_sessions", sessions: running });
