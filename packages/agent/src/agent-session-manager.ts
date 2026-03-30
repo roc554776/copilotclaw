@@ -653,37 +653,92 @@ export class AgentSessionManager {
     ]);
   }
 
-  /** Attach lifecycle handlers (suspend on idle/error) to a session's runSession promise.
-   *  Used by startSession to handle the .then/.catch/.finally chain. */
+  /** Ask gateway what to do when a session goes idle or errors.
+   *  Returns { action: "stop"|"reinject"|"wait", clearCopilotSessionId?: boolean }.
+   *  If gateway is unreachable, defaults to "wait" (keep session alive). */
+  private async queryLifecycleAction(
+    entry: AgentSessionEntry,
+    event: "idle" | "error",
+    elapsedMs: number,
+    error?: string,
+  ): Promise<{ action: "stop" | "reinject" | "wait"; clearCopilotSessionId?: boolean }> {
+    try {
+      const result = await requestFromGateway({
+        type: "lifecycle",
+        event,
+        sessionId: entry.sessionId,
+        channelId: entry.info.boundChannelId,
+        elapsedMs,
+        ...(error !== undefined ? { error } : {}),
+      });
+      if (result !== null && result !== undefined && typeof result === "object") {
+        const action = (result as Record<string, unknown>)["action"];
+        if (action === "stop" || action === "reinject" || action === "wait") {
+          return {
+            action,
+            clearCopilotSessionId: (result as Record<string, unknown>)["clearCopilotSessionId"] === true,
+          };
+        }
+      }
+    } catch {
+      // Gateway unreachable — default to keeping the session alive
+    }
+    return { action: "wait" };
+  }
+
+  /** Attach lifecycle handlers to a session's runSession promise.
+   *  On idle/error, asks gateway what to do (stop/reinject/wait).
+   *  Default (gateway offline): keep session alive (don't destroy). */
   private attachSessionLifecycle(entry: AgentSessionEntry, clientToStop: CopilotClient): Promise<void> {
     const startTime = Date.now();
     const sessionId = entry.sessionId;
     const boundChannelId = entry.info.boundChannelId;
 
-    return this.runSession(entry).then(() => {
-      if (!entry.abortController.signal.aborted) {
-        const elapsed = Date.now() - startTime;
+    const handleLifecycleEvent = async (event: "idle" | "error", error?: string) => {
+      if (entry.abortController.signal.aborted) return;
+      const elapsed = Date.now() - startTime;
+
+      if (event === "idle") {
         this.log(`session ${sessionId.slice(0, 8)} idle exit after ${Math.round(elapsed / 1000)}s (channel ${boundChannelId?.slice(0, 8) ?? "none"})`);
-        this.sendPhysicalSessionEnded(entry, "idle", elapsed);
-        this.suspendSession(entry);
+      } else {
+        this.logError(`session ${sessionId.slice(0, 8)} error: ${error ?? "unknown"}`);
       }
-    }).catch((err: unknown) => {
-      const reason = err instanceof Error ? err.message : String(err);
-      this.logError(`session ${sessionId.slice(0, 8)} error: ${reason}`);
-      if (!entry.abortController.signal.aborted) {
-        const elapsed = Date.now() - startTime;
-        this.sendPhysicalSessionEnded(entry, "error", elapsed, reason);
-        // Clear copilotSessionId so the next revival creates a fresh session
-        // instead of trying to resume a broken one (e.g. "No tool output found")
-        if (entry.copilotSessionId !== undefined) {
-          this.log(`clearing copilotSessionId ${entry.copilotSessionId.slice(0, 12)} after error`);
-          entry.copilotSessionId = undefined;
-        }
-        this.suspendSession(entry);
+
+      const decision = await this.queryLifecycleAction(entry, event, elapsed, error);
+      this.log(`session ${sessionId.slice(0, 8)} lifecycle decision: ${decision.action}`);
+
+      if (decision.clearCopilotSessionId && entry.copilotSessionId !== undefined) {
+        this.log(`clearing copilotSessionId ${entry.copilotSessionId.slice(0, 12)}`);
+        entry.copilotSessionId = undefined;
       }
-    }).finally(() => {
-      clientToStop.stop().catch(() => {});
-    });
+
+      switch (decision.action) {
+        case "stop":
+          this.sendPhysicalSessionEnded(entry, event, elapsed, error);
+          this.suspendSession(entry);
+          clientToStop.stop().catch(() => {});
+          break;
+        case "reinject":
+          // Re-enter the session loop with a new send() call.
+          // This keeps the physical session alive by sending a new prompt.
+          this.log(`session ${sessionId.slice(0, 8)} reinjecting`);
+          entry.sessionPromise = this.attachSessionLifecycle(entry, clientToStop);
+          break;
+        case "wait":
+          // Keep session alive — don't stop the client.
+          // The session is idle but not destroyed. Gateway will send
+          // start_physical_session or stop_physical_session when ready.
+          this.log(`session ${sessionId.slice(0, 8)} waiting (session maintained)`);
+          break;
+      }
+    };
+
+    return this.runSession(entry)
+      .then(() => handleLifecycleEvent("idle"))
+      .catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        return handleLifecycleEvent("error", reason);
+      });
   }
 
   /** Send physical_session_ended notification to gateway. */

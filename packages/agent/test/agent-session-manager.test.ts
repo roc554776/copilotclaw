@@ -7,7 +7,13 @@ vi.mock("../src/ipc-server.js", async () => {
   const { EventEmitter } = await import("node:events");
   return {
     sendToGateway: vi.fn(),
-    requestFromGateway: vi.fn().mockResolvedValue(null),
+    requestFromGateway: vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+      // Lifecycle RPC: default to "stop" (matching gateway's default behavior)
+      if (msg.type === "lifecycle") return { action: "stop", clearCopilotSessionId: msg.event === "error" };
+      // Hook RPC: return null (no hook response, agent uses fallback)
+      if (msg.type === "hook") return null;
+      return null;
+    }),
     streamEvents: new EventEmitter(),
     hasStream: vi.fn().mockReturnValue(true),
     getStreamSocket: vi.fn().mockReturnValue(null),

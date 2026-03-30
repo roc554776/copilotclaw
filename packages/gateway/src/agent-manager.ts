@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.51.0";
+export const MIN_AGENT_VERSION = "0.52.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -30,15 +30,29 @@ export interface RunningSessionReport {
   status: string;
 }
 
+export interface LifecycleRequest {
+  event: "idle" | "error";
+  sessionId: string;
+  channelId?: string | undefined;
+  elapsedMs: number;
+  error?: string | undefined;
+}
+
+export interface LifecycleResponse {
+  action: "stop" | "reinject" | "wait";
+  clearCopilotSessionId?: boolean;
+}
+
 export interface HookRequest {
   hookName: string;
   sessionId: string;
-  copilotSessionId?: string;
+  copilotSessionId?: string | undefined;
   channelId: string;
   input: Record<string, unknown>;
 }
 
 export interface StreamMessageHandler {
+  onLifecycle?: (request: LifecycleRequest) => LifecycleResponse;
   onHook?: (request: HookRequest) => Record<string, unknown> | null;
   onChannelMessage?: (channelId: string, sender: string, message: string) => void;
   onSessionEvent?: (sessionId: string, channelId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
@@ -138,6 +152,19 @@ export class AgentManager {
     if (type === undefined || handler === null) return;
 
     switch (type) {
+      case "lifecycle": {
+        const id = msg["id"] as string;
+        const lifecycleRequest: LifecycleRequest = {
+          event: msg["event"] as "idle" | "error",
+          sessionId: msg["sessionId"] as string,
+          channelId: typeof msg["channelId"] === "string" ? msg["channelId"] : undefined,
+          elapsedMs: (msg["elapsedMs"] as number) ?? 0,
+          error: typeof msg["error"] === "string" ? msg["error"] : undefined,
+        };
+        const response = handler.onLifecycle?.(lifecycleRequest) ?? { action: "stop" };
+        this.stream?.send({ type: "response", id, data: response });
+        break;
+      }
       case "hook": {
         const id = msg["id"] as string;
         const hookRequest: HookRequest = {

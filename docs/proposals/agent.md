@@ -531,10 +531,7 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
 ロジックの gateway 移行:
 - SDK フックを gateway RPC 経由にする汎用機構（v0.51.0 で実現済み）: SDK の全フック（onPreToolUse, onPostToolUse, onUserPromptSubmitted, onSessionStart, onSessionEnd, onErrorOccurred）を事前に登録し、フック発火時に gateway に RPC（`{ type: "hook", hookName, sessionId, copilotSessionId, channelId, input }`）を送る。gateway が応答を返せばそれを使用、gateway 停止時は agent がフォールバック動作（onPostToolUse の場合は keepalive リマインダー）を自律実行。新しいフックタイプが SDK に追加された場合は agent の登録コードに追加が必要だが、フックのロジック変更は gateway 更新のみで反映される
 - ツールロジックを gateway の RPC コールバックに委譲する（未実現）: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
-- 物理セッションのライフサイクル判断を gateway に委ねる（未実現）: 現在、SDK の `session.idle` イベント（LLM がツールを呼ばずにターンを終了）が発火すると、agent が自ら `client.stop()` を呼んで物理セッションを破棄している。しかし `session.idle` は物理セッションの終了を意味しない — CopilotSession オブジェクトはまだ生きており、`session.send()` で再投入すれば継続できる。この判断を gateway に委ねる:
-  - idle exit 時: agent は gateway に「idle になった」と報告し、gateway が「物理セッションを終了させる」「session.send() で再投入する」「そのまま待つ」のいずれかをコマンドで返す
-  - error 時: agent は gateway に「error が発生した」と報告し、gateway が「copilotSessionId をクリアして終了」「保持して終了」「リトライ」のいずれかをコマンドで返す
-  - agent のデフォルト動作（gateway 不在時）: 物理セッションを破棄しない。gateway 停止中にコマンドが届かなくても、物理セッションは維持される
+- 物理セッションのライフサイクル判断を gateway に委ねる（v0.52.0 で実現済み）: SDK の `session.idle`（LLM がツールを呼ばずにターンを終了）や error 発生時に、agent は gateway に lifecycle RPC（`{ type: "lifecycle", event: "idle"|"error", sessionId, channelId, elapsedMs, error? }`）を送り、gateway が `{ action: "stop"|"reinject"|"wait", clearCopilotSessionId? }` で応答する。gateway が `stop` を返した場合のみ agent が `client.stop()` で物理セッションを破棄する。`reinject` の場合は `session.send()` で再投入してセッションを継続する。gateway 不在時のデフォルトは `wait`（物理セッションを破棄しない）
 
 **v0.49.0 移行の経緯:**
 

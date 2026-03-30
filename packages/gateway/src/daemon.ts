@@ -48,6 +48,17 @@ async function main(): Promise<void> {
 
   // Set up IPC stream message handlers before connecting
   agentManager.setStreamMessageHandler({
+    onLifecycle: (request) => {
+      // Gateway-side lifecycle handler. Agent asks what to do on idle/error.
+      // Gateway decides: stop (destroy session), reinject (re-enter session loop), wait (keep alive).
+      // Changing this logic only requires gateway restart (no agent update).
+      if (request.event === "error") {
+        // Error: stop the session and clear copilotSessionId (don't try to resume a broken session)
+        return { action: "stop", clearCopilotSessionId: true };
+      }
+      // Idle exit: stop the session (LLM finished without calling copilotclaw_wait)
+      return { action: "stop" };
+    },
     onHook: (request) => {
       // Gateway-side hook handler. All SDK hooks are forwarded here via RPC.
       // Return a result object to control the hook's output, or null for no-op.
