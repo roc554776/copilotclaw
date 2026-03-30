@@ -544,6 +544,16 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
 - channel は gateway/dashboard の概念であり、agent が知るべきではない。agent は gateway が割り当てた不透明なセッショントークンだけで動作すべき。そのトークンが内部的に抽象セッション ID であるかどうかは gateway の事情であり、agent は関知しない
 - 対応方針: agent の IPC プロトコルから `channelId` を除去し、gateway が `start_physical_session` で渡すセッショントークンのみで動作するようにする。`drain_pending`, `peek_pending`, `agent_notify`, `tool_call`, `hook`, `lifecycle` は全てこのトークンをキーにする。gateway がトークンと channelId のマッピングを管理し、agent は channel の存在を知らない
 
+残存する設計違反 — agent のコードで抽象セッションと物理セッションの区別が曖昧（未実現）:
+- agent 内の変数名・メソッド名で「session」が抽象セッションと物理セッションのどちらを指すか不明確。例: `startSession`, `StartSessionOptions`, `sessionId`, `getSessionStatuses`, `suspendSession` 等
+- agent は物理セッションだけを扱うため、agent 内の session 関連の命名は全て物理セッションであることを明示すべき
+- 対応方針: agent 内の命名を全て physical を明示する形に変更する。例: `startSession` → `startPhysicalSession`, `StartSessionOptions` → `PhysicalSessionOptions`。抽象セッションと物理セッションの両方を指す場合のみ「session」を使う
+
+残存する設計違反 — agent に gateway のポリシー判断情報が直接渡されている（未実現）:
+- `zeroPremium` が agent に渡されている。これはモデル選択ポリシーであり、gateway が `resolveModel` で解決してモデル名を渡すだけでいい。agent 内の `resolveModel()` fallback にも zeroPremium 判定ロジックが残存している
+- `debugMockCopilotUnsafeTools` が agent に渡されている。これはツール選択ポリシーであり、gateway が `toolDefinitions` で使えるツールを決めて渡すだけでいい。agent 内に `availableTools` フィルタリングロジックが残存している
+- 対応方針: `zeroPremium` と `debugMockCopilotUnsafeTools` を agent の config から除去。agent は gateway から渡された解決済みの結果（モデル名、ツール定義リスト）をそのまま SDK に渡すパススルーになる
+
 残存する設計違反 — agent がメッセージ種別を解釈していた（v0.53.0 で解決済み）:
 - agent の `combineMessages()` が sender 種別（cron, system, user）を見て `[CRON TASK]`、`[SYSTEM EVENT]` 等のプレフィクスを付与している。これは gateway 停止時の copilotclaw_wait フォールバックパスで使われる
 - agent はメッセージの種別を知る必要がない。何を LLM に渡して何を渡さないかの判断、メッセージのフォーマットは gateway の責務
