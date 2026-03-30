@@ -360,6 +360,97 @@ describe("SessionOrchestrator", () => {
     });
   });
 
+  describe("real-time physical session state updates from events", () => {
+    it("updatePhysicalSessionState changes currentState", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-1");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession({ currentState: "idle" }));
+
+      orch.updatePhysicalSessionState(sessionId, "tool:copilotclaw_wait");
+
+      const session = orch.getSessionStatuses()[sessionId];
+      expect(session.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+    });
+
+    it("updatePhysicalSessionTokens updates currentTokens and tokenLimit", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-1");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession());
+
+      orch.updatePhysicalSessionTokens(sessionId, 5000, 100000);
+
+      const session = orch.getSessionStatuses()[sessionId];
+      expect(session.physicalSession?.currentTokens).toBe(5000);
+      expect(session.physicalSession?.tokenLimit).toBe(100000);
+    });
+
+    it("accumulateUsageTokens adds to totals and stores quotaSnapshots", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-1");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 0, totalOutputTokens: 0 }));
+
+      orch.accumulateUsageTokens(sessionId, 100, 50, { premium: { used: 1 } });
+      orch.accumulateUsageTokens(sessionId, 200, 75);
+
+      const session = orch.getSessionStatuses()[sessionId];
+      expect(session.physicalSession?.totalInputTokens).toBe(300);
+      expect(session.physicalSession?.totalOutputTokens).toBe(125);
+      expect(session.physicalSession?.latestQuotaSnapshots).toEqual({ premium: { used: 1 } });
+    });
+
+    it("updatePhysicalSessionModel changes model", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-1");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession({ model: "gpt-4" }));
+
+      orch.updatePhysicalSessionModel(sessionId, "gpt-4.1");
+
+      const session = orch.getSessionStatuses()[sessionId];
+      expect(session.physicalSession?.model).toBe("gpt-4.1");
+    });
+
+    it("addSubagentSession tracks subagent and updateSubagentStatus updates it", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-1");
+
+      orch.addSubagentSession(sessionId, {
+        toolCallId: "tc-1",
+        agentName: "worker",
+        agentDisplayName: "Worker",
+        status: "running",
+        startedAt: "2026-01-01T00:00:00Z",
+      });
+
+      let session = orch.getSessionStatuses()[sessionId];
+      expect(session.subagentSessions).toHaveLength(1);
+      expect(session.subagentSessions![0]!.status).toBe("running");
+
+      orch.updateSubagentStatus(sessionId, "tc-1", "completed");
+
+      session = orch.getSessionStatuses()[sessionId];
+      expect(session.subagentSessions![0]!.status).toBe("completed");
+    });
+
+    it("findSessionByCopilotId returns correct orchestrator sessionId", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-1");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession({ sessionId: "copilot-abc" }));
+
+      expect(orch.findSessionByCopilotId("copilot-abc")).toBe(sessionId);
+      expect(orch.findSessionByCopilotId("nonexistent")).toBeUndefined();
+    });
+
+    it("does nothing for unknown session", () => {
+      const orch = new SessionOrchestrator();
+      expect(() => orch.updatePhysicalSessionState("nonexistent", "idle")).not.toThrow();
+      expect(() => orch.updatePhysicalSessionTokens("nonexistent", 0, 0)).not.toThrow();
+      expect(() => orch.accumulateUsageTokens("nonexistent", 0, 0)).not.toThrow();
+      expect(() => orch.updatePhysicalSessionModel("nonexistent", "gpt-4")).not.toThrow();
+      expect(() => orch.addSubagentSession("nonexistent", { toolCallId: "t", agentName: "w", agentDisplayName: "W", status: "running", startedAt: "" })).not.toThrow();
+      expect(() => orch.updateSubagentStatus("nonexistent", "t", "completed")).not.toThrow();
+    });
+  });
+
   describe("reconcileWithAgent", () => {
     it("revives suspended session when agent reports it running", () => {
       const orch = new SessionOrchestrator();

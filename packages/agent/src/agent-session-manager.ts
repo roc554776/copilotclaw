@@ -15,33 +15,11 @@ import { createChannelTools } from "./tools/channel.js";
 
 export type AgentSessionStatus = "starting" | "waiting" | "processing" | "suspended" | "stopped";
 
-export interface PhysicalSessionSummary {
-  sessionId: string;
-  model: string;
-  startedAt: string;
-  currentState: string;
-  currentTokens?: number;
-  tokenLimit?: number;
-  totalInputTokens?: number;
-  totalOutputTokens?: number;
-  latestQuotaSnapshots?: Record<string, unknown>;
-}
-
-export interface SubagentInfo {
-  toolCallId: string;
-  agentName: string;
-  agentDisplayName: string;
-  status: "running" | "completed" | "failed";
-  startedAt: string;
-}
-
 export interface AgentSessionInfo {
   status: AgentSessionStatus;
   startedAt: string;
   processingStartedAt?: string | undefined;
   boundChannelId?: string | undefined;
-  physicalSession?: PhysicalSessionSummary | undefined;
-  subagentSessions?: SubagentInfo[] | undefined;
 }
 
 interface AgentSessionEntry {
@@ -278,9 +256,6 @@ export class AgentSessionManager {
       abortSignal: entry.abortController.signal,
       onStatusChange: (status) => {
         entry.info.status = status;
-        if (status === "waiting" && entry.info.physicalSession !== undefined) {
-          entry.info.physicalSession.currentState = "tool:copilotclaw_wait";
-        }
         if (status === "processing") {
           entry.info.processingStartedAt = new Date().toISOString();
         }
@@ -495,84 +470,17 @@ export class AgentSessionManager {
       });
     }
 
-    // Track physical session state
-    entry.info.physicalSession = {
-      sessionId: session.sessionId,
-      model: resolvedModel,
-      startedAt: new Date().toISOString(),
-      currentState: "idle",
-    };
-    entry.info.subagentSessions = [];
+    // Physical session state tracking (currentState, tokens, subagent) is handled by
+    // the gateway's SessionOrchestrator via forwarded session_event messages.
+    // Agent only subscribes to events needed for its own operation:
 
-    // Subscribe to SDK events for state tracking
-    session.on("tool.execution_start", (event) => {
-      if (entry.info.physicalSession !== undefined) {
-        entry.info.physicalSession.currentState = `tool:${event.data.toolName}`;
-      }
-    });
-    session.on("tool.execution_complete", () => {
-      if (entry.info.physicalSession !== undefined) {
-        entry.info.physicalSession.currentState = "idle";
-      }
-    });
-    session.on("session.idle", () => {
-      if (entry.info.physicalSession !== undefined) {
-        entry.info.physicalSession.currentState = "idle";
-      }
-    });
-    session.on("subagent.started", (event) => {
-      const subs = entry.info.subagentSessions;
-      if (subs !== undefined) {
-        subs.push({
-          toolCallId: event.data.toolCallId,
-          agentName: event.data.agentName,
-          agentDisplayName: event.data.agentDisplayName,
-          status: "running",
-          startedAt: event.timestamp,
-        });
-        // Keep only the last 50 entries to prevent unbounded growth
-        if (subs.length > 50) {
-          subs.splice(0, subs.length - 50);
-        }
-      }
-    });
-    // Subagent completion/failure events are forwarded to gateway via forwardEvent.
-    // Gateway handles filtering (direct call detection) and notifies agent via agent_notify.
-    // Agent-side status tracking is retained for dashboard display.
-    session.on("subagent.completed", (event) => {
-      const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
-      if (sub !== undefined) sub.status = "completed";
-    });
-    session.on("subagent.failed", (event) => {
-      const sub = entry.info.subagentSessions?.find((s) => s.toolCallId === event.data.toolCallId);
-      if (sub !== undefined) sub.status = "failed";
-    });
-    session.on("session.model_change", (event) => {
-      if (entry.info.physicalSession !== undefined) {
-        entry.info.physicalSession.model = event.data.newModel;
-      }
-    });
+    // Track context usage for periodic system prompt reminder (onPostToolUse).
     session.on("session.usage_info", (event) => {
-      if (entry.info.physicalSession !== undefined) {
-        entry.info.physicalSession.currentTokens = event.data.currentTokens;
-        entry.info.physicalSession.tokenLimit = event.data.tokenLimit;
-      }
-      // Track context usage percentage for periodic system prompt reminder
       const limit = event.data.tokenLimit;
       if (limit > 0) {
         reminderState.currentUsagePercent = event.data.currentTokens / limit;
         if (reminderState.currentUsagePercent >= reminderState.lastReminderPercent + this.reminderThresholdPercent) {
           reminderState.needsReminder = true;
-        }
-      }
-    });
-    session.on("assistant.usage", (event) => {
-      if (entry.info.physicalSession !== undefined) {
-        const ps = entry.info.physicalSession;
-        ps.totalInputTokens = (ps.totalInputTokens ?? 0) + (event.data.inputTokens ?? 0);
-        ps.totalOutputTokens = (ps.totalOutputTokens ?? 0) + (event.data.outputTokens ?? 0);
-        if (event.data.quotaSnapshots !== undefined) {
-          ps.latestQuotaSnapshots = event.data.quotaSnapshots as Record<string, unknown>;
         }
       }
     });
@@ -661,8 +569,6 @@ export class AgentSessionManager {
   suspendSessionState(entry: AgentSessionEntry): void {
     entry.info.status = "suspended";
     entry.copilotSession = undefined;
-    entry.info.physicalSession = undefined;
-    entry.info.subagentSessions = undefined;
     // copilotSessionId is preserved for resumeSession on revival
   }
 
@@ -734,15 +640,12 @@ export class AgentSessionManager {
     elapsedMs: number,
     error?: string,
   ): void {
-    const ps = entry.info.physicalSession;
     const msg: Record<string, unknown> = {
       type: "physical_session_ended",
       sessionId: entry.sessionId,
       reason,
       copilotSessionId: entry.copilotSessionId ?? "",
       elapsedMs,
-      totalInputTokens: ps?.totalInputTokens ?? 0,
-      totalOutputTokens: ps?.totalOutputTokens ?? 0,
     };
     if (error !== undefined) msg["error"] = error;
     this.postToGateway(msg);

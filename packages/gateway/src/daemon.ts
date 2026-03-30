@@ -58,14 +58,63 @@ async function main(): Promise<void> {
         data: { sender: senderType, message },
       });
     },
-    onSessionEvent: (sessionId, channelId, eventType, timestamp, data, parentId) => {
+    onSessionEvent: (copilotSessionId, channelId, eventType, timestamp, data, parentId) => {
       const event: { type: string; timestamp: string; data: Record<string, unknown>; parentId?: string } = {
         type: eventType,
         timestamp,
         data,
       };
       if (parentId !== undefined) event.parentId = parentId;
-      sessionEventStore.appendEvent(sessionId, event);
+      sessionEventStore.appendEvent(copilotSessionId, event);
+
+      // Update orchestrator's physical session state from forwarded SDK events.
+      // This allows the gateway to maintain dashboard-visible state without
+      // relying on the agent's IPC status RPC.
+      const orchSessionId = orchestrator.findSessionByCopilotId(copilotSessionId);
+      if (orchSessionId !== undefined) {
+        switch (eventType) {
+          case "tool.execution_start":
+            orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${data["toolName"] as string ?? "unknown"}`);
+            break;
+          case "tool.execution_complete":
+          case "session.idle":
+            orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
+            break;
+          case "session.usage_info":
+            orchestrator.updatePhysicalSessionTokens(
+              orchSessionId,
+              data["currentTokens"] as number ?? 0,
+              data["tokenLimit"] as number ?? 0,
+            );
+            break;
+          case "assistant.usage":
+            orchestrator.accumulateUsageTokens(
+              orchSessionId,
+              data["inputTokens"] as number ?? 0,
+              data["outputTokens"] as number ?? 0,
+              data["quotaSnapshots"] as Record<string, unknown> | undefined,
+            );
+            break;
+          case "session.model_change":
+            orchestrator.updatePhysicalSessionModel(orchSessionId, data["newModel"] as string ?? "unknown");
+            break;
+          case "subagent.started":
+            orchestrator.addSubagentSession(orchSessionId, {
+              toolCallId: data["toolCallId"] as string ?? "",
+              agentName: data["agentName"] as string ?? "unknown",
+              agentDisplayName: data["agentDisplayName"] as string ?? "unknown",
+              status: "running",
+              startedAt: timestamp,
+            });
+            break;
+          case "subagent.completed":
+            orchestrator.updateSubagentStatus(orchSessionId, data["toolCallId"] as string ?? "", "completed");
+            break;
+          case "subagent.failed":
+            orchestrator.updateSubagentStatus(orchSessionId, data["toolCallId"] as string ?? "", "failed");
+            break;
+        }
+      }
 
       // Subagent completion/failure: insert system message and notify agent
       if (channelId !== undefined && (eventType === "subagent.completed" || eventType === "subagent.failed")) {
@@ -116,7 +165,7 @@ async function main(): Promise<void> {
       });
 
     },
-    onPhysicalSessionEnded: (sessionId, reason, copilotSessionId, elapsedMs, totalInputTokens, totalOutputTokens, error) => {
+    onPhysicalSessionEnded: (sessionId, reason, _copilotSessionId, elapsedMs, _totalInputTokens, _totalOutputTokens, error) => {
       console.error(`[gateway] physical session ended: session=${sessionId.slice(0, 8)}, reason=${reason}, elapsed=${Math.round(elapsedMs / 1000)}s`);
 
       // Check for rapid failure and record backoff
@@ -127,15 +176,9 @@ async function main(): Promise<void> {
         console.error(`[gateway] channel ${channelId.slice(0, 8)} entering ${promptConfig.backoffDurationMs / 1000}s backoff after rapid failure (${elapsedMs}ms)`);
       }
 
-      // Update physical session token counts before suspending
-      orchestrator.updatePhysicalSession(sessionId, {
-        sessionId: copilotSessionId,
-        model: session?.physicalSession?.model ?? "unknown",
-        startedAt: session?.physicalSession?.startedAt ?? new Date().toISOString(),
-        currentState: "stopped",
-        totalInputTokens,
-        totalOutputTokens,
-      });
+      // Mark physical session as stopped, then suspend.
+      // Token counts are already accumulated in real-time via assistant.usage events.
+      orchestrator.updatePhysicalSessionState(sessionId, "stopped");
       orchestrator.suspendSession(sessionId);
 
 

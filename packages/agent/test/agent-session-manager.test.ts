@@ -101,15 +101,15 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-async function waitForPhysicalSession(manager: AgentSessionManager, timeoutMs = 2000): Promise<void> {
+async function waitForSessionReady(manager: AgentSessionManager, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const statuses = manager.getSessionStatuses();
     const session = Object.values(statuses)[0];
-    if (session?.physicalSession !== undefined) return;
+    if (session !== undefined && session.status !== "starting") return;
     await wait(5);
   }
-  throw new Error(`waitForPhysicalSession: physicalSession did not appear within ${timeoutMs}ms`);
+  throw new Error(`waitForSessionReady: session did not leave "starting" within ${timeoutMs}ms`);
 }
 
 function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
@@ -166,7 +166,7 @@ describe("AgentSessionManager — physical session lifecycle", () => {
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-explicit-stop" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
     manager.stopSession(sessionId);
     await wait(30);
@@ -235,7 +235,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-assistant-msg" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
     mockSession.emit("assistant.message", { data: { content: "Hello from assistant" } });
     await wait(10);
@@ -262,7 +262,7 @@ describe("AgentSessionManager — assistant.message to channel timeline", () => 
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-empty-msg" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
     mockSession.emit("assistant.message", { data: { content: "" } });
     await wait(10);
@@ -283,79 +283,30 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     vi.clearAllMocks();
   });
 
-  it("accumulates inputTokens and outputTokens from assistant.usage events", async () => {
+  it("forwards assistant.usage events to gateway via session_event", async () => {
     const mockSession = makeMockCopilotSession("idle");
-    // Override send to NOT auto-emit idle — we control events manually, then emit idle to end
     mockSession.send.mockImplementation(async () => "msg-id");
 
     installClientMock(vi.fn().mockResolvedValue(mockSession));
-
 
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-usage" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
-    // Emit assistant.usage events
-    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 } });
-    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 200, outputTokens: 75 } });
+    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 }, timestamp: "2026-01-01T00:00:00Z" });
 
-    const statuses = manager.getSessionStatuses();
-    const session = Object.values(statuses)[0];
-    expect(session?.physicalSession?.totalInputTokens).toBe(300);
-    expect(session?.physicalSession?.totalOutputTokens).toBe(125);
-
-    // End session cleanly
-    mockSession.emit("session.idle");
-    await wait(30);
-  });
-
-  it("caches quotaSnapshots from assistant.usage events", async () => {
-    const mockSession = makeMockCopilotSession("idle");
-    mockSession.send.mockImplementation(async () => "msg-id");
-
-    installClientMock(vi.fn().mockResolvedValue(mockSession));
-
-
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-quota" });
-    await waitForPhysicalSession(manager);
-
-    const snapshot = { premium_interactions: { usedRequests: 5, entitlementRequests: 100, remainingPercentage: 0.95 } };
-    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 10, quotaSnapshots: snapshot } });
-
-    const statuses = manager.getSessionStatuses();
-    const session = Object.values(statuses)[0];
-    expect(session?.physicalSession?.latestQuotaSnapshots).toEqual(snapshot);
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const eventCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "session_event" && msg.eventType === "assistant.usage",
+    );
+    expect(eventCalls.length).toBeGreaterThan(0);
 
     mockSession.emit("session.idle");
     await wait(30);
   });
 
-  it("does not update latestQuotaSnapshots when event has no quotaSnapshots", async () => {
-    const mockSession = makeMockCopilotSession("idle");
-    mockSession.send.mockImplementation(async () => "msg-id");
-
-    installClientMock(vi.fn().mockResolvedValue(mockSession));
-
-
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-
-    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-noquota" });
-    await waitForPhysicalSession(manager);
-
-    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 10 } });
-
-    const statuses = manager.getSessionStatuses();
-    const session = Object.values(statuses)[0];
-    expect(session?.physicalSession?.latestQuotaSnapshots).toBeUndefined();
-
-    mockSession.emit("session.idle");
-    await wait(30);
-  });
-
-  it("sends token totals in physical_session_ended on suspend (gateway handles accumulation)", async () => {
+  it("sends physical_session_ended on suspend (gateway tracks tokens)", async () => {
     const mockSession = makeMockCopilotSession("idle");
     mockSession.send.mockImplementation(async () => "msg-id");
 
@@ -364,7 +315,7 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-cumul" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
     // Emit usage before session ends
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 } });
@@ -380,8 +331,7 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
     );
     expect(endedCalls).toHaveLength(1);
     expect(endedCalls[0]![0]).toMatchObject({
-      totalInputTokens: 300,
-      totalOutputTokens: 125,
+      reason: "idle",
     });
   });
 });
@@ -407,7 +357,7 @@ describe("AgentSessionManager — system prompt reinforcement via onPostToolUse"
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-reminder" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
     return { mockSession, createSessionSpy, manager };
   }
@@ -514,7 +464,7 @@ describe("AgentSessionManager — custom agents configuration", () => {
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-agents" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
     const config = createSessionSpy.mock.calls[0]![0] as {
       customAgents: Array<{ name: string; prompt: string; infer: boolean }>;
@@ -549,7 +499,7 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
     vi.clearAllMocks();
   });
 
-  it("clears physicalSession on suspend and sends physical_session_ended", async () => {
+  it("sends physical_session_ended on suspend", async () => {
     const mockSession = makeMockCopilotSession("idle");
     mockSession.send.mockImplementation(async () => "msg-id");
 
@@ -558,10 +508,7 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-hist" });
-    await waitForPhysicalSession(manager);
-
-    // Emit some usage
-    mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 50 } });
+    await waitForSessionReady(manager);
 
     // End session → suspended
     mockSession.emit("session.idle");
@@ -570,19 +517,14 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
     const statuses = manager.getSessionStatuses();
     const session = Object.values(statuses)[0];
     expect(session?.status).toBe("suspended");
-    expect(session?.physicalSession).toBeUndefined();
 
-    // Agent sends physical_session_ended for gateway to handle history/accumulation
+    // Agent sends physical_session_ended for gateway to handle
     const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
     const endedCalls = ipcSendSpy.mock.calls.filter(
       ([msg]: [Record<string, unknown>]) => msg.type === "physical_session_ended",
     );
     expect(endedCalls).toHaveLength(1);
-    expect(endedCalls[0]![0]).toMatchObject({
-      reason: "idle",
-      totalInputTokens: 100,
-      totalOutputTokens: 50,
-    });
+    expect(endedCalls[0]![0]).toMatchObject({ reason: "idle" });
   });
 
   it("reports running sessions via getRunningSessionsSummary", async () => {
@@ -594,7 +536,7 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     const sid = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-running" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
     const running = manager.getRunningSessionsSummary();
     expect(running).toHaveLength(1);
@@ -637,7 +579,7 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-model", resolvedModel: "gpt-4.1-mini" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
     // The createSession call should use the gateway-resolved model
     expect(createSessionSpy).toHaveBeenCalledWith(
@@ -649,12 +591,12 @@ describe("AgentSessionManager — suspend clears physical session (history is ga
   });
 });
 
-describe("AgentSessionManager — currentState tracking via onStatusChange", () => {
+describe("AgentSessionManager — session status tracking via onStatusChange", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it("sets physicalSession.currentState to tool:copilotclaw_wait when copilotclaw_wait handler runs", async () => {
+  it("updates session status to waiting/processing via onStatusChange callback", async () => {
     let capturedConfig: Record<string, unknown> | undefined;
 
     const createSessionMock = vi.fn().mockImplementation(async (config: Record<string, unknown>) => {
@@ -684,95 +626,25 @@ describe("AgentSessionManager — currentState tracking via onStatusChange", () 
       };
     });
 
-    // Return empty array so wait enters polling (keepalive path)
     (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
     const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-state" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
-    // Before calling wait handler, currentState should be "idle"
-    let statuses = manager.getSessionStatuses();
-    expect(statuses[sessionId]?.physicalSession?.currentState).toBe("idle");
+    // Session should be in "waiting" status after session creation
+    const statuses = manager.getSessionStatuses();
+    expect(statuses[sessionId]?.status).toBe("waiting");
 
-    // Find the copilotclaw_wait tool handler from the tools in capturedConfig
-    const tools = capturedConfig!["tools"] as Array<{ name: string; handler: () => Promise<unknown> }>;
-    const waitTool = tools.find((t) => t.name === "copilotclaw_wait");
-    expect(waitTool).toBeDefined();
-
-    // Call the wait handler. It will call onStatusChange("waiting") synchronously,
-    // then block in pollNextInputs. We abort it quickly via the session's abort controller.
-    const waitPromise = waitTool!.handler();
-
-    // Give the handler a chance to call onStatusChange("waiting")
-    await wait(10);
-
-    // currentState should now be "tool:copilotclaw_wait"
-    statuses = manager.getSessionStatuses();
-    expect(statuses[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
-
-    // Stop the session to unblock the wait handler
-    manager.stopSession(sessionId);
-    await waitPromise.catch(() => {});
-  });
-
-  it("overrides idle after tool.execution_complete when wait handler re-enters", async () => {
-    let capturedConfig: Record<string, unknown> | undefined;
-    let mockSessionEmit: (event: string, ...args: unknown[]) => void;
-
-    const createSessionMock = vi.fn().mockImplementation(async (config: Record<string, unknown>) => {
-      capturedConfig = config;
-      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
-
-      mockSessionEmit = (event: string, ...args: unknown[]) => {
-        for (const cb of listeners.get(event) ?? []) cb(...args);
-      };
-
-      return {
-        sessionId: "sdk-override-test",
-        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-          const list = listeners.get(event) ?? [];
-          list.push(cb);
-          listeners.set(event, list);
-        }),
-        send: vi.fn().mockResolvedValue("msg-id"),
-        disconnect: vi.fn().mockResolvedValue(undefined),
-        registerTransformCallbacks: vi.fn(),
-      };
-    });
-
-    (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
-      (this as Record<string, unknown>)["createSession"] = createSessionMock;
-      (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
-      (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
-      (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
-      (this as Record<string, unknown>)["rpc"] = {
-        models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
-        account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
-      };
-    });
-
-    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-
-    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
-    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-override" });
-    await waitForPhysicalSession(manager);
-
-    // Simulate SDK tool.execution_complete resetting currentState to idle
-    mockSessionEmit!("tool.execution_complete");
-    let statuses = manager.getSessionStatuses();
-    expect(statuses[sessionId]?.physicalSession?.currentState).toBe("idle");
-
-    // Now call the wait handler — onStatusChange("waiting") should override idle
+    // Find the copilotclaw_wait tool handler
     const tools = capturedConfig!["tools"] as Array<{ name: string; handler: () => Promise<unknown> }>;
     const waitTool = tools.find((t) => t.name === "copilotclaw_wait")!;
     const waitPromise = waitTool.handler();
     await wait(10);
 
-    // currentState should be overridden back to tool:copilotclaw_wait
-    statuses = manager.getSessionStatuses();
-    expect(statuses[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+    // Status should still be "waiting" after copilotclaw_wait is called
+    expect(manager.getSessionStatuses()[sessionId]?.status).toBe("waiting");
 
     manager.stopSession(sessionId);
     await waitPromise.catch(() => {});
@@ -824,7 +696,7 @@ describe("AgentSessionManager — postToolUse log includes session ID", () => {
     });
 
     const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-log" });
-    await waitForPhysicalSession(manager);
+    await waitForSessionReady(manager);
 
     // Extract the onPostToolUse hook from the captured config
     expect(capturedConfig).toBeDefined();

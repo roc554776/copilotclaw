@@ -206,8 +206,8 @@ export class AgentManager {
         const reason = msg["reason"] as "idle" | "error" | "aborted";
         const copilotSessionId = msg["copilotSessionId"] as string;
         const elapsedMs = msg["elapsedMs"] as number;
-        const totalInputTokens = msg["totalInputTokens"] as number;
-        const totalOutputTokens = msg["totalOutputTokens"] as number;
+        const totalInputTokens = (msg["totalInputTokens"] as number) ?? 0;
+        const totalOutputTokens = (msg["totalOutputTokens"] as number) ?? 0;
         const error = typeof msg["error"] === "string" ? msg["error"] as string : undefined;
         handler.onPhysicalSessionEnded?.(sessionId, reason, copilotSessionId, elapsedMs, totalInputTokens, totalOutputTokens, error);
         break;

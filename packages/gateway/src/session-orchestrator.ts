@@ -278,6 +278,15 @@ export class SessionOrchestrator {
     return result;
   }
 
+  /** Find the orchestrator sessionId that currently holds a physical session with the given copilot sessionId.
+   *  Used to route forwarded SDK events (which reference copilot sessionId) to the correct abstract session. */
+  findSessionByCopilotId(copilotSessionId: string): string | undefined {
+    for (const [sessionId, session] of this.sessions) {
+      if (session.physicalSession?.sessionId === copilotSessionId) return sessionId;
+    }
+    return undefined;
+  }
+
   /** Whether any session (active or suspended) is bound to the channel. */
   hasSessionForChannel(channelId: string): boolean {
     return this.channelBindings.has(channelId);
@@ -337,6 +346,66 @@ export class SessionOrchestrator {
     if (session === undefined) return;
     session.status = status;
     this.persistSession(session);
+  }
+
+  // --- Real-time physical session state updates from forwarded SDK events ---
+  // These allow the gateway to maintain the dashboard-visible state without
+  // relying on the agent's IPC status RPC.
+
+  /** Update physical session's currentState from tool events. */
+  updatePhysicalSessionState(sessionId: string, currentState: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.physicalSession !== undefined) {
+      session.physicalSession.currentState = currentState;
+    }
+  }
+
+  /** Update physical session's token usage from usage_info events. */
+  updatePhysicalSessionTokens(sessionId: string, currentTokens: number, tokenLimit: number): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.physicalSession !== undefined) {
+      session.physicalSession.currentTokens = currentTokens;
+      session.physicalSession.tokenLimit = tokenLimit;
+    }
+  }
+
+  /** Accumulate assistant.usage tokens on the physical session. */
+  accumulateUsageTokens(sessionId: string, inputTokens: number, outputTokens: number, quotaSnapshots?: Record<string, unknown>): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.physicalSession !== undefined) {
+      const ps = session.physicalSession;
+      ps.totalInputTokens = (ps.totalInputTokens ?? 0) + inputTokens;
+      ps.totalOutputTokens = (ps.totalOutputTokens ?? 0) + outputTokens;
+      if (quotaSnapshots !== undefined) {
+        ps.latestQuotaSnapshots = quotaSnapshots;
+      }
+    }
+  }
+
+  /** Update model on physical session from model_change events. */
+  updatePhysicalSessionModel(sessionId: string, newModel: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session?.physicalSession !== undefined) {
+      session.physicalSession.model = newModel;
+    }
+  }
+
+  /** Track a subagent session start. */
+  addSubagentSession(sessionId: string, info: SubagentInfo): void {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return;
+    if (session.subagentSessions === undefined) session.subagentSessions = [];
+    session.subagentSessions.push(info);
+    if (session.subagentSessions.length > 50) {
+      session.subagentSessions.splice(0, session.subagentSessions.length - 50);
+    }
+  }
+
+  /** Update a subagent session status. */
+  updateSubagentStatus(sessionId: string, toolCallId: string, status: "completed" | "failed"): void {
+    const session = this.sessions.get(sessionId);
+    const sub = session?.subagentSessions?.find((s) => s.toolCallId === toolCallId);
+    if (sub !== undefined) sub.status = status;
   }
 
   /** Fully remove a session and its channel binding. */

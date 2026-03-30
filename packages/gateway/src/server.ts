@@ -195,9 +195,28 @@ function createRequestHandler(
           otel: config.otel ?? null,
         },
       };
-      // Merge orchestrator session data when available (authoritative for abstract session state)
+      // Merge orchestrator data into agent.sessions so the frontend has a single source.
+      // Orchestrator is authoritative for abstract session state (status, cumulative tokens,
+      // physical session history, live physical session details, subagent tracking).
       if (sessionOrchestrator !== null) {
-        statusResponse["orchestratorSessions"] = sessionOrchestrator.getSessionStatuses();
+        const orchSessions = sessionOrchestrator.getSessionStatuses();
+        const agentObj = (statusResponse["agent"] ?? { sessions: {} }) as Record<string, unknown>;
+        const mergedSessions: Record<string, unknown> = {};
+        for (const [sessionId, orchSession] of Object.entries(orchSessions)) {
+          mergedSessions[sessionId] = {
+            status: orchSession.status,
+            startedAt: orchSession.startedAt,
+            boundChannelId: orchSession.channelId,
+            processingStartedAt: orchSession.processingStartedAt,
+            physicalSession: orchSession.physicalSession,
+            physicalSessionHistory: orchSession.physicalSessionHistory,
+            subagentSessions: orchSession.subagentSessions,
+            cumulativeInputTokens: orchSession.cumulativeInputTokens,
+            cumulativeOutputTokens: orchSession.cumulativeOutputTokens,
+          };
+        }
+        agentObj["sessions"] = mergedSessions;
+        statusResponse["agent"] = agentObj;
       }
       json(res, 200, statusResponse);
       return;

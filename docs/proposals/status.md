@@ -138,9 +138,7 @@
 
 **未実現:**
 - gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）
-- Gateway-Agent 責務の再配置 — agent に残存する抽象セッション状態の二重管理（累積トークン・ physicalSessionHistory は gateway 移行済みだが、AgentSessionInfo.status/physicalSession/subagentSessions は agent に残存）
 - Gateway-Agent 責務の再配置 — モデル選択ポリシーの部分移行残存（gateway が resolveModel を実行し agent に渡すよう変更済みだが、agent 内に fallback 用の resolveModel が残存）
-- Gateway-Agent 責務の再配置 — 物理セッション状態の詳細追跡が agent にある（PhysicalSessionSummary, SubagentInfo。イベントは既に gateway に転送済み）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
