@@ -617,8 +617,7 @@ export function StatusPage() {
           )}
         </div>
 
-        {tokenUsagePeriods.length > 0 && (
-          <div>
+        <div>
             <div style={{ ...rowStyle, fontWeight: 600, marginBottom: "0.3rem" }}>
               <span style={labelStyle}>By Period</span>
             </div>
@@ -648,7 +647,6 @@ export function StatusPage() {
               </tbody>
             </table>
           </div>
-        )}
       </div>
 
     </div>

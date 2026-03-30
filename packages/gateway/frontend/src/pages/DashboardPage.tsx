@@ -898,10 +898,12 @@ function QuotaSection({
 }) {
   const snapshots = quota?.quotaSnapshots ?? {};
   const keys = Object.keys(snapshots);
-  if (keys.length === 0) return null;
   return (
     <div style={sectionStyle}>
       <div style={titleStyle}>Premium Requests</div>
+      {keys.length === 0 && (
+        <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
+      )}
       {keys.map((key) => {
         const q = snapshots[key]!;
         const used = q.usedRequests ?? 0;
@@ -1185,17 +1187,19 @@ function StatusModalContent({
       />
 
       {/* Models */}
-      {models && models.models.length > 0 && (
-        <div style={modalSectionStyle}>
-          <div style={modalTitleStyle}>Available Models</div>
-          {models.models.map((m) => (
+      <div style={modalSectionStyle}>
+        <div style={modalTitleStyle}>Available Models</div>
+        {models && models.models.length > 0 ? (
+          models.models.map((m) => (
             <div key={m.id} style={modalRowStyle}>
               <span style={modalLabelStyle}>{m.id}</span>
               <span>x{m.billing?.multiplier ?? "?"}</span>
             </div>
-          ))}
-        </div>
-      )}
+          ))
+        ) : (
+          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
+        )}
+      </div>
     </>
   );
 }
