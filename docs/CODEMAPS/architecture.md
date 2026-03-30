@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.50.0 | Token estimate: ~2400 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.52.0 | Token estimate: ~2400 -->
 
 # Architecture
 
@@ -62,7 +62,7 @@ Environment variables:
 - Force-restart flow: ensureAgent returns old bootId on force-restart → daemon calls waitForNewAgent to poll until different bootId appears before proceeding
 - Gateway stop → gateway only (agent process NOT stopped)
 - Gateway restart → POST /api/stop, wait for port free, then start (restart.ts)
-- Agent ↔ Gateway: IPC stream (v0.35.0) — persistent bidirectional connection; gateway pushes config and agent_notify; agent pushes channel messages, session events, system prompts; agent sends request-response for drain/peek/flush/list_messages and hook RPCs (SDK hooks forwarded to gateway for centralized processing)
+- Agent ↔ Gateway: IPC stream (v0.35.0) — persistent bidirectional connection; gateway pushes config and agent_notify; agent pushes channel messages, session events, system prompts; agent sends request-response for drain/peek/flush/list_messages, hook RPCs (SDK hooks forwarded to gateway for centralized processing), and lifecycle RPCs (agent queries gateway for session lifecycle action)
 - Gateway SessionOrchestrator manages abstract sessions (channel bindings, suspend/revive, backoff, max age); sends start_physical_session/stop_physical_session commands to agent via IPC stream
 - Agent listens for start_physical_session/stop_physical_session from gateway; sends physical_session_started/physical_session_ended back to gateway
 - User message POST triggers gateway to check orchestrator and start physical session via agent (push-based, no polling)
@@ -111,6 +111,7 @@ Environment variables:
 - **Cumulative Token Tracking (v0.27.0)**: SessionOrchestrator tracks cumulativeInputTokens and cumulativeOutputTokens per abstract session; suspendSession() accumulates tokens from physical session before clearing; gateway updates physical session via onPhysicalSessionEnded handler; dashboard shows cumulative tokens
 - **Stopped Session History (v0.30.0)**: SessionOrchestrator maintains physicalSessionHistory (PhysicalSessionSummary[]) per abstract session; suspendSession() pushes physical session to history before clearing; capped at 10 entries (oldest removed); persisted in SQLite
 - **Channel backoff**: SessionOrchestrator tracks channelBackoff map (ephemeral, not persisted); daemon records backoff on rapid failure (onPhysicalSessionEnded checks elapsedMs < rapidFailureThresholdMs); isChannelInBackoff() checked before starting sessions
+- **Lifecycle RPC (v0.52.0)**: Agent queries gateway via lifecycle request-response RPC (queryLifecycleAction) when session reaches idle or error state; gateway returns action: "stop" (agent calls client.stop()), "reinject" (agent re-enters session loop), or "wait" (keep session alive); default when gateway is offline = "wait" (keep session alive); gateway daemon's onLifecycle handler returns "stop" + clearCopilotSessionId on error, "stop" on idle
 - **Channel notifications**: gateway daemon inserts system messages on unexpected physical session stop (with error detail) and flushes pending messages for the channel
 
 ## Observability (v0.28.0, SQLite v0.29.0)
@@ -135,7 +136,7 @@ Environment variables:
 - Startup direction: always gateway → agent (agent never starts gateway)
 - Agent process ensure: gateway start time only (NOT on user message POST)
 - Agent session ensure: gateway responsibility via SessionOrchestrator (sends start_physical_session/stop_physical_session to agent via IPC stream)
-- Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION=0.50.0, exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
+- Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION=0.52.0, exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel; LogBuffer optionally writes structured JSON lines to file via enableFileOutput() (gateway.log); agent spawned with stderr redirected to agent.log; agent process initializes its own StructuredLogger writing to agent.log
 - Structured logging: StructuredLogger (intentionally duplicated in gateway and agent packages) writes JSON Lines (StructuredLogEntry: ts, level, component, msg, data?) to file via appendFileSync; bridges to OpenTelemetry via optional OtelLoggerBridge parameter (emits log records to OTel LoggerProvider when configured); agent uses structured JSON fallback pattern (console.error with JSON.stringify) before StructuredLogger is initialized — applies to index.ts module-level log/logError, AgentSessionManager defaultLog/defaultLogError, and channel.ts ChannelToolDeps logError
 - OpenTelemetry: OTel setup module (otel.ts, intentionally duplicated in gateway and agent) initializes OTLP HTTP exporters for logs and metrics; gateway additionally defines application-level metrics (otel-metrics.ts: session count gauges, token usage counters); endpoints configured via config.otel.endpoints (empty = noop export); agent receives OTel config from gateway via IPC stream config push and initializes independently with serviceName "copilotclaw-agent"
