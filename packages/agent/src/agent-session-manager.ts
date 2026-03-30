@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { CopilotClient, type CopilotSession, approveAll } from "@github/copilot-sdk";
 import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
@@ -65,14 +65,10 @@ interface AgentSessionEntry {
 }
 
 export interface AgentSessionManagerOptions {
-  staleTimeoutMs?: number;
-  maxSessionAgeMs?: number;
   model?: string;
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
   workingDirectory?: string;
-  /** Path to persist channel bindings and suspended session state across agent restarts. */
-  persistPath?: string;
   /** GitHub token for authentication (from profile auth config). When set, passed to CopilotClient. */
   githubToken?: string;
   /** Log level: "info" (default) or "debug" (enables verbose hook/internal logging). */
@@ -94,20 +90,6 @@ export interface AgentSessionManagerOptions {
   logError?: (message: string) => void;
 }
 
-interface SessionSnapshot {
-  sessionId: string;
-  copilotSessionId?: string | undefined;
-  boundChannelId?: string | undefined;
-  startedAt: string;
-  cumulativeInputTokens?: number | undefined;
-  cumulativeOutputTokens?: number | undefined;
-  physicalSessionHistory?: PhysicalSessionSummary[] | undefined;
-}
-
-interface BindingSnapshot {
-  sessions: SessionSnapshot[];
-}
-
 export interface StartSessionOptions {
   boundChannelId?: string;
   /** SDK session ID to resume instead of creating a new one. Used by deferred resume. */
@@ -118,40 +100,26 @@ export interface StartSessionOptions {
 
 export class AgentSessionManager {
   private readonly sessions = new Map<string, AgentSessionEntry>();
-  private readonly channelBindings = new Map<string, string>(); // channelId → sessionId
-  private readonly staleTimeoutMs: number;
-  private readonly maxSessionAgeMs: number;
   private readonly model: string | undefined;
   private readonly zeroPremium: boolean;
   private readonly debugMockCopilotUnsafeTools: boolean;
   private readonly workingDirectory: string | undefined;
-  private readonly persistPath: string | undefined;
   private readonly githubToken: string | undefined;
   private readonly debugLogLevel: "info" | "debug";
   private readonly channelOperatorConfig: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
   private readonly workerConfig: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
   private readonly systemReminder: string;
   private readonly initialPrompt: string;
-  private readonly rapidFailureThresholdMs: number;
-  private readonly backoffDurationMs: number;
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
   private readonly debug: (message: string) => void;
   private generationCounter = 0;
-  // Backoff tracking: channelId → timestamp when backoff expires.
-  // Intentionally in-memory only — not persisted across agent restarts.
-  // On restart the agent process is fresh and the failure condition may
-  // have been resolved, so retrying immediately is acceptable.
-  private readonly channelBackoff = new Map<string, number>();
 
   constructor(options: AgentSessionManagerOptions) {
-    this.staleTimeoutMs = options.staleTimeoutMs ?? options.prompts.staleTimeoutMs ?? 600000;
-    this.maxSessionAgeMs = options.maxSessionAgeMs ?? options.prompts.maxSessionAgeMs ?? 172800000;
     this.model = options.model;
     this.zeroPremium = options.zeroPremium ?? false;
     this.debugMockCopilotUnsafeTools = options.debugMockCopilotUnsafeTools ?? false;
     this.workingDirectory = options.workingDirectory;
-    this.persistPath = options.persistPath;
     this.githubToken = options.githubToken;
     const defaultLog = (message: string) => {
       console.error(JSON.stringify({ ts: new Date().toISOString(), level: "info", component: "agent", msg: message }));
@@ -164,14 +132,11 @@ export class AgentSessionManager {
     this.workerConfig = options.prompts.worker;
     this.systemReminder = options.prompts.systemReminder;
     this.initialPrompt = options.prompts.initialPrompt;
-    this.rapidFailureThresholdMs = options.prompts.rapidFailureThresholdMs;
-    this.backoffDurationMs = options.prompts.backoffDurationMs;
     this.log = options.log ?? defaultLog;
     this.logError = options.logError ?? defaultLogError;
     this.debug = this.debugLogLevel === "debug"
       ? (options.log ?? defaultLog)
       : () => {};
-    this.loadBindings();
   }
 
   /** Create a CopilotClient with the configured auth token (if any). */
@@ -180,84 +145,6 @@ export class AgentSessionManager {
       return new CopilotClient({ githubToken: this.githubToken });
     }
     return new CopilotClient();
-  }
-
-  /** Load persisted channel bindings and restore suspended sessions. */
-  private loadBindings(): void {
-    if (this.persistPath === undefined) return;
-    try {
-      const raw = readFileSync(this.persistPath, "utf-8");
-      const parsed: unknown = JSON.parse(raw);
-      if (
-        typeof parsed !== "object" || parsed === null ||
-        !("sessions" in parsed) || !Array.isArray((parsed as { sessions: unknown }).sessions)
-      ) {
-        this.logError(`WARNING: invalid bindings file at ${this.persistPath}, ignoring`);
-        return;
-      }
-      const sessions = (parsed as { sessions: unknown[] }).sessions;
-      for (const raw of sessions) {
-        if (typeof raw !== "object" || raw === null) continue;
-        const s = raw as Record<string, unknown>;
-        if (typeof s["sessionId"] !== "string" || typeof s["startedAt"] !== "string") continue;
-        const entry: AgentSessionEntry = {
-          sessionId: s["sessionId"],
-          copilotSessionId: typeof s["copilotSessionId"] === "string" ? s["copilotSessionId"] : undefined,
-          info: {
-            status: "suspended",
-            startedAt: s["startedAt"],
-            boundChannelId: typeof s["boundChannelId"] === "string" ? s["boundChannelId"] : undefined,
-            cumulativeInputTokens: typeof s["cumulativeInputTokens"] === "number" ? s["cumulativeInputTokens"] : undefined,
-            cumulativeOutputTokens: typeof s["cumulativeOutputTokens"] === "number" ? s["cumulativeOutputTokens"] : undefined,
-            physicalSessionHistory: Array.isArray(s["physicalSessionHistory"]) ? s["physicalSessionHistory"] as PhysicalSessionSummary[] : undefined,
-          },
-          // Placeholder client — suspended sessions don't use it. Replaced on revive.
-          client: this.createClient(),
-          abortController: new AbortController(),
-          sessionPromise: Promise.resolve(),
-          generation: ++this.generationCounter,
-        };
-        this.sessions.set(entry.sessionId, entry);
-        if (entry.info.boundChannelId !== undefined) {
-          this.channelBindings.set(entry.info.boundChannelId, entry.sessionId);
-        }
-      }
-      if (sessions.length > 0) {
-        this.log(`restored ${sessions.length} suspended session binding(s) from disk`);
-      }
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") return; // normal on first run
-      this.logError(`WARNING: could not load bindings from ${this.persistPath}: ${String(err)}`);
-    }
-  }
-
-  /** Persist channel bindings and suspended session state to disk. */
-  private saveBindings(): void {
-    if (this.persistPath === undefined) return;
-    const sessions: SessionSnapshot[] = [];
-    for (const [, entry] of this.sessions) {
-      if (entry.info.status === "suspended" && entry.info.boundChannelId !== undefined) {
-        sessions.push({
-          sessionId: entry.sessionId,
-          copilotSessionId: entry.copilotSessionId,
-          boundChannelId: entry.info.boundChannelId,
-          startedAt: entry.info.startedAt,
-          cumulativeInputTokens: entry.info.cumulativeInputTokens,
-          cumulativeOutputTokens: entry.info.cumulativeOutputTokens,
-          physicalSessionHistory: entry.info.physicalSessionHistory,
-        });
-      }
-    }
-    const snapshot: BindingSnapshot = { sessions };
-    try {
-      mkdirSync(dirname(this.persistPath), { recursive: true });
-      const tmp = `${this.persistPath}.tmp`;
-      writeFileSync(tmp, JSON.stringify(snapshot), "utf-8");
-      renameSync(tmp, this.persistPath);
-    } catch (err: unknown) {
-      this.logError(`WARNING: could not save bindings to ${this.persistPath}: ${String(err)}`);
-    }
   }
 
   private pooledClient: CopilotClient | undefined;
@@ -326,43 +213,8 @@ export class AgentSessionManager {
     return { ...entry.info };
   }
 
-  hasSessionForChannel(channelId: string): boolean {
-    return this.channelBindings.has(channelId);
-  }
-
-  /** Check if a channel has an active (non-suspended) session. */
-  hasActiveSessionForChannel(channelId: string): boolean {
-    const sessionId = this.channelBindings.get(channelId);
-    if (sessionId === undefined) return false;
-    const entry = this.sessions.get(sessionId);
-    return entry !== undefined && entry.info.status !== "suspended";
-  }
-
-  /** Check if a channel is in backoff period after a rapid session failure. */
-  isChannelInBackoff(channelId: string): boolean {
-    const expiresAt = this.channelBackoff.get(channelId);
-    if (expiresAt === undefined) return false;
-    if (Date.now() >= expiresAt) {
-      this.channelBackoff.delete(channelId);
-      return false;
-    }
-    return true;
-  }
-
   startSession(options?: StartSessionOptions): string {
     const boundChannelId = options?.boundChannelId;
-
-    // If channel already has a suspended session, revive it with a new physical session
-    if (boundChannelId !== undefined && this.channelBindings.has(boundChannelId)) {
-      const existingId = this.channelBindings.get(boundChannelId)!;
-      const existing = this.sessions.get(existingId);
-      if (existing !== undefined && existing.info.status === "suspended") {
-        this.reviveSession(existing, options?.copilotSessionId);
-        return existingId;
-      }
-      // Already active — return existing
-      return existingId;
-    }
 
     const sessionId = randomUUID();
     const abortController = new AbortController();
@@ -382,7 +234,6 @@ export class AgentSessionManager {
 
     if (boundChannelId !== undefined) {
       entry.info.boundChannelId = boundChannelId;
-      this.channelBindings.set(boundChannelId, sessionId);
     }
 
     // Propagate SDK session ID for resume before runSession reads it
@@ -828,11 +679,10 @@ export class AgentSessionManager {
     }
   }
 
-  /** Transition an abstract session to suspended state, preserving channel binding.
+  /** Transition an abstract session to suspended state.
    *  The physical session is gone but the abstract session survives for later revival.
    *  Cumulative token usage is accumulated from the physical session before clearing. */
-  /** Transition the entry to suspended state without persisting to disk. */
-  private suspendSessionState(entry: AgentSessionEntry): void {
+  suspendSessionState(entry: AgentSessionEntry): void {
     // Accumulate token usage from the physical session being suspended
     const ps = entry.info.physicalSession;
     if (ps !== undefined) {
@@ -866,58 +716,14 @@ export class AgentSessionManager {
 
   private suspendSession(entry: AgentSessionEntry): void {
     this.suspendSessionState(entry);
-    this.saveBindings();
-    // Flush pending messages for the channel — if the session idle-exited without
-    // calling copilotclaw_wait, pending messages would stay forever and block cron dedup.
-    // Uses requestFromGateway (not fire-and-forget) to ensure the flush actually reaches
-    // the gateway even during stream reconnection windows.
-    const channelId = entry.info.boundChannelId;
-    if (channelId !== undefined) {
-      requestFromGateway({ type: "flush_pending", channelId }).then(
-        (result) => { this.log(`flushed pending for channel ${channelId.slice(0, 8)}: ${JSON.stringify(result)}`); },
-        (err) => { this.logError(`flush_pending failed for channel ${channelId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`); },
-      );
-    }
   }
 
-  /** Revive a suspended abstract session by launching a new physical session. */
-  private reviveSession(entry: AgentSessionEntry, copilotSessionId?: string): void {
-    // Use provided copilotSessionId or fall back to the one saved during suspension
-    if (copilotSessionId !== undefined) {
-      entry.copilotSessionId = copilotSessionId;
-    }
-    // Else: keep existing entry.copilotSessionId from the suspended session
-
-    entry.info.status = "starting";
-    entry.abortController = new AbortController();
-    entry.client = this.createClient();
-    entry.generation = ++this.generationCounter;
-
-    // Capture this revival's client so finally stops the correct one even if revived again
-    const clientToStop = entry.client;
-
-    entry.sessionPromise = this.attachSessionLifecycle(entry, clientToStop);
-  }
-
-  /** Explicitly stop a session — fully removes the abstract session and channel binding. */
+  /** Explicitly stop a session — fully removes the abstract session. */
   stopSession(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return;
     entry.abortController.abort();
-    // Fully remove on explicit stop (not suspend)
-    const boundChannelId = entry.info.boundChannelId;
-    if (boundChannelId !== undefined && this.channelBindings.get(boundChannelId) === sessionId) {
-      this.channelBindings.delete(boundChannelId);
-    }
     this.sessions.delete(sessionId);
-    this.saveBindings();
-  }
-
-  stopSessionForChannel(channelId: string): void {
-    const sessionId = this.channelBindings.get(channelId);
-    if (sessionId !== undefined) {
-      this.stopSession(sessionId);
-    }
   }
 
   async stopAll(): Promise<void> {
@@ -926,16 +732,8 @@ export class AgentSessionManager {
     for (const [sessionId, entry] of entries) {
       entry.abortController.abort();
       promises.push(entry.sessionPromise);
-      if (entry.info.boundChannelId !== undefined) {
-        // Channel-bound sessions are suspended (not deleted) so the abstract
-        // session and channel binding survive the agent restart.
-        this.suspendSessionState(entry);
-      } else {
-        // Unbound sessions have no channel to revive them — fully remove.
-        this.sessions.delete(sessionId);
-      }
+      this.sessions.delete(sessionId);
     }
-    this.saveBindings();
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((r) => { timeoutHandle = setTimeout(r, 5000); });
     await Promise.race([
@@ -944,36 +742,8 @@ export class AgentSessionManager {
     ]);
   }
 
-  async checkStaleAndHandle(sessionId: string, oldestInputId: string | undefined): Promise<"ok" | "flushed"> {
-    const entry = this.sessions.get(sessionId);
-    if (entry === undefined) return "ok";
-    if (entry.info.status !== "processing") return "ok";
-
-    const processingStartedAt = entry.info.processingStartedAt;
-    if (processingStartedAt === undefined) return "ok";
-
-    const elapsed = Date.now() - new Date(processingStartedAt).getTime();
-    if (elapsed < this.staleTimeoutMs) return "ok";
-
-    // Don't act if there are no pending inputs (agent may be legitimately finishing)
-    if (oldestInputId === undefined) return "ok";
-
-    const boundChannelId = entry.info.boundChannelId;
-
-    // Stale session — suspend (abstract session survives), notify, flush stale inputs
-    this.log(`session ${sessionId.slice(0, 8)} stale processing (${Math.round(elapsed / 1000)}s), suspending (deferred resume)`);
-
-    // Abort first to prevent the promise handler from double-suspending
-    entry.abortController.abort();
-    this.suspendSession(entry);
-    this.notifyChannelSessionTimedOut(boundChannelId);
-    // Return "flushed" so the caller flushes stale inputs; the deferred resume will only
-    // fire when a genuinely new user message arrives after the flush.
-    return "flushed";
-  }
-
-  /** Attach lifecycle handlers (suspend on idle/error, backoff, notification) to a session's runSession promise.
-   *  Used by both startSession and reviveSession to avoid duplicating the .then/.catch/.finally chain. */
+  /** Attach lifecycle handlers (suspend on idle/error) to a session's runSession promise.
+   *  Used by startSession to handle the .then/.catch/.finally chain. */
   private attachSessionLifecycle(entry: AgentSessionEntry, clientToStop: CopilotClient): Promise<void> {
     const startTime = Date.now();
     const sessionId = entry.sessionId;
@@ -984,9 +754,7 @@ export class AgentSessionManager {
         const elapsed = Date.now() - startTime;
         this.log(`session ${sessionId.slice(0, 8)} idle exit after ${Math.round(elapsed / 1000)}s (channel ${boundChannelId?.slice(0, 8) ?? "none"})`);
         this.sendPhysicalSessionEnded(entry, "idle", elapsed);
-        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId);
       }
     }).catch((err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err);
@@ -1000,43 +768,15 @@ export class AgentSessionManager {
           this.log(`clearing copilotSessionId ${entry.copilotSessionId.slice(0, 12)} after error`);
           entry.copilotSessionId = undefined;
         }
-        this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
-        this.notifyChannelSessionStopped(boundChannelId, reason);
       }
     }).finally(() => {
       clientToStop.stop().catch(() => {});
     });
   }
 
-  /** Record a backoff for a channel if the session failed rapidly (< RAPID_FAILURE_THRESHOLD_MS). */
-  private recordBackoffIfRapidFailure(channelId: string | undefined, startTime: number): void {
-    if (channelId === undefined) return;
-    const elapsed = Date.now() - startTime;
-    if (elapsed < this.rapidFailureThresholdMs) {
-      this.channelBackoff.set(channelId, Date.now() + this.backoffDurationMs);
-      this.log(`channel ${channelId.slice(0, 8)} entering ${this.backoffDurationMs / 1000}s backoff after rapid failure (${elapsed}ms)`);
-    }
-  }
-
-  /** Notify the channel that the session stopped. The "unexpectedly" wording is intentional
-   *  even for idle exits — a session ending via session.idle (without explicit abort) is
-   *  unexpected because the agent should keep calling copilotclaw_wait indefinitely. */
-  private notifyChannelSessionStopped(channelId: string | undefined, reason?: string): void {
-    if (channelId === undefined) return;
-    const detail = reason !== undefined ? `: ${reason}` : "";
-    const message = `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`;
-    this.postChannelMessage(channelId, message);
-  }
-
-  private notifyChannelSessionTimedOut(channelId: string | undefined): void {
-    if (channelId === undefined) return;
-    const message = "[SYSTEM] Agent session timed out (stuck processing). A new session will start when you send a message.";
-    this.postChannelMessage(channelId, message);
-  }
-
   /** Send physical_session_ended notification to gateway. */
-  private sendPhysicalSessionEnded(
+  sendPhysicalSessionEnded(
     entry: AgentSessionEntry,
     reason: "idle" | "error" | "aborted",
     elapsedMs: number,
@@ -1063,40 +803,6 @@ export class AgentSessionManager {
 
   private postChannelMessage(channelId: string, message: string): void {
     sendToGateway({ type: "channel_message", channelId, sender: "agent", message });
-  }
-
-  /** Check if session has exceeded max age. If so, save state and stop (deferred resume).
-   * The session will be resumed when the next pending message arrives for the channel.
-   * Only applies to sessions in "waiting" state with a bound channel. */
-  checkSessionMaxAge(sessionId: string): boolean {
-    const entry = this.sessions.get(sessionId);
-    if (entry === undefined) return false;
-    if (entry.info.status !== "waiting") return false;
-    if (entry.info.boundChannelId === undefined) return false;
-
-    const age = Date.now() - new Date(entry.info.startedAt).getTime();
-    if (age < this.maxSessionAgeMs) return false;
-
-    this.log(`session ${sessionId.slice(0, 8)} exceeded max age (${Math.round(age / 3600000)}h), suspending (deferred resume)`);
-
-    // Abort first to prevent the promise handler from double-suspending
-    entry.abortController.abort();
-    this.suspendSession(entry);
-    // Clear copilotSessionId so the next revival creates a new physical session
-    entry.copilotSessionId = undefined;
-    this.saveBindings();
-
-    return true;
-  }
-
-  /** Get the sessionId bound to a channel, if any */
-  getSessionIdForChannel(channelId: string): string | undefined {
-    return this.channelBindings.get(channelId);
-  }
-
-  /** Get the boundChannelId for a session, if any */
-  getBoundChannelId(sessionId: string): string | undefined {
-    return this.sessions.get(sessionId)?.info.boundChannelId;
   }
 
 }

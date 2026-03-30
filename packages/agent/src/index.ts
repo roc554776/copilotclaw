@@ -6,8 +6,6 @@ import { initOtel, getLogger, shutdownOtel } from "./otel.js";
 import { StructuredLogger } from "./structured-logger.js";
 import { type AuthConfig, resolveToken } from "./token-resolver.js";
 
-const STALE_CHECK_INTERVAL_MS = 30_000; // 30 seconds
-
 interface OtelConfig {
   endpoints?: string[];
 }
@@ -164,28 +162,8 @@ async function main(): Promise<void> {
   if (config.workspaceRoot !== null) {
     managerOpts.workingDirectory = config.workspaceRoot;
   }
-  if (config.stateDir !== null) {
-    managerOpts.persistPath = join(config.stateDir, "data", "agent-bindings.json");
-  }
   const sessionManager = new AgentSessionManager(managerOpts);
   ipc.setSessionManager(sessionManager);
-
-  // Listen for agent_notify push from gateway — backward-compatible fallback
-  const pendingHandler = (msg: Record<string, unknown>) => {
-    const channelId = msg["channelId"] as string | undefined;
-    const count = typeof msg["count"] === "number" ? msg["count"] as number : 1;
-    if (channelId === undefined || count <= 0) return;
-
-    if (!sessionManager.hasActiveSessionForChannel(channelId)) {
-      if (sessionManager.isChannelInBackoff(channelId)) {
-        log(`skipping session start for channel ${channelId.slice(0, 8)} (in backoff)`);
-        return;
-      }
-      log(`[fallback] starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
-      sessionManager.startSession({ boundChannelId: channelId });
-    }
-  };
-  streamEvents.on("agent_notify", pendingHandler);
 
   // Gateway-driven physical session commands (Phase 3)
   const startPhysicalSessionHandler = (msg: Record<string, unknown>) => {
@@ -201,7 +179,7 @@ async function main(): Promise<void> {
   const stopPhysicalSessionHandler = (msg: Record<string, unknown>) => {
     const sessionId = msg["sessionId"] as string;
     log(`stop_physical_session: session=${sessionId.slice(0, 8)}`);
-    // Find session by sessionId or by channel binding and stop it
+    // Find session by sessionId and stop it
     const status = sessionManager.getSessionStatus(sessionId);
     if (status !== undefined) {
       sessionManager.stopSession(sessionId);
@@ -210,13 +188,6 @@ async function main(): Promise<void> {
     }
   };
   streamEvents.on("stop_physical_session", stopPhysicalSessionHandler);
-
-  // Periodic stale check timer shell — kept for backward compatibility
-  // Gateway handles pending checks, max age, and stale detection in Phase 3.
-  const staleCheckTimer = setInterval(() => {
-    // Intentionally empty — gateway orchestrator now handles these checks.
-  }, STALE_CHECK_INTERVAL_MS);
-  staleCheckTimer.unref();
 
   // Wait for stop signal
   await new Promise<void>((resolve) => {
@@ -231,10 +202,8 @@ async function main(): Promise<void> {
   });
 
   log("shutting down");
-  streamEvents.removeListener("agent_notify", pendingHandler);
   streamEvents.removeListener("start_physical_session", startPhysicalSessionHandler);
   streamEvents.removeListener("stop_physical_session", stopPhysicalSessionHandler);
-  clearInterval(staleCheckTimer);
   await sessionManager.stopAll();
   await ipc.close();
   await shutdownOtel();
