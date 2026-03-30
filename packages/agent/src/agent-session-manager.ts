@@ -635,6 +635,14 @@ export class AgentSessionManager {
     entry.copilotSession = session;
     entry.info.status = "waiting";
 
+    // Notify gateway that a physical session has started
+    this.postToGateway({
+      type: "physical_session_started",
+      sessionId: entry.sessionId,
+      copilotSessionId: session.sessionId,
+      model: resolvedModel,
+    });
+
     // Forward all session events to gateway for observability
     const forwardEvent = (eventType: string, event?: { timestamp?: string; data?: unknown }) => {
       this.postToGateway({
@@ -975,6 +983,7 @@ export class AgentSessionManager {
       if (!entry.abortController.signal.aborted) {
         const elapsed = Date.now() - startTime;
         this.log(`session ${sessionId.slice(0, 8)} idle exit after ${Math.round(elapsed / 1000)}s (channel ${boundChannelId?.slice(0, 8) ?? "none"})`);
+        this.sendPhysicalSessionEnded(entry, "idle", elapsed);
         this.recordBackoffIfRapidFailure(boundChannelId, startTime);
         this.suspendSession(entry);
         this.notifyChannelSessionStopped(boundChannelId);
@@ -983,6 +992,8 @@ export class AgentSessionManager {
       const reason = err instanceof Error ? err.message : String(err);
       this.logError(`session ${sessionId.slice(0, 8)} error: ${reason}`);
       if (!entry.abortController.signal.aborted) {
+        const elapsed = Date.now() - startTime;
+        this.sendPhysicalSessionEnded(entry, "error", elapsed, reason);
         // Clear copilotSessionId so the next revival creates a fresh session
         // instead of trying to resume a broken one (e.g. "No tool output found")
         if (entry.copilotSessionId !== undefined) {
@@ -1022,6 +1033,27 @@ export class AgentSessionManager {
     if (channelId === undefined) return;
     const message = "[SYSTEM] Agent session timed out (stuck processing). A new session will start when you send a message.";
     this.postChannelMessage(channelId, message);
+  }
+
+  /** Send physical_session_ended notification to gateway. */
+  private sendPhysicalSessionEnded(
+    entry: AgentSessionEntry,
+    reason: "idle" | "error" | "aborted",
+    elapsedMs: number,
+    error?: string,
+  ): void {
+    const ps = entry.info.physicalSession;
+    const msg: Record<string, unknown> = {
+      type: "physical_session_ended",
+      sessionId: entry.sessionId,
+      reason,
+      copilotSessionId: entry.copilotSessionId ?? "",
+      elapsedMs,
+      totalInputTokens: ps?.totalInputTokens ?? 0,
+      totalOutputTokens: ps?.totalOutputTokens ?? 0,
+    };
+    if (error !== undefined) msg["error"] = error;
+    this.postToGateway(msg);
   }
 
   /** Fire-and-forget send to gateway via IPC stream. */

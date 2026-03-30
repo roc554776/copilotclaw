@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
-import { listenIpc, streamEvents, requestFromGateway } from "./ipc-server.js";
+import { listenIpc, streamEvents } from "./ipc-server.js";
 import { initOtel, getLogger, shutdownOtel } from "./otel.js";
 import { StructuredLogger } from "./structured-logger.js";
 import { type AuthConfig, resolveToken } from "./token-resolver.js";
@@ -170,7 +170,7 @@ async function main(): Promise<void> {
   const sessionManager = new AgentSessionManager(managerOpts);
   ipc.setSessionManager(sessionManager);
 
-  // Listen for agent_notify push from gateway — start sessions as needed
+  // Listen for agent_notify push from gateway — backward-compatible fallback
   const pendingHandler = (msg: Record<string, unknown>) => {
     const channelId = msg["channelId"] as string | undefined;
     const count = typeof msg["count"] === "number" ? msg["count"] as number : 1;
@@ -181,88 +181,40 @@ async function main(): Promise<void> {
         log(`skipping session start for channel ${channelId.slice(0, 8)} (in backoff)`);
         return;
       }
-      log(`starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
+      log(`[fallback] starting/reviving session for channel ${channelId.slice(0, 8)} (${count} pending messages)`);
       sessionManager.startSession({ boundChannelId: channelId });
     }
   };
   streamEvents.on("agent_notify", pendingHandler);
 
-  // Phase 2 IPC: listen for physical session commands from gateway (wiring in Phase 3)
+  // Gateway-driven physical session commands (Phase 3)
   const startPhysicalSessionHandler = (msg: Record<string, unknown>) => {
-    const sessionId = msg["sessionId"] as string;
     const channelId = msg["channelId"] as string;
     const copilotSessionId = msg["copilotSessionId"] as string | undefined;
-    const model = msg["model"] as string | undefined;
-    log(`received start_physical_session: session=${sessionId}, channel=${channelId.slice(0, 8)}, copilotSession=${copilotSessionId ?? "(new)"}, model=${model ?? "(auto)"}`);
+    log(`start_physical_session: channel=${channelId.slice(0, 8)}, copilotSession=${copilotSessionId ?? "(new)"}`);
+    const opts: { boundChannelId: string; copilotSessionId?: string } = { boundChannelId: channelId };
+    if (copilotSessionId !== undefined) opts.copilotSessionId = copilotSessionId;
+    sessionManager.startSession(opts);
   };
   streamEvents.on("start_physical_session", startPhysicalSessionHandler);
 
   const stopPhysicalSessionHandler = (msg: Record<string, unknown>) => {
     const sessionId = msg["sessionId"] as string;
-    log(`received stop_physical_session: session=${sessionId}`);
+    log(`stop_physical_session: session=${sessionId.slice(0, 8)}`);
+    // Find session by sessionId or by channel binding and stop it
+    const status = sessionManager.getSessionStatus(sessionId);
+    if (status !== undefined) {
+      sessionManager.stopSession(sessionId);
+    } else {
+      log(`stop_physical_session: session ${sessionId.slice(0, 8)} not found, ignoring`);
+    }
   };
   streamEvents.on("stop_physical_session", stopPhysicalSessionHandler);
 
-  // Check all suspended sessions for pending messages and revive as needed.
-  // Called on startup, stream reconnect, and periodically as reliability backstop.
-  const checkAllPending = async () => {
-    const statuses = sessionManager.getSessionStatuses();
-    for (const [, info] of Object.entries(statuses)) {
-      const channelId = info.boundChannelId;
-      if (channelId === undefined) continue;
-      if (sessionManager.hasActiveSessionForChannel(channelId)) continue;
-      if (sessionManager.isChannelInBackoff(channelId)) continue;
-      try {
-        const peekResult = await requestFromGateway({ type: "peek_pending", channelId });
-        if (peekResult !== null && peekResult !== undefined) {
-          log(`starting/reviving session for channel ${channelId.slice(0, 8)} (pending found)`);
-          sessionManager.startSession({ boundChannelId: channelId });
-        }
-      } catch {
-        // IPC error — skip
-      }
-    }
-  };
-
-  streamEvents.on("stream_connected", checkAllPending);
-  // Also run immediately on startup (stream is already connected at this point)
-  checkAllPending();
-
-  // Periodic checks: pending messages (reliability backstop) + stale/max-age
-  const staleCheckTimer = setInterval(async () => {
-    if (stopRequested) return;
-    // Backstop: check all channels for pending messages and revive suspended sessions
-    await checkAllPending();
-    try {
-      const sessionStatuses = sessionManager.getSessionStatuses();
-      for (const [sessionId, info] of Object.entries(sessionStatuses)) {
-        if (sessionManager.checkSessionMaxAge(sessionId)) continue;
-
-        const channelId = info.boundChannelId;
-        if (channelId === undefined) continue;
-
-        let oldestPendingId: string | undefined;
-        try {
-          const peekResult = await requestFromGateway({ type: "peek_pending", channelId });
-          if (peekResult !== null && peekResult !== undefined && typeof peekResult === "object" && "id" in (peekResult as object)) {
-            oldestPendingId = (peekResult as { id: string }).id;
-          }
-        } catch {
-          // IPC error — skip
-        }
-
-        const action = await sessionManager.checkStaleAndHandle(sessionId, oldestPendingId);
-        if (action === "flushed") {
-          try {
-            await requestFromGateway({ type: "flush_pending", channelId });
-          } catch {
-            // IPC error — non-fatal
-          }
-        }
-      }
-    } catch (err: unknown) {
-      logError(`stale check error: ${String(err)}`);
-    }
+  // Periodic stale check timer shell — kept for backward compatibility
+  // Gateway handles pending checks, max age, and stale detection in Phase 3.
+  const staleCheckTimer = setInterval(() => {
+    // Intentionally empty — gateway orchestrator now handles these checks.
   }, STALE_CHECK_INTERVAL_MS);
   staleCheckTimer.unref();
 

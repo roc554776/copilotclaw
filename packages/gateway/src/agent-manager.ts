@@ -44,6 +44,7 @@ export class AgentManager {
   private stream: IpcStream | null = null;
   private streamMessageHandler: StreamMessageHandler | null = null;
   private configToSend: Record<string, unknown> | null = null;
+  private streamConnectedCallbacks: Array<() => void> = [];
 
   constructor(options?: AgentManagerOptions) {
     const require = createRequire(import.meta.url);
@@ -84,6 +85,10 @@ export class AgentManager {
       // Push config immediately on connect
       if (this.configToSend !== null) {
         this.stream!.send({ type: "config", config: this.configToSend });
+      }
+      // Fire registered connected callbacks
+      for (const cb of this.streamConnectedCallbacks) {
+        try { cb(); } catch { /* ignore callback errors */ }
       }
     });
 
@@ -339,6 +344,11 @@ export class AgentManager {
   async stopAgent(): Promise<void> {
     const socketPath = getAgentSocketPath();
     await stopAgent(socketPath);
+  }
+
+  /** Register a callback to be called when the stream connects. */
+  onStreamConnected(callback: () => void): void {
+    this.streamConnectedCallbacks.push(callback);
   }
 
   /** Close the stream connection (for shutdown). */

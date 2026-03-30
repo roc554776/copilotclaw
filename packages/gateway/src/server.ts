@@ -10,6 +10,7 @@ import { getWorkspaceRoot } from "./workspace.js";
 import { LogBuffer } from "./log-buffer.js";
 import { renderEventsPage, renderSessionsListPage, renderStatusPage } from "./observability-pages.js";
 import { SessionEventStore } from "./session-event-store.js";
+import type { SessionOrchestrator } from "./session-orchestrator.js";
 import { Store } from "./store.js";
 import { SseBroadcaster } from "./sse-broadcaster.js";
 import { FRONTEND_DIST_DIR, FRONTEND_INDEX_HTML, hasFrontendDist } from "./frontend-dist.js";
@@ -130,6 +131,7 @@ export interface ServerDeps {
   channelProviders?: ChannelProvider[];
   logBuffer?: LogBuffer;
   sessionEventStore?: SessionEventStore;
+  sessionOrchestrator?: SessionOrchestrator;
 }
 
 function createRequestHandler(
@@ -139,6 +141,7 @@ function createRequestHandler(
   channelProviders: ChannelProvider[],
   logBuffer: LogBuffer,
   sessionEventStore: SessionEventStore | null,
+  sessionOrchestrator: SessionOrchestrator | null,
 ) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
@@ -176,7 +179,7 @@ function createRequestHandler(
       const agentStatus = agentManager !== null ? await agentManager.getStatus() : null;
       const agentCompatibility = agentManager !== null ? await agentManager.checkCompatibility() : "unavailable";
       const config = loadConfig(getProfileName());
-      json(res, 200, {
+      const statusResponse: Record<string, unknown> = {
         gateway: { status: "running", version: GATEWAY_VERSION, profile: getProfileName() ?? null },
         agent: agentStatus,
         agentCompatibility,
@@ -191,7 +194,12 @@ function createRequestHandler(
           auth: config.auth?.github ?? null,
           otel: config.otel ?? null,
         },
-      });
+      };
+      // Merge orchestrator session data when available (authoritative for abstract session state)
+      if (sessionOrchestrator !== null) {
+        statusResponse["orchestratorSessions"] = sessionOrchestrator.getSessionStatuses();
+      }
+      json(res, 200, statusResponse);
       return;
     }
 
@@ -520,13 +528,14 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const sseBroadcaster = options?.sseBroadcaster ?? new SseBroadcaster();
   const logBuffer = options?.logBuffer ?? new LogBuffer();
   const sessionEventStore = options?.sessionEventStore ?? null;
+  const sessionOrchestrator = options?.sessionOrchestrator ?? null;
 
   // Channel providers: use provided list or default to built-in chat
   const channelProviders = options?.channelProviders ?? [
     new BuiltinChatChannel({ store, agentManager, sseBroadcaster }),
   ];
 
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore);
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {
