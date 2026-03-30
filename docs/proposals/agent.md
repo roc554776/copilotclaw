@@ -569,6 +569,20 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
 - agent はメッセージの種別を知る必要がない。何を LLM に渡して何を渡さないかの判断、メッセージのフォーマットは gateway の責務
 - 対応方針: `drain_pending` の応答にフォーマット済みテキストを含めるか、store に入れる時点でフォーマット済みにする。agent のフォールバックは渡されたメッセージをそのまま結合するだけにする
 
+**v0.54.0 時点の監査結果 — agent に残るロジックの分類:**
+
+意図的に agent に残しているロジック（gateway 停止時の物理セッション延命のため）:
+- keepalive ポーリング（drain→wait→drain）: gateway 停止時に `copilotclaw_wait` が自律的に物理セッションを延命する唯一の手段。gateway オンライン時は `tool_call` RPC で gateway が処理する
+- hook fallback（`postToolUseFallback`）: gateway 停止時にリマインダーと pending 通知を最低限提供する。gateway オンライン時は hook RPC で gateway が処理する
+- モデル選択 fallback（`resolveModel`）: gateway がモデルを解決できなかった場合のため。gateway オンライン時は gateway の `resolveModel` が主導する
+- ライフサイクル fallback（`queryLifecycleAction` のデフォルト `"wait"`）: gateway 停止時に物理セッションを破棄しないため
+
+残存する設計違反（未実現）:
+- swallowed-message 検出: `pendingReplyExpected` フラグの管理と `SWALLOWED_MESSAGE_INSTRUCTION` の注入が agent にある。gateway オンライン時でも agent が判断している。gateway が管理すべき
+- reinject 上限のハードコード: `MAX_REINJECT=10` が agent にハードコードされている。gateway config にすべき
+- `reminderState` の TOCTOU workaround: `reminderState` のミュータブル状態と同期的消費パターンが agent にある。本来 agent にこの状態があるべきではなく、gateway が判断すべき
+- コメント内の「abstract session」: `physical-session-manager.ts` 内のコメントに抽象セッションへの言及がある。agent は抽象セッションの存在を知るべきではない
+
 **v0.49.0 移行の経緯:**
 
 v0.44.0〜v0.48.0 にかけて、設計原則（agent はミニマル、gateway が制御する）に反して agent 側に pending ポーリング、flush ロジック、stream 再接続時の pending チェック、バックオフ等を場当たり的に追加してしまった。その結果、cron が止まる問題が繰り返し発生し、gateway を更新しても agent を再起動しない限り修正が反映されない状態に陥った。v0.49.0 ではこれらのアドホックなコードを全て削除し、gateway 側の SessionOrchestrator に一元化する大規模な修正を行った。
