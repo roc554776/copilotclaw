@@ -516,6 +516,41 @@ export function StatusPage() {
                                         </a>
                                       </span>
                                     </div>
+                                    <div style={rowStyle}>
+                                      <span style={labelStyle}>
+                                        Effective Prompt
+                                      </span>
+                                      <span>
+                                        {effectivePrompts.some((sp) => sp.sessionId === hps.sessionId) ? (
+                                          <a
+                                            href="#"
+                                            onClick={(e) => {
+                                              e.preventDefault();
+                                              setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== hps.sessionId));
+                                            }}
+                                          >
+                                            Hide
+                                          </a>
+                                        ) : (
+                                          <a
+                                            href="#"
+                                            onClick={(e) => {
+                                              e.preventDefault();
+                                              loadEffectivePrompt(hps.sessionId);
+                                            }}
+                                          >
+                                            View &rarr;
+                                          </a>
+                                        )}
+                                      </span>
+                                    </div>
+                                    {effectivePrompts
+                                      .filter((sp) => sp.sessionId === hps.sessionId)
+                                      .map((sp) => (
+                                        <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
+                                          <pre style={preStyle}>{sp.data.prompt}</pre>
+                                        </div>
+                                      ))}
                                   </div>
                                 ),
                               )}
