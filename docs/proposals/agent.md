@@ -466,7 +466,13 @@ LOW — 運用:
 - セッション終了を gateway に報告する（成功/失敗/idle exit）
 - gateway から受け取った設定でセッションを構成する（プロンプト、ツール、hooks）
 
-**v0.49.0 移行後の動作確認課題:**
+**v0.49.0 移行の経緯と動作確認課題:**
+
+v0.44.0〜v0.48.0 にかけて、設計原則（agent はミニマル、gateway が制御する）に反して agent 側に pending ポーリング、flush ロジック、stream 再接続時の pending チェック、バックオフ等を場当たり的に追加してしまった。その結果、cron が止まる問題が繰り返し発生し、gateway を更新しても agent を再起動しない限り修正が反映されない状態に陥った。v0.49.0 ではこれらのアドホックなコードを全て削除し、gateway 側の SessionOrchestrator に一元化する大規模な修正を行った。
+
+この経緯から、以下の動作確認が必要:
+- v0.44.0〜v0.48.0 で agent 側に追加した pending チェック・flush・バックオフのコードが正しく削除されているか
+- それらの機能が gateway 側の SessionOrchestrator で正しく代替されているか
 - gateway 再起動後に cron が正常に発火し、セッションが revive されるか
 - セッション idle exit 後に pending が flush され、次の cron が dedup でブロックされないか
 - agent 再起動（stream disconnect）後に gateway が全セッションを suspended に遷移し、再接続時に pending を検出して revive するか
