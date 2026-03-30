@@ -190,6 +190,14 @@ async function main(): Promise<void> {
   };
   streamEvents.on("stream_connected", streamConnectedHandler);
 
+  // The first stream_connected event fires BEFORE this handler is registered
+  // (stream connects → config push → agent creates sessionManager → handler registered).
+  // Send running_sessions immediately to compensate for the missed first event.
+  flushSendQueue();
+  const initialRunning = sessionManager.getRunningPhysicalSessionsSummary();
+  log(`initial running_sessions report: ${initialRunning.length} session(s)`);
+  sendToGateway({ type: "running_sessions", sessions: initialRunning });
+
   // Gateway-driven physical session commands (Phase 3)
   const startPhysicalSessionHandler = (msg: Record<string, unknown>) => {
     const sessionId = msg["sessionId"] as string;
