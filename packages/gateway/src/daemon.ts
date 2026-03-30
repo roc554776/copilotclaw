@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentPromptConfig } from "./agent-config.js";
 import { AgentManager } from "./agent-manager.js";
@@ -52,6 +53,15 @@ async function main(): Promise<void> {
       };
       if (parentId !== undefined) event.parentId = parentId;
       sessionEventStore.appendEvent(sessionId, event);
+
+      // Cache quotaSnapshots from assistant.usage events to disk
+      if (eventType === "assistant.usage" && data["quotaSnapshots"] !== undefined) {
+        try {
+          const cacheDir = join(getStateDir(getProfileName()), "data");
+          mkdirSync(cacheDir, { recursive: true });
+          writeFileSync(join(cacheDir, "quota-cache.json"), JSON.stringify({ quotaSnapshots: data["quotaSnapshots"] }, null, 2) + "\n", "utf-8");
+        } catch { /* ignore */ }
+      }
 
       // Subagent completion/failure: insert system message and notify agent
       if (channelId !== undefined && (eventType === "subagent.completed" || eventType === "subagent.failed")) {
