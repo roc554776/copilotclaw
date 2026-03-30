@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock @github/copilot-sdk before importing the module under test.
 // CopilotClient is used with `new`, so we use a vi.fn() that is a constructor.
@@ -242,6 +242,145 @@ describe("AgentSessionManager — physical session lifecycle", () => {
       ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(notifyCalls).toHaveLength(0);
+  });
+
+  describe("gateway lifecycle action routing", () => {
+    const defaultLifecycleMock = async (msg: Record<string, unknown>) => {
+      if (msg.type === "lifecycle") return { action: "stop", clearCopilotSessionId: msg.event === "error" };
+      if (msg.type === "hook") return null;
+      return null;
+    };
+
+    beforeEach(() => {
+      (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(defaultLifecycleMock);
+    });
+
+    afterEach(() => {
+      (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(defaultLifecycleMock);
+      vi.clearAllMocks();
+    });
+
+    it("keeps session alive (suspended=false) when gateway returns wait", async () => {
+      const rpcMock = requestFromGateway as ReturnType<typeof vi.fn>;
+      rpcMock.mockImplementation(async (msg: Record<string, unknown>) => {
+        if (msg.type === "lifecycle") return { action: "wait" };
+        return null;
+      });
+
+      installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+
+      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-wait" });
+
+      await wait(50);
+
+      // Session must NOT be suspended — "wait" means keep alive
+      const status = manager.getSessionStatuses()[sessionId]?.status;
+      expect(status).not.toBe("suspended");
+      // physical_session_ended must NOT be sent
+      const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+      const endedCalls = ipcSendSpy.mock.calls.filter(
+        ([msg]: [Record<string, unknown>]) => msg.type === "physical_session_ended",
+      );
+      expect(endedCalls).toHaveLength(0);
+    });
+
+    it("keeps session alive when gateway is unreachable (default=wait)", async () => {
+      const rpcMock = requestFromGateway as ReturnType<typeof vi.fn>;
+      rpcMock.mockImplementation(async (msg: Record<string, unknown>) => {
+        if (msg.type === "lifecycle") throw new Error("gateway unreachable");
+        return null;
+      });
+
+      installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+
+      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-offline" });
+
+      await wait(50);
+
+      // Must survive gateway failure without crashing, and session must not be suspended
+      const status = manager.getSessionStatuses()[sessionId]?.status;
+      expect(status).not.toBe("suspended");
+      const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+      const endedCalls = ipcSendSpy.mock.calls.filter(
+        ([msg]: [Record<string, unknown>]) => msg.type === "physical_session_ended",
+      );
+      expect(endedCalls).toHaveLength(0);
+    });
+
+    it("suspends session when gateway returns stop (explicit stop decision)", async () => {
+      const rpcMock = requestFromGateway as ReturnType<typeof vi.fn>;
+      rpcMock.mockImplementation(async (msg: Record<string, unknown>) => {
+        if (msg.type === "lifecycle") return { action: "stop" };
+        return null;
+      });
+
+      installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+
+      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-stop-explicit" });
+
+      await wait(50);
+
+      expect(manager.getSessionStatuses()[sessionId]?.status).toBe("suspended");
+    });
+
+    it("reinjects once when gateway returns reinject then stop", async () => {
+      const rpcMock = requestFromGateway as ReturnType<typeof vi.fn>;
+      let callCount = 0;
+      rpcMock.mockImplementation(async (msg: Record<string, unknown>) => {
+        if (msg.type === "lifecycle") {
+          callCount += 1;
+          // First idle → reinject; second idle → stop
+          return callCount === 1
+            ? { action: "reinject" }
+            : { action: "stop" };
+        }
+        return null;
+      });
+
+      // Each createSession/resumeSession call returns a fresh idle session
+      installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+
+      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-reinject" });
+
+      // Allow enough time for two idle cycles
+      await wait(200);
+
+      // After reinject then stop, session should be suspended
+      expect(manager.getSessionStatuses()[sessionId]?.status).toBe("suspended");
+      // lifecycle RPC should have been called at least twice
+      expect(callCount).toBeGreaterThanOrEqual(2);
+    });
+
+    it("treats reinject as wait after hitting reinject cap", async () => {
+      const MAX_REINJECT = 10;
+      const rpcMock = requestFromGateway as ReturnType<typeof vi.fn>;
+      rpcMock.mockImplementation(async (msg: Record<string, unknown>) => {
+        if (msg.type === "lifecycle") return { action: "reinject" };
+        return null;
+      });
+
+      installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+
+      const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+      const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-cap" });
+
+      // Allow time for cap to be hit (MAX_REINJECT idle cycles at ~5ms each)
+      await wait(500);
+
+      // After hitting cap, session must be in "wait" state (not suspended, not deleted)
+      const statuses = manager.getSessionStatuses();
+      const status = statuses[sessionId]?.status;
+      expect(status).not.toBe("suspended");
+      // RPC should have been called at most MAX_REINJECT + 1 times (cap prevents further loops)
+      const lifecycleCalls = rpcMock.mock.calls.filter(
+        ([msg]: [Record<string, unknown>]) => msg.type === "lifecycle",
+      );
+      expect(lifecycleCalls.length).toBeLessThanOrEqual(MAX_REINJECT + 1);
+    });
   });
 });
 

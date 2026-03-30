@@ -32,6 +32,7 @@ interface AgentSessionEntry {
   abortController: AbortController;
   sessionPromise: Promise<void>;
   generation: number;
+  reinjectCount: number;
 }
 
 export interface AgentSessionManagerOptions {
@@ -237,6 +238,7 @@ export class AgentSessionManager {
       abortController,
       sessionPromise: Promise.resolve(),
       generation,
+      reinjectCount: 0,
     };
 
     if (boundChannelId !== undefined) {
@@ -694,6 +696,8 @@ export class AgentSessionManager {
     const sessionId = entry.sessionId;
     const boundChannelId = entry.info.boundChannelId;
 
+    const MAX_REINJECT = 10;
+
     const handleLifecycleEvent = async (event: "idle" | "error", error?: string) => {
       if (entry.abortController.signal.aborted) return;
       const elapsed = Date.now() - startTime;
@@ -705,6 +709,11 @@ export class AgentSessionManager {
       }
 
       const decision = await this.queryLifecycleAction(entry, event, elapsed, error);
+
+      // Re-check abort after async RPC — stopAll may have set the signal while we
+      // were awaiting the gateway response and already captured the old sessionPromise.
+      if (entry.abortController.signal.aborted) return;
+
       this.log(`session ${sessionId.slice(0, 8)} lifecycle decision: ${decision.action}`);
 
       if (decision.clearCopilotSessionId && entry.copilotSessionId !== undefined) {
@@ -712,7 +721,17 @@ export class AgentSessionManager {
         entry.copilotSessionId = undefined;
       }
 
-      switch (decision.action) {
+      // Cap reinject depth to prevent unbounded recursion when gateway persistently
+      // returns "reinject" (e.g. due to a bug). Treat excess as "wait".
+      const effectiveAction =
+        decision.action === "reinject" && entry.reinjectCount >= MAX_REINJECT
+          ? "wait"
+          : decision.action;
+      if (effectiveAction !== decision.action) {
+        this.logError(`session ${sessionId.slice(0, 8)} reinject cap reached (${entry.reinjectCount}), treating as "wait"`);
+      }
+
+      switch (effectiveAction) {
         case "stop":
           this.sendPhysicalSessionEnded(entry, event, elapsed, error);
           this.suspendSession(entry);
@@ -721,7 +740,8 @@ export class AgentSessionManager {
         case "reinject":
           // Re-enter the session loop with a new send() call.
           // This keeps the physical session alive by sending a new prompt.
-          this.log(`session ${sessionId.slice(0, 8)} reinjecting`);
+          entry.reinjectCount += 1;
+          this.log(`session ${sessionId.slice(0, 8)} reinjecting (count: ${entry.reinjectCount})`);
           entry.sessionPromise = this.attachSessionLifecycle(entry, clientToStop);
           break;
         case "wait":
