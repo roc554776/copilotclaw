@@ -135,7 +135,7 @@
 - suspend された物理セッションの effective system prompt 確認（physicalSessionHistory 内の各エントリに View → リンク追加）（v0.48.0）
 
 **未実現:**
-- Gateway-Agent 責務の再配置: 抽象セッション管理を gateway 側に移動、agent process は物理セッションのみ管理
+- Gateway-Agent 責務の再配置: agent process 監査で CRITICAL 4件・HIGH 4件・MEDIUM 6件・LOW 1件の設計違反を検出。抽象セッション管理、バックオフ、stale 検出、pending ポーリング、通知ポリシー等を gateway 側に移行する必要がある
 - gateway 停止時の物理セッション延命（実装確認済み — copilotclaw_wait のエラー不可侵性により IPC 切断中も keepalive cycle が継続）
 - gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）
 - cron ジョブの enable/disable 切り替え（CronJobConfig に `enabled` フィールド追加）（v0.42.0 で実現済み）
