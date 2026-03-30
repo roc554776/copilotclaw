@@ -45,8 +45,8 @@ export interface AgentSessionManagerOptions {
   debugLogLevel?: "info" | "debug";
   /** Prompt and session config pushed from gateway. */
   prompts: {
-    channelOperator: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
-    worker: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
+    customAgents?: Array<{ name: string; displayName: string; description: string; prompt: string; infer: boolean }>;
+    primaryAgentName?: string;
     systemReminder: string;
     initialPrompt: string;
     staleTimeoutMs: number;
@@ -55,6 +55,10 @@ export interface AgentSessionManagerOptions {
     backoffDurationMs: number;
     keepaliveTimeoutMs?: number;
     reminderThresholdPercent?: number;
+    knownSections?: string[];
+    maxQueueSize?: number;
+    clientOptions?: Record<string, unknown>;
+    sessionConfigOverrides?: Record<string, unknown>;
   };
   /** Structured log function (info level). Falls back to structured JSON on console.error. */
   log?: (message: string) => void;
@@ -84,12 +88,15 @@ export class AgentSessionManager {
   private readonly workingDirectory: string | undefined;
   private readonly githubToken: string | undefined;
   private readonly debugLogLevel: "info" | "debug";
-  private readonly channelOperatorConfig: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
-  private readonly workerConfig: { name: string; displayName: string; description: string; prompt: string; infer: boolean };
+  private readonly customAgents: Array<{ name: string; displayName: string; description: string; prompt: string; infer: boolean }>;
+  private readonly primaryAgentName: string;
   private readonly systemReminder: string;
   private readonly initialPrompt: string;
   private readonly keepaliveTimeoutMs: number;
   private readonly reminderThresholdPercent: number;
+  private readonly knownSections: string[];
+  private readonly clientOptions: Record<string, unknown>;
+  private readonly sessionConfigOverrides: Record<string, unknown>;
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
   private readonly debug: (message: string) => void;
@@ -108,12 +115,20 @@ export class AgentSessionManager {
       console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
     };
     this.debugLogLevel = options.debugLogLevel ?? "info";
-    this.channelOperatorConfig = options.prompts.channelOperator;
-    this.workerConfig = options.prompts.worker;
+    // Dynamic custom agents list from gateway (passthrough to SDK)
+    this.customAgents = options.prompts.customAgents ?? [];
+    this.primaryAgentName = options.prompts.primaryAgentName ?? this.customAgents.find((a) => !a.infer)?.name ?? "channel-operator";
     this.systemReminder = options.prompts.systemReminder;
     this.initialPrompt = options.prompts.initialPrompt;
     this.keepaliveTimeoutMs = options.prompts.keepaliveTimeoutMs ?? 25 * 60 * 1000;
     this.reminderThresholdPercent = options.prompts.reminderThresholdPercent ?? 0.10;
+    this.knownSections = options.prompts.knownSections ?? [
+      "identity", "tone", "tool_efficiency", "environment_context",
+      "code_change_rules", "guidelines", "safety", "tool_instructions",
+      "custom_instructions", "last_instructions",
+    ];
+    this.clientOptions = options.prompts.clientOptions ?? {};
+    this.sessionConfigOverrides = options.prompts.sessionConfigOverrides ?? {};
     this.log = options.log ?? defaultLog;
     this.logError = options.logError ?? defaultLogError;
     this.debug = this.debugLogLevel === "debug"
@@ -121,12 +136,13 @@ export class AgentSessionManager {
       : () => {};
   }
 
-  /** Create a CopilotClient with the configured auth token (if any). */
+  /** Create a CopilotClient with gateway-provided options (passthrough). */
   private createClient(): CopilotClient {
+    const opts: Record<string, unknown> = { ...this.clientOptions };
     if (this.githubToken !== undefined) {
-      return new CopilotClient({ githubToken: this.githubToken });
+      opts["githubToken"] = this.githubToken;
     }
-    return new CopilotClient();
+    return new CopilotClient(opts as ConstructorParameters<typeof CopilotClient>[0]);
   }
 
   private pooledClient: CopilotClient | undefined;
@@ -352,17 +368,13 @@ export class AgentSessionManager {
       capturedSections[sectionId] = content;
       return content; // Return unchanged — pass-through
     };
-    const KNOWN_SECTIONS = [
-      "identity", "tone", "tool_efficiency", "environment_context",
-      "code_change_rules", "guidelines", "safety", "tool_instructions",
-      "custom_instructions", "last_instructions",
-    ];
+    // Use gateway-provided section list (no hardcoded list in agent)
     const sections: Record<string, { action: (content: string) => Promise<string> }> = {};
-    for (const id of KNOWN_SECTIONS) {
+    for (const id of this.knownSections) {
       sections[id] = { action: makeSectionCapture(id) };
     }
 
-    // Resume existing SDK session or create new one
+    // Build session config with gateway-provided overrides (passthrough)
     const baseConfig = {
       model: resolvedModel,
       ...(this.workingDirectory !== undefined ? { workingDirectory: this.workingDirectory } : {}),
@@ -371,12 +383,11 @@ export class AgentSessionManager {
         mode: "customize" as const,
         sections,
       },
-      // Custom agents: channel-operator (parent, infer:false) + worker (subagent, infer:true)
-      customAgents: [
-        { ...this.channelOperatorConfig, tools: null },
-        { ...this.workerConfig, tools: null },
-      ],
-      agent: this.channelOperatorConfig.name,
+      // Dynamic custom agents list from gateway (passthrough to SDK)
+      customAgents: this.customAgents.map((a) => ({ ...a, tools: null })),
+      agent: this.primaryAgentName,
+      // Gateway-provided session config overrides (passthrough to SDK)
+      ...this.sessionConfigOverrides,
     };
     let session: CopilotSession;
     if (entry.copilotSessionId !== undefined) {

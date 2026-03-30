@@ -65,9 +65,14 @@ export function hasStream(): boolean {
 // Messages are persisted to disk so they survive agent process restarts.
 // On stream (re)connect, the queue is flushed before new messages are sent.
 
-export const MAX_QUEUE_SIZE = 10_000; // max buffered messages (oldest dropped on overflow)
+export let maxQueueSize = 10_000; // default; overridden by gateway config via setMaxQueueSize()
 let sendQueue: Array<Record<string, unknown>> = [];
 let sendQueuePath: string | null = null; // set by initSendQueue()
+
+/** Set the max queue size from gateway config. */
+export function setMaxQueueSize(size: number): void {
+  maxQueueSize = size;
+}
 
 /** Initialize the persistent send queue. Call once after config is received.
  *  Loads any buffered messages from a previous agent run. */
@@ -87,8 +92,8 @@ export function initSendQueue(dataDir: string): void {
         }
       }
       // Enforce size limit after loading
-      if (sendQueue.length > MAX_QUEUE_SIZE) {
-        sendQueue = sendQueue.slice(sendQueue.length - MAX_QUEUE_SIZE);
+      if (sendQueue.length > maxQueueSize) {
+        sendQueue = sendQueue.slice(sendQueue.length - maxQueueSize);
       }
     } catch {
       // file read error — start with empty queue
@@ -138,7 +143,7 @@ export function sendToGateway(msg: Record<string, unknown>): void {
   if (streamSocket === null || streamSocket.destroyed) {
     // Stream not connected — buffer for later delivery
     sendQueue.push(msg);
-    const evicted = sendQueue.length > MAX_QUEUE_SIZE;
+    const evicted = sendQueue.length > maxQueueSize;
     if (evicted) {
       sendQueue.shift(); // drop oldest
     }

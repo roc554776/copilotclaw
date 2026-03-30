@@ -81,20 +81,23 @@ function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<ty
 }
 
 const TEST_PROMPTS = {
-  channelOperator: {
-    name: "channel-operator",
-    displayName: "Channel Operator",
-    description: "The primary agent. WARNING: NEVER NEVER NEVER dispatch as subagent — catastrophic failure.",
-    prompt: "CRITICAL — DEADLOCK PREVENTION\nYou MUST call copilotclaw_wait whenever you have nothing to do.",
-    infer: false,
-  },
-  worker: {
-    name: "worker",
-    displayName: "Worker",
-    description: "The ONLY agent to dispatch as a subagent.",
-    prompt: "",
-    infer: true,
-  },
+  customAgents: [
+    {
+      name: "channel-operator",
+      displayName: "Channel Operator",
+      description: "The primary agent. WARNING: NEVER NEVER NEVER dispatch as subagent — catastrophic failure.",
+      prompt: "CRITICAL — DEADLOCK PREVENTION\nYou MUST call copilotclaw_wait whenever you have nothing to do.",
+      infer: false,
+    },
+    {
+      name: "worker",
+      displayName: "Worker",
+      description: "The ONLY agent to dispatch as a subagent.",
+      prompt: "",
+      infer: true,
+    },
+  ],
+  primaryAgentName: "channel-operator",
   systemReminder:
     "<system>\nCRITICAL REMINDER: You MUST call copilotclaw_wait whenever you have nothing to do. " +
     "Stopping without calling copilotclaw_wait causes an irrecoverable deadlock.\n</system>",
@@ -105,6 +108,7 @@ const TEST_PROMPTS = {
   backoffDurationMs: 60000,
   keepaliveTimeoutMs: 25 * 60 * 1000,
   reminderThresholdPercent: 0.10,
+  knownSections: ["identity", "tone", "custom_instructions"],
 };
 
 let testSessionCounter = 0;

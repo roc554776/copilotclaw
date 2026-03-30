@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { AgentSessionManager, type AgentSessionManagerOptions } from "./agent-session-manager.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
-import { flushSendQueue, initSendQueue, listenIpc, sendToGateway, streamEvents } from "./ipc-server.js";
+import { flushSendQueue, initSendQueue, listenIpc, sendToGateway, setMaxQueueSize, streamEvents } from "./ipc-server.js";
 import { initOtel, getLogger, shutdownOtel } from "./otel.js";
 import { StructuredLogger } from "./structured-logger.js";
 import { type AuthConfig, resolveToken } from "./token-resolver.js";
@@ -23,8 +23,8 @@ interface CustomAgentDef {
 }
 
 interface AgentPromptConfig {
-  channelOperator: CustomAgentDef;
-  worker: CustomAgentDef;
+  customAgents?: CustomAgentDef[];
+  primaryAgentName?: string;
   systemReminder: string;
   initialPrompt: string;
   staleTimeoutMs: number;
@@ -33,6 +33,10 @@ interface AgentPromptConfig {
   backoffDurationMs: number;
   keepaliveTimeoutMs?: number;
   reminderThresholdPercent?: number;
+  knownSections?: string[];
+  maxQueueSize?: number;
+  clientOptions?: Record<string, unknown>;
+  sessionConfigOverrides?: Record<string, unknown>;
 }
 
 interface GatewayConfig {
@@ -141,6 +145,9 @@ async function main(): Promise<void> {
 
     // Initialize persistent send queue for gateway disconnect resilience.
     // Restores any buffered messages from a previous agent run.
+    if (config.prompts?.maxQueueSize !== undefined) {
+      setMaxQueueSize(config.prompts.maxQueueSize);
+    }
     initSendQueue(dataDir);
     log("send queue initialized");
   }

@@ -14,8 +14,11 @@ export interface CustomAgentDef {
 }
 
 export interface AgentPromptConfig {
-  channelOperator: CustomAgentDef;
-  worker: CustomAgentDef;
+  /** Dynamic list of custom agents. Agent passes these directly to SDK customAgents.
+   *  The first entry with infer:false is used as the top-level agent. */
+  customAgents: CustomAgentDef[];
+  /** Name of the top-level agent to run (must match one of customAgents). */
+  primaryAgentName: string;
   systemReminder: string;
   initialPrompt: string;
   staleTimeoutMs: number;
@@ -25,6 +28,15 @@ export interface AgentPromptConfig {
   keepaliveTimeoutMs: number;
   /** Context usage percentage increment that triggers a system prompt reminder (0.0–1.0). */
   reminderThresholdPercent: number;
+  /** System prompt section IDs to capture via transform callbacks.
+   *  Agent iterates this list and registers a pass-through capture for each. */
+  knownSections: string[];
+  /** Max send queue size. Agent drops oldest messages when exceeded. */
+  maxQueueSize: number;
+  /** Extra options to pass to CopilotClient constructor (passthrough). */
+  clientOptions?: Record<string, unknown>;
+  /** Extra options to merge into createSession/resumeSession config (passthrough). */
+  sessionConfigOverrides?: Record<string, unknown>;
 }
 
 interface ModelInfo {
@@ -141,27 +153,30 @@ const SYSTEM_REMINDER =
 
 export function getAgentPromptConfig(): AgentPromptConfig {
   return {
-    channelOperator: {
-      name: "channel-operator",
-      displayName: "Channel Operator",
-      description:
-        "The primary agent that directly communicates with the user through the channel. " +
-        "WARNING: This agent must NEVER be called as a subagent. " +
-        "NEVER NEVER NEVER dispatch this agent as a subagent — doing so will cause catastrophic failure. " +
-        "This agent is EXCLUSIVELY the top-level operator that manages the channel lifecycle.",
-      prompt: CHANNEL_OPERATOR_PROMPT,
-      infer: false,
-    },
-    worker: {
-      name: "worker",
-      displayName: "Worker",
-      description:
-        "The ONLY agent to dispatch as a subagent. " +
-        "When you need to delegate work to a subagent, you MUST use this agent — there is no other option. " +
-        "This is the sole subagent available for task delegation. Always use 'worker' for any subagent dispatch.",
-      prompt: "",
-      infer: true,
-    },
+    customAgents: [
+      {
+        name: "channel-operator",
+        displayName: "Channel Operator",
+        description:
+          "The primary agent that directly communicates with the user through the channel. " +
+          "WARNING: This agent must NEVER be called as a subagent. " +
+          "NEVER NEVER NEVER dispatch this agent as a subagent — doing so will cause catastrophic failure. " +
+          "This agent is EXCLUSIVELY the top-level operator that manages the channel lifecycle.",
+        prompt: CHANNEL_OPERATOR_PROMPT,
+        infer: false,
+      },
+      {
+        name: "worker",
+        displayName: "Worker",
+        description:
+          "The ONLY agent to dispatch as a subagent. " +
+          "When you need to delegate work to a subagent, you MUST use this agent — there is no other option. " +
+          "This is the sole subagent available for task delegation. Always use 'worker' for any subagent dispatch.",
+        prompt: "",
+        infer: true,
+      },
+    ],
+    primaryAgentName: "channel-operator",
     systemReminder: SYSTEM_REMINDER,
     initialPrompt: "Call copilotclaw_wait now to receive the first user message.",
     staleTimeoutMs: 10 * 60 * 1000, // 10 minutes
@@ -170,5 +185,11 @@ export function getAgentPromptConfig(): AgentPromptConfig {
     backoffDurationMs: 60_000, // wait 60s before retrying
     keepaliveTimeoutMs: 25 * 60 * 1000, // 25 minutes
     reminderThresholdPercent: 0.10, // remind every 10% context usage increase
+    knownSections: [
+      "identity", "tone", "tool_efficiency", "environment_context",
+      "code_change_rules", "guidelines", "safety", "tool_instructions",
+      "custom_instructions", "last_instructions",
+    ],
+    maxQueueSize: 10_000,
   };
 }

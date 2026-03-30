@@ -114,30 +114,30 @@ describe("send queue — buffering and persistence", () => {
   });
 
   it("drops oldest messages when queue exceeds size limit", async () => {
-    const { initSendQueue, sendToGateway, MAX_QUEUE_SIZE } = await getModule();
+    const { initSendQueue, sendToGateway, maxQueueSize } = await getModule();
 
-    // Pre-populate the disk file with exactly MAX_QUEUE_SIZE lines so that the
+    // Pre-populate the disk file with exactly maxQueueSize lines so that the
     // very next sendToGateway call triggers eviction without a 10000-message loop.
     const queuePath = join(TEST_DIR, "send-queue.jsonl");
-    const preLines = Array.from({ length: MAX_QUEUE_SIZE }, (_, i) =>
+    const preLines = Array.from({ length: maxQueueSize }, (_, i) =>
       JSON.stringify({ type: "old", index: i }),
     );
     writeFileSync(queuePath, preLines.join("\n") + "\n", "utf-8");
 
-    initSendQueue(TEST_DIR); // restores MAX_QUEUE_SIZE messages from disk
+    initSendQueue(TEST_DIR); // restores maxQueueSize messages from disk
 
     // This push should evict the oldest (index: 0) and trigger a full disk rewrite.
-    sendToGateway({ type: "new", index: MAX_QUEUE_SIZE });
+    sendToGateway({ type: "new", index: maxQueueSize });
 
-    // Disk file must still contain exactly MAX_QUEUE_SIZE lines.
+    // Disk file must still contain exactly maxQueueSize lines.
     const diskContent = readFileSync(queuePath, "utf-8");
     const diskLines = diskContent.trim().split("\n").filter((l) => l.trim() !== "");
-    expect(diskLines).toHaveLength(MAX_QUEUE_SIZE);
+    expect(diskLines).toHaveLength(maxQueueSize);
 
     // The oldest message (index: 0) must be gone; the newest must be present.
     const parsed = diskLines.map((l) => JSON.parse(l));
     expect(parsed[0]).toMatchObject({ type: "old", index: 1 });
-    expect(parsed[MAX_QUEUE_SIZE - 1]).toMatchObject({ type: "new", index: MAX_QUEUE_SIZE });
+    expect(parsed[maxQueueSize - 1]).toMatchObject({ type: "new", index: maxQueueSize });
   });
 
   it("handles missing queue file gracefully on init", async () => {

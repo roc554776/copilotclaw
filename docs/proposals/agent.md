@@ -512,12 +512,12 @@ LOW — 運用:
 実現済み:
 - SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: **v0.50.0 で実現済み。** `session.on(handler)` catch-all で SDK の全イベントを無条件に forward するよう変更。新しい SDK イベントタイプが追加されても agent 更新不要。fire-and-forget なので gateway 停止時も物理セッションに影響しない
 
-未実現 — config 化・パラメトライズ:
-- KNOWN_SECTIONS リストの gateway config 化（未実現）: 現在 agent にハードコードされているシステムプロンプトキャプチャのセクション一覧（`identity`, `tone`, `tool_efficiency` 等）を gateway config で送り、agent はそのまま使う。新しいセクションの追加が gateway-only で可能になる
-- send queue の overflow ポリシーの config 化（未実現）: `MAX_QUEUE_SIZE` を gateway config に含め、agent は受け取った値を使う
-- カスタムエージェント定義の動的リスト化（未実現）: 現在 channelOperator + worker の 2 つ固定だが、gateway config で任意のリストを送り、agent がそのまま SDK の `customAgents` に渡す。新しい agent type 追加が gateway-only で可能になる
-- CopilotClient コンストラクタ引数のパラメトライズ（未実現）: gateway が JSON で送り、agent がそのまま SDK に渡すパススルー構造にする。SDK が新オプションを追加しても agent 更新不要
-- createSession config のパラメトライズ（未実現）: gateway が session config を JSON で送り、agent がそのまま SDK の `createSession` に渡すパススルー構造にする。agent は SDK config の詳細を知る必要がない
+config 化・パラメトライズ（v0.50.0 で実現済み）:
+- KNOWN_SECTIONS リストの gateway config 化: `knownSections` フィールドで gateway から送信。agent はそのまま使う。新しいセクション追加が gateway-only で可能
+- send queue の overflow ポリシーの config 化: `maxQueueSize` フィールドで gateway から送信。agent は `setMaxQueueSize()` で適用
+- カスタムエージェント定義の動的リスト化: `customAgents` 配列 + `primaryAgentName` で任意のリストを送信。agent がそのまま SDK に渡す。新 agent type 追加が gateway-only で可能
+- CopilotClient コンストラクタ引数のパラメトライズ: `clientOptions` で gateway から送信。agent は `githubToken` とマージして SDK に渡すパススルー構造
+- createSession config のパラメトライズ: `sessionConfigOverrides` で gateway から送信。agent が baseConfig にマージして SDK に渡す
 
 未実現 — ロジックの gateway 移行:
 - ツールロジックを gateway の RPC コールバックに委譲する（未実現）: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
