@@ -134,8 +134,9 @@
 - トークン消費指数と消費量の閲覧 UI（/status の Token Consumption セクション。直近 5h・期間別・モデル別の表示。computeIndex = SUM{MAX(multiplier,0.1)*totalTokens}）（v0.48.0）
 - suspend された物理セッションの effective system prompt 確認（physicalSessionHistory 内の各エントリに View → リンク追加）（v0.48.0）
 
+- Gateway-Agent 責務の再配置（v0.49.0）: SessionOrchestrator を gateway に新設し、抽象セッション管理（チャンネルバインディング、suspended 永続化、復活、状態管理）、セッションライフサイクルポリシー（バックオフ、stale 検出、max age、pending ポーリング）、通知を gateway 側に移行。agent からは channelBindings, backoff, stale/maxAge, persistence, channel notification を削除。IPC に start_physical_session/stop_physical_session/physical_session_started/physical_session_ended を追加。SessionOrchestrator は SQLite 永続化。agent-bindings.json からの一括マイグレーション対応。
+
 **未実現:**
-- Gateway-Agent 責務の再配置: agent process 監査で CRITICAL 4件・HIGH 4件・MEDIUM 6件・LOW 1件の設計違反を検出。抽象セッション管理、バックオフ、stale 検出、pending ポーリング、通知ポリシー等を gateway 側に移行する必要がある（Phase 5 完了: SessionOrchestrator の JSON → SQLite 永続化移行、stream disconnect 時のセッション状態クリーンアップ、agent-bindings.json 一括マイグレーション）
 - gateway 停止時の物理セッション延命（実装確認済み — copilotclaw_wait のエラー不可侵性により IPC 切断中も keepalive cycle が継続）
 - gateway 停止時の情報無損失（agent 側の send queue バッファリング + ディスク永続化。gateway 再接続時に flush。agent 停止時もディスクから復元）
 - cron ジョブの enable/disable 切り替え（CronJobConfig に `enabled` フィールド追加）（v0.42.0 で実現済み）
