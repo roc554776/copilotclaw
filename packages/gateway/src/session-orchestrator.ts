@@ -434,18 +434,28 @@ export class SessionOrchestrator {
    * This ensures the orchestrator knows about sessions that survived a gateway restart.
    */
   reconcileWithAgent(runningSessions: Array<{ sessionId: string; status: string }>): void {
+    const reportedIds = new Set(runningSessions.map((r) => r.sessionId));
+
+    // Suspend any sessions that orchestrator thinks are active but agent doesn't report.
+    // This handles: gateway restart → orchestrator loads stale "active" state from SQLite
+    // → agent is a new process with no sessions → stale active sessions must be suspended.
+    for (const [sessionId, session] of this.sessions) {
+      if (session.status !== "suspended" && !reportedIds.has(sessionId)) {
+        console.error(`[orchestrator] reconciled: suspending stale session ${sessionId.slice(0, 8)} (not reported by agent)`);
+        this.suspendSession(sessionId);
+      }
+    }
+
+    // Revive suspended sessions that agent reports as running.
     for (const running of runningSessions) {
       const existing = this.sessions.get(running.sessionId);
       if (existing !== undefined) {
         if (existing.status === "suspended") {
-          // Revive the suspended session — the physical session is still alive in agent
           existing.status = running.status === "waiting" ? "waiting" : running.status === "processing" ? "processing" : "starting";
           this.persistSession(existing);
           console.error(`[orchestrator] reconciled: revived session ${running.sessionId.slice(0, 8)}`);
         }
-        // If already active, no action needed
       } else {
-        // Unknown sessionId — agent has a session we don't know about (orphan)
         console.error(`[orchestrator] reconciled: unknown session ${running.sessionId.slice(0, 8)}, skipping`);
       }
     }
