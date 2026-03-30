@@ -400,14 +400,10 @@ export function StatusPage() {
                               </span>
                             </div>
                             {effectivePrompts
-                              .filter((sp) => sp.sessionId === sess.physicalSession!.sessionId)
+                              .filter((sp) => sp.sessionId === sess.physicalSession!.sessionId && sp.data !== null)
                               .map((sp) => (
                                 <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
-                                  {sp.data !== null ? (
-                                    <pre style={preStyle}>{sp.data.prompt}</pre>
-                                  ) : (
-                                    <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>Not available.</div>
-                                  )}
+                                  <pre style={preStyle}>{sp.data!.prompt}</pre>
                                 </div>
                               ))}
                           </div>
@@ -522,14 +518,10 @@ export function StatusPage() {
                                       </span>
                                     </div>
                                     {effectivePrompts
-                                      .filter((sp) => sp.sessionId === hps.sessionId)
+                                      .filter((sp) => sp.sessionId === hps.sessionId && sp.data !== null)
                                       .map((sp) => (
                                         <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
-                                          {sp.data !== null ? (
-                                            <pre style={preStyle}>{sp.data.prompt}</pre>
-                                          ) : (
-                                            <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>Not available.</div>
-                                          )}
+                                          <pre style={preStyle}>{sp.data!.prompt}</pre>
                                         </div>
                                       ))}
                                   </div>
