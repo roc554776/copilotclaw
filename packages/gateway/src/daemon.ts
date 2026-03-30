@@ -133,8 +133,12 @@ async function main(): Promise<void> {
       continue;
     }
     const timer = setInterval(() => {
+      console.error(`[gateway] cron tick: ${job.id}`);
       const prefix = `[cron:${job.id}] `;
-      if (store.hasPendingCronMessage(job.channelId, prefix)) return;
+      if (store.hasPendingCronMessage(job.channelId, prefix)) {
+        console.error(`[gateway] cron ${job.id}: skipped (pending dedup)`);
+        return;
+      }
       const msg = store.addMessage(job.channelId, "cron", `${prefix}${job.message}`);
       if (msg !== undefined) {
         agentManager.notifyAgent(job.channelId);
