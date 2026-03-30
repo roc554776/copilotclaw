@@ -509,9 +509,20 @@ LOW — 運用:
 
 **前提制約: gateway 停止時の物理セッション延命は絶対要件。** gateway が停止していても agent は物理セッションを自律的に維持し続けなければならない。gateway の停止が物理セッションの破壊につながる設計は許されない。以下の全ての方針はこの制約の下で設計する。
 
-- SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: ~~現在は agent 内で `forwardedEvents` リストに列挙されたイベントのみを forward しているが、~~ **v0.50.0 で実現済み。** `session.on(handler)` catch-all で SDK の全イベントを無条件に forward するよう変更。新しい SDK イベントタイプが追加されても agent 更新不要。fire-and-forget なので gateway 停止時も物理セッションに影響しない
-- ツールロジックを gateway の RPC コールバックに委譲する: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。つまり agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
-- セッションライフサイクルの判断を gateway の IPC コマンドに委ねる: 現在 agent 内にある suspend/resume 条件判定を gateway の明示的コマンドに置き換える。agent のデフォルト動作は「コマンドが来ない限りセッションを維持し続ける」。gateway はコマンドで能動的に停止・suspend を指示する。gateway 停止中はコマンドが届かないので、物理セッションは自然に維持される
+実現済み:
+- SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: **v0.50.0 で実現済み。** `session.on(handler)` catch-all で SDK の全イベントを無条件に forward するよう変更。新しい SDK イベントタイプが追加されても agent 更新不要。fire-and-forget なので gateway 停止時も物理セッションに影響しない
+
+未実現 — config 化・パラメトライズ:
+- KNOWN_SECTIONS リストの gateway config 化（未実現）: 現在 agent にハードコードされているシステムプロンプトキャプチャのセクション一覧（`identity`, `tone`, `tool_efficiency` 等）を gateway config で送り、agent はそのまま使う。新しいセクションの追加が gateway-only で可能になる
+- send queue の overflow ポリシーの config 化（未実現）: `MAX_QUEUE_SIZE` を gateway config に含め、agent は受け取った値を使う
+- カスタムエージェント定義の動的リスト化（未実現）: 現在 channelOperator + worker の 2 つ固定だが、gateway config で任意のリストを送り、agent がそのまま SDK の `customAgents` に渡す。新しい agent type 追加が gateway-only で可能になる
+- CopilotClient コンストラクタ引数のパラメトライズ（未実現）: gateway が JSON で送り、agent がそのまま SDK に渡すパススルー構造にする。SDK が新オプションを追加しても agent 更新不要
+- createSession config のパラメトライズ（未実現）: gateway が session config を JSON で送り、agent がそのまま SDK の `createSession` に渡すパススルー構造にする。agent は SDK config の詳細を知る必要がない
+
+未実現 — ロジックの gateway 移行:
+- ツールロジックを gateway の RPC コールバックに委譲する（未実現）: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
+- onPostToolUse の判断ロジックのデータ駆動化（未実現）: 何をチェックして何を返すかの制御構造を gateway config または RPC で駆動する。gateway 停止時は agent が自律的にデフォルト動作（keepalive + リマインダー）を実行する
+- セッションライフサイクルの判断を gateway の IPC コマンドに委ねる（未実現）: 現在 agent 内にある suspend/resume 条件判定を gateway の明示的コマンドに置き換える。agent のデフォルト動作は「コマンドが来ない限りセッションを維持し続ける」。gateway はコマンドで能動的に停止・suspend を指示する。gateway 停止中はコマンドが届かないので、物理セッションは自然に維持される
 
 **v0.49.0 移行の経緯:**
 
