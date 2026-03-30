@@ -188,9 +188,8 @@ async function main(): Promise<void> {
   streamEvents.on("agent_notify", pendingHandler);
 
   // Check all suspended sessions for pending messages and revive as needed.
-  // Called on startup and on stream reconnect (gateway restart).
+  // Called on startup, stream reconnect, and periodically as reliability backstop.
   const checkAllPending = async () => {
-    log("checking all channels for pending messages");
     const statuses = sessionManager.getSessionStatuses();
     for (const [, info] of Object.entries(statuses)) {
       const channelId = info.boundChannelId;
@@ -213,9 +212,11 @@ async function main(): Promise<void> {
   // Also run immediately on startup (stream is already connected at this point)
   checkAllPending();
 
-  // Periodic stale session and max-age checks (still interval-based)
+  // Periodic checks: pending messages (reliability backstop) + stale/max-age
   const staleCheckTimer = setInterval(async () => {
     if (stopRequested) return;
+    // Backstop: check all channels for pending messages and revive suspended sessions
+    await checkAllPending();
     try {
       const sessionStatuses = sessionManager.getSessionStatuses();
       for (const [sessionId, info] of Object.entries(sessionStatuses)) {
