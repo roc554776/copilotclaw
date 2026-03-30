@@ -507,9 +507,9 @@ LOW — 運用:
 
 現在、設定値（プロンプト、タイミング、モデル選択）は gateway-configurable だが、振る舞い（ツールロジック、イベント購読、セッションライフサイクル判断）は agent にハードコードされている。以下の refactoring により、agent 更新なしで変更可能な範囲をさらに拡大できる:
 
-- ツールロジックを gateway の RPC コールバックに委譲する: agent のツールハンドラを generic dispatcher にし、実際の判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。agent は gateway から返された結果をそのまま SDK に返す
-- SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: 現在は agent 内で `forwardedEvents` リストに列挙されたイベントのみを forward しているが、SDK が発火する全イベントを無条件に forward するようにすれば、新しいイベントタイプへの対応が gateway 更新のみで可能になる
-- セッションライフサイクルの判断を gateway の IPC コマンドに委ねる: 現在 agent 内にある suspend/resume 条件判定（idle exit 時の suspend、error 時の copilotSessionId クリア等）を、gateway からの明示的コマンドに置き換える
+- ツールロジックを gateway の RPC コールバックに委譲する: agent のツールハンドラを generic dispatcher にし、実際の判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。agent は gateway から返された結果をそのまま SDK に返す。ただし gateway 停止時に RPC が失敗するため、agent 側に「gateway 不在時でも物理セッションを延命できるフォールバック動作」が必須。copilotclaw_wait の keepalive cycle は gateway 停止中も維持されなければならない
+- SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: 現在は agent 内で `forwardedEvents` リストに列挙されたイベントのみを forward しているが、SDK が発火する全イベントを無条件に forward するようにすれば、新しいイベントタイプへの対応が gateway 更新のみで可能になる。これは fire-and-forget なので gateway 停止時の延命には影響しない
+- セッションライフサイクルの判断を gateway の IPC コマンドに委ねる: 現在 agent 内にある suspend/resume 条件判定（idle exit 時の suspend、error 時の copilotSessionId クリア等）を、gateway からの明示的コマンドに置き換える。ただし gateway 停止中はコマンドが届かないため、agent は「コマンドが来ない場合はセッションを維持し続ける」というデフォルト動作を持たなければならない。gateway 停止が物理セッションの破壊につながる設計は許されないという原則を常に守ること
 
 **v0.49.0 移行の経緯:**
 
