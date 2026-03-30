@@ -351,6 +351,69 @@ describe("AgentSessionManager — assistant.usage token accumulation", () => {
   });
 });
 
+describe("AgentSessionManager — catch-all SDK event forwarding", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards previously-unlisted event types (e.g. session.truncation) to gateway via session_event", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+
+    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-catchall" });
+    await waitForSessionReady(manager);
+
+    // session.truncation was NOT on the old forwardedEvents list — must now be forwarded
+    mockSession.emit("session.truncation", { data: { removedMessages: 5, reason: "context_limit" } });
+    await wait(10);
+
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const eventCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "session_event" && msg.eventType === "session.truncation",
+    );
+    expect(eventCalls.length).toBeGreaterThan(0);
+    expect(eventCalls[0]![0]).toMatchObject({
+      type: "session_event",
+      eventType: "session.truncation",
+      channelId: "ch-catchall",
+      data: { removedMessages: 5, reason: "context_limit" },
+    });
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+
+  it("forwards all events including those previously on the explicit list", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+
+    manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-catchall-known" });
+    await waitForSessionReady(manager);
+
+    // session.model_change was on the old forwardedEvents list — must still be forwarded
+    mockSession.emit("session.model_change", { data: { model: "gpt-4.1-mini" }, timestamp: "2026-01-01T00:00:00Z" });
+    await wait(10);
+
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    const eventCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "session_event" && msg.eventType === "session.model_change",
+    );
+    expect(eventCalls.length).toBeGreaterThan(0);
+
+    mockSession.emit("session.idle");
+    await wait(30);
+  });
+});
+
+
 describe("AgentSessionManager — system prompt reinforcement via onPostToolUse", () => {
   afterEach(() => {
     vi.clearAllMocks();
