@@ -155,6 +155,7 @@ function handleConnection(
           }
           streamSocket = socket;
           socket.write(JSON.stringify({ ok: true }) + "\n");
+          streamEvents.emit("stream_connected");
 
           // When stream disconnects, clean up
           const cleanup = () => {
