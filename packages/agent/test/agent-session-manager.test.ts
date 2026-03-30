@@ -38,16 +38,31 @@ import { sendToGateway, requestFromGateway } from "../src/ipc-server.js";
 /** Builds a fake CopilotSession that fires idle or error after send(). */
 function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit: (event: string, ...args: unknown[]) => void; sessionId: string; getMessages: ReturnType<typeof vi.fn>; registerTransformCallbacks: ReturnType<typeof vi.fn> } {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  // Catch-all handlers (called with the full event object for every event)
+  const catchAllHandlers: Array<(event: unknown) => void> = [];
 
-  const on = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-    const list = listeners.get(event) ?? [];
-    list.push(cb);
-    listeners.set(event, list);
+  // Support both session.on("event", handler) and session.on(handler) signatures
+  const on = vi.fn((...args: unknown[]) => {
+    if (args.length === 1 && typeof args[0] === "function") {
+      // Catch-all: session.on(handler)
+      catchAllHandlers.push(args[0] as (event: unknown) => void);
+    } else if (args.length >= 2 && typeof args[0] === "string" && typeof args[1] === "function") {
+      // Typed: session.on("event", handler)
+      const event = args[0] as string;
+      const cb = args[1] as (...a: unknown[]) => void;
+      const list = listeners.get(event) ?? [];
+      list.push(cb);
+      listeners.set(event, list);
+    }
     return () => {};
   });
 
   const emit = (event: string, ...args: unknown[]) => {
+    // Fire typed listeners
     for (const cb of listeners.get(event) ?? []) cb(...args);
+    // Fire catch-all listeners with a synthetic event object
+    const eventObj = { type: event, timestamp: new Date().toISOString(), ...(args[0] != null && typeof args[0] === "object" ? args[0] as Record<string, unknown> : {}) };
+    for (const cb of catchAllHandlers) cb(eventObj);
   };
 
   const send = vi.fn().mockImplementation(async () => {

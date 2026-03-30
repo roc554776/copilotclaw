@@ -509,7 +509,7 @@ LOW — 運用:
 
 **前提制約: gateway 停止時の物理セッション延命は絶対要件。** gateway が停止していても agent は物理セッションを自律的に維持し続けなければならない。gateway の停止が物理セッションの破壊につながる設計は許されない。以下の全ての方針はこの制約の下で設計する。
 
-- SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: 現在は agent 内で `forwardedEvents` リストに列挙されたイベントのみを forward しているが、SDK が発火する全イベントを無条件に forward すれば、新しいイベントタイプへの対応が gateway 更新のみで可能になる。fire-and-forget なので gateway 停止時も物理セッションに影響しない
+- SDK イベントを全て無条件に forward し、gateway 側でフィルタリングする: ~~現在は agent 内で `forwardedEvents` リストに列挙されたイベントのみを forward しているが、~~ **v0.50.0 で実現済み。** `session.on(handler)` catch-all で SDK の全イベントを無条件に forward するよう変更。新しい SDK イベントタイプが追加されても agent 更新不要。fire-and-forget なので gateway 停止時も物理セッションに影響しない
 - ツールロジックを gateway の RPC コールバックに委譲する: agent のツールハンドラを generic dispatcher にし、判断（ポーリング戦略、メッセージフィルタリング等）を gateway 側の RPC で実行する。gateway 停止時は RPC が失敗するため、agent は自律的に keepalive cycle を継続する（現在の copilotclaw_wait と同等のフォールバック動作）。つまり agent は常に「gateway なしでも物理セッションを維持できる最低限の動作」を持ち、gateway 接続時のみ拡張された振る舞いが利用可能になる構造
 - セッションライフサイクルの判断を gateway の IPC コマンドに委ねる: 現在 agent 内にある suspend/resume 条件判定を gateway の明示的コマンドに置き換える。agent のデフォルト動作は「コマンドが来ない限りセッションを維持し続ける」。gateway はコマンドで能動的に停止・suspend を指示する。gateway 停止中はコマンドが届かないので、物理セッションは自然に維持される
 

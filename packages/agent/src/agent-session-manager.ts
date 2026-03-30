@@ -444,31 +444,20 @@ export class AgentSessionManager {
       model: resolvedModel,
     });
 
-    // Forward all session events to gateway for observability
-    const forwardEvent = (eventType: string, event?: { timestamp?: string; data?: unknown }) => {
+    // Forward ALL SDK events to gateway unconditionally.
+    // Using session.on(handler) catch-all instead of a hardcoded event list,
+    // so new SDK event types are automatically forwarded without agent update.
+    // This is fire-and-forget — gateway停止時も物理セッションに影響しない。
+    session.on((event: { type: string; timestamp?: string; data?: unknown }) => {
       this.postToGateway({
         type: "session_event",
         sessionId: session.sessionId,
         channelId,
-        eventType,
-        timestamp: event?.timestamp ?? new Date().toISOString(),
-        data: (typeof event?.data === "object" && event.data !== null) ? event.data : {},
+        eventType: event.type,
+        timestamp: event.timestamp ?? new Date().toISOString(),
+        data: (typeof event.data === "object" && event.data !== null) ? event.data : {},
       });
-    };
-
-    // Subscribe to key SDK events and forward them
-    const forwardedEvents = [
-      "session.idle", "session.error", "session.usage_info", "session.model_change",
-      "session.compaction_start", "session.compaction_complete", "session.title_changed",
-      "tool.execution_start", "tool.execution_complete",
-      "subagent.started", "subagent.completed", "subagent.failed",
-      "assistant.message", "assistant.usage", "assistant.turn_start", "assistant.turn_end",
-    ];
-    for (const eventType of forwardedEvents) {
-      session.on(eventType as "session.idle", (event?: { timestamp?: string; data?: unknown }) => {
-        forwardEvent(eventType, event);
-      });
-    }
+    });
 
     // Physical session state tracking (currentState, tokens, subagent) is handled by
     // the gateway's SessionOrchestrator via forwarded session_event messages.
