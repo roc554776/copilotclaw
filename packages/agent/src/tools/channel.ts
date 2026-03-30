@@ -110,12 +110,12 @@ async function pollNextInputs(channelId: string, keepaliveTimeoutMs: number, sig
   return drainPendingViaIpc(channelId);
 }
 
+/** Combine messages into a single string for the LLM.
+ *  Agent does NOT interpret sender types — gateway handles formatting
+ *  (prefixes like [CRON TASK] etc.) when it processes the tool_call RPC.
+ *  This fallback path just joins messages as-is. */
 function combineMessages(inputs: NextInputResponse[]): string {
-  return inputs.map((i) => {
-    if (i.sender === "cron") return `[CRON TASK] ${i.message}`;
-    if (i.sender === "system") return `[SYSTEM EVENT] ${i.message}`;
-    return i.message;
-  }).join("\n\n");
+  return inputs.map((i) => i.message).join("\n\n");
 }
 
 /** Create a gateway-dispatched tool handler. Sends tool call to gateway via RPC,

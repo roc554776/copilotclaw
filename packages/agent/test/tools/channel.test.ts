@@ -239,7 +239,7 @@ describe("copilotclaw_wait", () => {
     expect(result.userMessage).not.toContain(KEEPALIVE_MARKER);
   });
 
-  it("formats system messages with [SYSTEM EVENT] prefix", async () => {
+  it("passes system messages as-is without adding prefix (formatting is gateway's responsibility)", async () => {
     mockDrainReturns([
       { id: "sys-1", sender: "system", message: "[SUBAGENT COMPLETED] worker completed" },
     ]);
@@ -247,11 +247,12 @@ describe("copilotclaw_wait", () => {
     const { wait } = makeTools({ channelId: "ch-sys", keepaliveTimeoutMs: 100 });
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await wait.handler({}, invocation) as { userMessage: string };
-    expect(result.userMessage).toContain("[SYSTEM EVENT]");
+    // Agent does NOT add [SYSTEM EVENT] prefix — gateway handles formatting
+    expect(result.userMessage).not.toContain("[SYSTEM EVENT]");
     expect(result.userMessage).toContain("SUBAGENT COMPLETED");
   });
 
-  it("combines user and system messages together", async () => {
+  it("combines messages without sender-type prefixes", async () => {
     mockDrainReturns([
       { id: "u-1", sender: "user", message: "hello" },
       { id: "sys-1", sender: "system", message: "[SUBAGENT COMPLETED] worker completed" },
@@ -261,10 +262,11 @@ describe("copilotclaw_wait", () => {
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await wait.handler({}, invocation) as { userMessage: string };
     expect(result.userMessage).toContain("hello");
-    expect(result.userMessage).toContain("[SYSTEM EVENT]");
+    expect(result.userMessage).not.toContain("[SYSTEM EVENT]");
+    expect(result.userMessage).toContain("SUBAGENT COMPLETED");
   });
 
-  it("formats cron messages with [CRON TASK] prefix", async () => {
+  it("passes cron messages as-is without adding prefix", async () => {
     mockDrainReturns([
       { id: "c-1", sender: "cron", message: "[cron:daily] report task" },
     ]);
@@ -272,8 +274,9 @@ describe("copilotclaw_wait", () => {
     const { wait } = makeTools({ channelId: "ch-cron-fmt", keepaliveTimeoutMs: 100 });
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const result = await wait.handler({}, invocation) as { userMessage: string };
-    expect(result.userMessage).toContain("[CRON TASK]");
-    expect(result.userMessage).toContain("report task");
+    // Agent does NOT add [CRON TASK] prefix — message is passed as-is
+    expect(result.userMessage).not.toContain("[CRON TASK]");
+    expect(result.userMessage).toContain("[cron:daily] report task");
   });
 });
 

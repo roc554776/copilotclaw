@@ -536,7 +536,7 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
   - 前提制約: ツール RPC 失敗が物理セッション破壊につながる設計は許されない
 - 物理セッションのライフサイクル判断を gateway に委ねる（v0.52.0 で実現済み）: SDK の `session.idle`（LLM がツールを呼ばずにターンを終了）や error 発生時に、agent は gateway に lifecycle RPC（`{ type: "lifecycle", event: "idle"|"error", sessionId, channelId, elapsedMs, error? }`）を送り、gateway が `{ action: "stop"|"reinject"|"wait", clearCopilotSessionId? }` で応答する。gateway が `stop` を返した場合のみ agent が `client.stop()` で物理セッションを破棄する。`reinject` の場合は `session.send()` で再投入してセッションを継続する。gateway 不在時のデフォルトは `wait`（物理セッションを破棄しない）
 
-残存する設計違反 — agent がメッセージ種別を解釈している（未実現）:
+残存する設計違反 — agent がメッセージ種別を解釈していた（v0.53.0 で解決済み）:
 - agent の `combineMessages()` が sender 種別（cron, system, user）を見て `[CRON TASK]`、`[SYSTEM EVENT]` 等のプレフィクスを付与している。これは gateway 停止時の copilotclaw_wait フォールバックパスで使われる
 - agent はメッセージの種別を知る必要がない。何を LLM に渡して何を渡さないかの判断、メッセージのフォーマットは gateway の責務
 - 対応方針: `drain_pending` の応答にフォーマット済みテキストを含めるか、store に入れる時点でフォーマット済みにする。agent のフォールバックは渡されたメッセージをそのまま結合するだけにする
