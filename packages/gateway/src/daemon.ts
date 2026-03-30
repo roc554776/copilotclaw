@@ -48,6 +48,28 @@ async function main(): Promise<void> {
 
   // Set up IPC stream message handlers before connecting
   agentManager.setStreamMessageHandler({
+    onHook: (request) => {
+      // Gateway-side hook handler. All SDK hooks are forwarded here via RPC.
+      // Return a result object to control the hook's output, or null for no-op.
+      // Adding new hook logic only requires gateway restart (no agent update).
+      switch (request.hookName) {
+        case "onPostToolUse": {
+          const parts: string[] = [];
+          // Check for pending user messages
+          const oldest = store.peekOldestPending(request.channelId);
+          if (oldest !== undefined) {
+            parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
+          }
+          if (parts.length > 0) {
+            return { additionalContext: parts.join("\n\n") };
+          }
+          return null;
+        }
+        default:
+          // Unknown hook — return null (agent uses fallback or no-op)
+          return null;
+      }
+    },
     onChannelMessage: (channelId, sender, message) => {
       const senderType = sender === "user" ? "user" as const : sender === "cron" ? "cron" as const : sender === "system" ? "system" as const : "agent" as const;
       store.addMessage(channelId, senderType, message);

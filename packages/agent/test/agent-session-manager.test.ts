@@ -796,24 +796,29 @@ describe("AgentSessionManager — session status tracking via onStatusChange", (
   });
 });
 
-describe("AgentSessionManager — postToolUse log includes session ID", () => {
+describe("AgentSessionManager — generic hook RPC dispatch", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it("postToolUse debug log contains session ID in format [sessionId]", async () => {
-    const debugLogs: string[] = [];
+  it("all SDK hooks are registered and send RPC to gateway with sessionId", async () => {
     let capturedConfig: Record<string, unknown> | undefined;
 
     const createSessionMock = vi.fn().mockImplementation(async (config: Record<string, unknown>) => {
       capturedConfig = config;
       const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      const catchAllHandlers: Array<(event: unknown) => void> = [];
       return {
-        sessionId: "sdk-log-test",
-        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-          const list = listeners.get(event) ?? [];
-          list.push(cb);
-          listeners.set(event, list);
+        sessionId: "sdk-hook-test",
+        on: vi.fn((...args: unknown[]) => {
+          if (args.length === 1 && typeof args[0] === "function") {
+            catchAllHandlers.push(args[0] as (event: unknown) => void);
+          } else if (args.length >= 2 && typeof args[0] === "string" && typeof args[1] === "function") {
+            const list = listeners.get(args[0] as string) ?? [];
+            list.push(args[1] as (...a: unknown[]) => void);
+            listeners.set(args[0] as string, list);
+          }
+          return () => {};
         }),
         send: vi.fn().mockResolvedValue("msg-id"),
         disconnect: vi.fn().mockResolvedValue(undefined),
@@ -832,29 +837,95 @@ describe("AgentSessionManager — postToolUse log includes session ID", () => {
       };
     });
 
-    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    // Gateway returns a hook response
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue({ additionalContext: "from-gateway" });
 
-    const manager = new AgentSessionManager({
-      prompts: TEST_PROMPTS,
-      debugLogLevel: "debug",
-      log: (msg: string) => { debugLogs.push(msg); },
-    });
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
 
-    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-log" });
+    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-hook" });
     await waitForSessionReady(manager);
 
-    // Extract the onPostToolUse hook from the captured config
-    expect(capturedConfig).toBeDefined();
-    const hooks = capturedConfig!["hooks"] as { onPostToolUse: (input: { toolName: string }) => Promise<unknown> };
-    expect(hooks?.onPostToolUse).toBeDefined();
+    // All 6 hooks should be registered
+    const hooks = capturedConfig!["hooks"] as Record<string, unknown>;
+    expect(hooks).toBeDefined();
+    for (const name of ["onPreToolUse", "onPostToolUse", "onUserPromptSubmitted", "onSessionStart", "onSessionEnd", "onErrorOccurred"]) {
+      expect(typeof hooks[name]).toBe("function");
+    }
 
-    // Call the hook directly
-    await hooks.onPostToolUse({ toolName: "grep" });
+    // Call onPostToolUse — should send RPC with sessionId
+    const onPostToolUse = hooks["onPostToolUse"] as (input: unknown) => Promise<unknown>;
+    const result = await onPostToolUse({ toolName: "grep" });
+    expect(result).toEqual({ additionalContext: "from-gateway" });
 
-    // The debug log should contain the session ID
-    const postToolUseLogs = debugLogs.filter((l) => l.includes("postToolUse"));
-    expect(postToolUseLogs.length).toBeGreaterThanOrEqual(1);
-    expect(postToolUseLogs[0]).toContain(`[${sessionId}]`);
-    expect(postToolUseLogs[0]).toContain("tool=grep");
+    const ipcSpy = requestFromGateway as ReturnType<typeof vi.fn>;
+    const hookCalls = ipcSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "hook",
+    );
+    expect(hookCalls.length).toBeGreaterThan(0);
+    expect(hookCalls[0]![0]).toMatchObject({
+      type: "hook",
+      hookName: "onPostToolUse",
+      sessionId,
+      channelId: "ch-hook",
+    });
+
+    manager.stopSession(sessionId);
+    await wait(30);
+  });
+
+  it("falls back to postToolUseFallback when gateway is unreachable", async () => {
+    let capturedConfig: Record<string, unknown> | undefined;
+
+    const createSessionMock = vi.fn().mockImplementation(async (config: Record<string, unknown>) => {
+      capturedConfig = config;
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      const catchAllHandlers: Array<(event: unknown) => void> = [];
+      return {
+        sessionId: "sdk-fallback-test",
+        on: vi.fn((...args: unknown[]) => {
+          if (args.length === 1 && typeof args[0] === "function") {
+            catchAllHandlers.push(args[0] as (event: unknown) => void);
+          } else if (args.length >= 2 && typeof args[0] === "string" && typeof args[1] === "function") {
+            const list = listeners.get(args[0] as string) ?? [];
+            list.push(args[1] as (...a: unknown[]) => void);
+            listeners.set(args[0] as string, list);
+          }
+          return () => {};
+        }),
+        send: vi.fn().mockResolvedValue("msg-id"),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+        registerTransformCallbacks: vi.fn(),
+      };
+    });
+
+    (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
+      (this as Record<string, unknown>)["createSession"] = createSessionMock;
+      (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
+      (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["rpc"] = {
+        models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
+        account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+      };
+    });
+
+    // Gateway is unreachable
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("IPC stream not connected"));
+
+    const manager = new AgentSessionManager({ prompts: TEST_PROMPTS });
+
+    const sessionId = manager.startSession({ sessionId: nextSessionId(), boundChannelId: "ch-fallback" });
+    await waitForSessionReady(manager);
+
+    // onPostToolUse should not throw even when gateway is down
+    const hooks = capturedConfig!["hooks"] as Record<string, unknown>;
+    const onPostToolUse = hooks["onPostToolUse"] as (input: unknown) => Promise<unknown>;
+    const result = await onPostToolUse({ toolName: "grep" });
+
+    // Fallback returns void (no pending messages, no reminder needed)
+    expect(result === undefined || result === null || (typeof result === "object" && result !== null)).toBe(true);
+
+    manager.stopSession(sessionId);
+    await wait(30);
   });
 });

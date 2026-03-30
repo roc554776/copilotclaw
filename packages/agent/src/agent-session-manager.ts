@@ -87,7 +87,6 @@ export class AgentSessionManager {
   private readonly debugMockCopilotUnsafeTools: boolean;
   private readonly workingDirectory: string | undefined;
   private readonly githubToken: string | undefined;
-  private readonly debugLogLevel: "info" | "debug";
   private readonly customAgents: Array<{ name: string; displayName: string; description: string; prompt: string; infer: boolean }>;
   private readonly primaryAgentName: string;
   private readonly systemReminder: string;
@@ -99,7 +98,6 @@ export class AgentSessionManager {
   private readonly sessionConfigOverrides: Record<string, unknown>;
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
-  private readonly debug: (message: string) => void;
   private generationCounter = 0;
 
   constructor(options: AgentSessionManagerOptions) {
@@ -114,7 +112,6 @@ export class AgentSessionManager {
     const defaultLogError = (message: string) => {
       console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
     };
-    this.debugLogLevel = options.debugLogLevel ?? "info";
     // Dynamic custom agents list from gateway (passthrough to SDK).
     // customAgents is optional on the agent-side type for backward compat with old gateways
     // that do not send the field. The gateway (agent-config.ts) always sends it as a required
@@ -135,9 +132,6 @@ export class AgentSessionManager {
     this.sessionConfigOverrides = options.prompts.sessionConfigOverrides ?? {};
     this.log = options.log ?? defaultLog;
     this.logError = options.logError ?? defaultLogError;
-    this.debug = this.debugLogLevel === "debug"
-      ? (options.log ?? defaultLog)
-      : () => {};
   }
 
   /** Create a CopilotClient with gateway-provided options (passthrough). */
@@ -293,56 +287,48 @@ export class AgentSessionManager {
       currentUsagePercent: 0,
     };
 
+    // Generic hook dispatcher: all SDK hooks are forwarded to gateway via RPC.
+    // Gateway decides what to return. If gateway is unreachable, agent uses fallback.
+    // This ensures new hook types added by SDK are automatically gateway-controllable.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const makeHookHandler = (hookName: string): ((...args: any[]) => Promise<any>) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return async (input: any, invocation?: { sessionId?: string }) => {
+        if (signal.aborted) return;
+        try {
+          const result = await requestFromGateway({
+            type: "hook",
+            hookName,
+            sessionId: entry.sessionId,
+            copilotSessionId: invocation?.sessionId,
+            channelId,
+            input: input as Record<string, unknown>,
+          });
+          if (result !== null && result !== undefined && typeof result === "object") {
+            return result;
+          }
+        } catch {
+          // Gateway unreachable — use fallback behavior below
+        }
+        // Fallback: agent-autonomous behavior when gateway is offline.
+        // Only onPostToolUse has meaningful fallback (keepalive reminder).
+        if (hookName === "onPostToolUse") {
+          return this.postToolUseFallback(channelId, reminderState);
+        }
+        return;
+      };
+    };
+
     const sessionConfig = {
       onPermissionRequest: approveAll,
       tools: [sendMessage, wait, listMessages],
       hooks: {
-        onPostToolUse: async (input: { toolName: string }) => {
-          try {
-            if (signal.aborted) return;
-
-            this.debug(`postToolUse: [${entry.sessionId}] tool=${input.toolName}`);
-
-            const parts: string[] = [];
-
-            // Consume needsReminder synchronously before any await to prevent
-            // concurrent hook calls from sending duplicate reminders (TOCTOU).
-            const shouldRemind = reminderState.needsReminder;
-            if (shouldRemind) {
-              reminderState.needsReminder = false;
-              reminderState.lastReminderPercent = reminderState.currentUsagePercent;
-            }
-
-            // Check for pending user messages via IPC
-            try {
-              const peekResult = await requestFromGateway({ type: "peek_pending", channelId });
-              if (peekResult !== null && peekResult !== undefined) {
-                parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
-              }
-            } catch {
-              // IPC error — skip notification (non-fatal)
-            }
-
-            // Subagent completion notifications are now handled by gateway
-            // (inserted as system messages into pending queue + agent_notify push)
-
-            if (shouldRemind) {
-              parts.push(this.systemReminder);
-            }
-
-            if (parts.length > 0) {
-              this.debug(`postToolUse: returning additionalContext (${parts.length} parts, remind=${shouldRemind})`);
-              return { additionalContext: parts.join("\n\n") };
-            }
-          } catch (err: unknown) {
-            // AbortError is expected when session is stopped — suppress silently.
-            // Log other errors so production issues in the hook are visible.
-            if (!(err instanceof Error && err.name === "AbortError")) {
-              this.logError(`onPostToolUse hook error: ${err instanceof Error ? err.message : String(err)}`);
-            }
-          }
-          return;
-        },
+        onPreToolUse: makeHookHandler("onPreToolUse"),
+        onPostToolUse: makeHookHandler("onPostToolUse"),
+        onUserPromptSubmitted: makeHookHandler("onUserPromptSubmitted"),
+        onSessionStart: makeHookHandler("onSessionStart"),
+        onSessionEnd: makeHookHandler("onSessionEnd"),
+        onErrorOccurred: makeHookHandler("onErrorOccurred"),
       },
       // Debug mock copilot unsafe tools mode: restrict to safe built-in tools + copilotclaw_* + debug mock tools
       ...(this.debugMockCopilotUnsafeTools ? {
@@ -567,6 +553,41 @@ export class AgentSessionManager {
       this.logError(`failed to list models from SDK, falling back to gpt-4.1: ${err instanceof Error ? err.message : String(err)}`);
       return this.model ?? "gpt-4.1";
     }
+  }
+
+  /** Fallback onPostToolUse behavior when gateway is unreachable.
+   *  Maintains keepalive by checking pending messages and injecting reminders.
+   *  This ensures physical sessions survive gateway downtime. */
+  private async postToolUseFallback(
+    channelId: string,
+    reminderState: { needsReminder: boolean; lastReminderPercent: number; currentUsagePercent: number },
+  ): Promise<{ additionalContext: string } | void> {
+    const parts: string[] = [];
+
+    const shouldRemind = reminderState.needsReminder;
+    if (shouldRemind) {
+      reminderState.needsReminder = false;
+      reminderState.lastReminderPercent = reminderState.currentUsagePercent;
+    }
+
+    // Check for pending user messages via IPC (will fail if gateway is down — that's OK)
+    try {
+      const peekResult = await requestFromGateway({ type: "peek_pending", channelId });
+      if (peekResult !== null && peekResult !== undefined) {
+        parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
+      }
+    } catch {
+      // IPC error — skip notification (non-fatal)
+    }
+
+    if (shouldRemind) {
+      parts.push(this.systemReminder);
+    }
+
+    if (parts.length > 0) {
+      return { additionalContext: parts.join("\n\n") };
+    }
+    return;
   }
 
   /** Transition a session to suspended state.

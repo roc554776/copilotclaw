@@ -30,7 +30,16 @@ export interface RunningSessionReport {
   status: string;
 }
 
+export interface HookRequest {
+  hookName: string;
+  sessionId: string;
+  copilotSessionId?: string;
+  channelId: string;
+  input: Record<string, unknown>;
+}
+
 export interface StreamMessageHandler {
+  onHook?: (request: HookRequest) => Record<string, unknown> | null;
   onChannelMessage?: (channelId: string, sender: string, message: string) => void;
   onSessionEvent?: (sessionId: string, channelId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
   onSystemPromptOriginal?: (model: string, prompt: string, capturedAt: string) => void;
@@ -129,6 +138,19 @@ export class AgentManager {
     if (type === undefined || handler === null) return;
 
     switch (type) {
+      case "hook": {
+        const id = msg["id"] as string;
+        const hookRequest: HookRequest = {
+          hookName: msg["hookName"] as string,
+          sessionId: msg["sessionId"] as string,
+          copilotSessionId: msg["copilotSessionId"] as string | undefined,
+          channelId: msg["channelId"] as string,
+          input: (msg["input"] as Record<string, unknown>) ?? {},
+        };
+        const result = handler.onHook?.(hookRequest) ?? null;
+        this.stream?.send({ type: "response", id, data: result });
+        break;
+      }
       case "channel_message": {
         const channelId = msg["channelId"] as string;
         const sender = msg["sender"] as string;
