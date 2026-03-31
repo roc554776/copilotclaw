@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Version: 0.62.1 | Token estimate: ~500 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Version: 0.63.0 | Token estimate: ~500 -->
 
 # Dependencies
 
@@ -39,6 +39,7 @@
 | `react` ^19.1.0 | UI library (devDependency — frontend-only, not shipped with gateway runtime) |
 | `react-dom` ^19.1.0 | React DOM renderer |
 | `react-router-dom` ^7.6.2 | Client-side routing (BrowserRouter) |
+| `recharts` | Charting library for token usage visualizations (LineChart, AreaChart) |
 | `vite` ^6.3.5 | Build tool and dev server |
 | `@vitejs/plugin-react` ^4.5.2 | Vite React plugin (JSX transform, Fast Refresh) |
 | `@testing-library/react` ^16.3.0 | React component testing utilities |
