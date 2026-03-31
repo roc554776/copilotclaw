@@ -53,15 +53,20 @@ export class SessionOrchestrator {
     this.loadFromDb();
   }
 
-  private static readonly LATEST_SCHEMA_VERSION = 1;
+  private static readonly LATEST_SCHEMA_VERSION = 2;
 
   private static readonly SCHEMA_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // v0 → v1: Convert legacy "suspended" sessions with channel binding + history to "idle".
-    // Before v0.58.0, all physical session stops set status to "suspended". With the new
-    // idle/suspended distinction, these should be "idle" (turn run ended, session still visible).
     0: (db) => {
       db.prepare(
         `UPDATE abstract_sessions SET status = 'idle' WHERE status = 'suspended' AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
+      ).run();
+    },
+    // v1 → v2: Convert remaining suspended sessions with channel binding (including history=0) to "idle".
+    // v0→v1 only covered sessions with history. This catches the rest.
+    1: (db) => {
+      db.prepare(
+        `UPDATE abstract_sessions SET status = 'idle' WHERE status = 'suspended' AND channelId IS NOT NULL`,
       ).run();
     },
   };
