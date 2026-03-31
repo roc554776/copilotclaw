@@ -42,13 +42,29 @@ export class SessionOrchestrator {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.initSchema();
-    this.loadFromDb();
 
-    // One-time migration from legacy agent-bindings.json
+    // One-time migration from legacy agent-bindings.json (must run before data migrations
+    // so that imported legacy data is included in the migration scope)
     if (options?.legacyBindingsPath !== undefined) {
       this.migrateFromLegacyBindings(options.legacyBindingsPath);
     }
+
+    this.runDataMigrations();
+    this.loadFromDb();
   }
+
+  private static readonly LATEST_SCHEMA_VERSION = 1;
+
+  private static readonly SCHEMA_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
+    // v0 → v1: Convert legacy "suspended" sessions with channel binding + history to "idle".
+    // Before v0.58.0, all physical session stops set status to "suspended". With the new
+    // idle/suspended distinction, these should be "idle" (turn run ended, session still visible).
+    0: (db) => {
+      db.prepare(
+        `UPDATE abstract_sessions SET status = 'idle' WHERE status = 'suspended' AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
+      ).run();
+    },
+  };
 
   private initSchema(): void {
     this.db.exec(`
@@ -61,8 +77,30 @@ export class SessionOrchestrator {
         cumulativeInputTokens INTEGER NOT NULL DEFAULT 0,
         cumulativeOutputTokens INTEGER NOT NULL DEFAULT 0,
         physicalSessionHistory TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE TABLE IF NOT EXISTS orchestrator_schema_version (
+        version INTEGER NOT NULL
       )
     `);
+  }
+
+  /** Apply sequential data migrations from the current version to LATEST_SCHEMA_VERSION. */
+  private runDataMigrations(): void {
+    const row = this.db.prepare("SELECT version FROM orchestrator_schema_version LIMIT 1").get() as { version: number } | undefined;
+    let version = row?.version ?? 0;
+
+    while (version < SessionOrchestrator.LATEST_SCHEMA_VERSION) {
+      const fn = SessionOrchestrator.SCHEMA_MIGRATIONS[version];
+      if (fn === undefined) break;
+      fn(this.db);
+      version++;
+    }
+
+    if (row === undefined) {
+      this.db.prepare("INSERT INTO orchestrator_schema_version (version) VALUES (?)").run(version);
+    } else if (version !== row.version) {
+      this.db.prepare("UPDATE orchestrator_schema_version SET version = ?").run(version);
+    }
   }
 
   /** Load all sessions from SQLite into in-memory maps on construction. */
@@ -88,14 +126,13 @@ export class SessionOrchestrator {
         // Invalid JSON — use empty array
       }
 
-      let status = (row.status as AbstractSessionStatus) ?? "suspended";
+      const status = (row.status as AbstractSessionStatus) ?? "suspended";
 
-      // Migration: convert legacy "suspended" sessions with channel binding to "idle"
-      // and restore physicalSession from history so the session remains visible.
+      // For "idle" sessions (including those migrated from "suspended" by schema migration v0→v1),
+      // restore the last physical session from history so it remains visible in the UI.
       let physicalSession: PhysicalSessionSummary | undefined;
-      if (status === "suspended" && row.channelId !== null && history.length > 0) {
+      if (status === "idle" && history.length > 0) {
         physicalSession = { ...history[history.length - 1]!, currentState: "stopped" };
-        status = "idle";
       }
 
       const session: AbstractSession = {

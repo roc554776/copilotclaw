@@ -323,10 +323,9 @@ describe("SessionOrchestrator", () => {
 
       const statuses = orch2.getSessionStatuses();
       expect(Object.keys(statuses)).toHaveLength(2);
-      // Migration: suspended with channel binding + history → "idle" with physicalSession restored
-      expect(statuses[id1].status).toBe("idle");
-      expect(statuses[id1].physicalSession).toBeDefined();
-      expect(statuses[id1].physicalSession!.currentState).toBe("stopped");
+      // suspendSession archives physicalSession — status stays suspended on reload
+      expect(statuses[id1].status).toBe("suspended");
+      expect(statuses[id1].physicalSession).toBeUndefined();
       expect(statuses[id1].cumulativeInputTokens).toBe(10);
       expect(statuses[id1].cumulativeOutputTokens).toBe(20);
       expect(statuses[id1].physicalSessionHistory).toHaveLength(1);
