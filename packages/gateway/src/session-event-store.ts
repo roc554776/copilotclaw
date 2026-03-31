@@ -235,6 +235,9 @@ export class SessionEventStore {
   }> {
     const fromMs = new Date(from).getTime();
     const toMs = new Date(to).getTime();
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
+      return [];
+    }
     const safePoints = Math.max(1, Math.min(points, 1000));
     const bucketMs = (toMs - fromMs) / safePoints;
 

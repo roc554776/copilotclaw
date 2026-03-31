@@ -637,7 +637,8 @@ function createRequestHandler(
         const to = toParam ?? now.toISOString();
         const from = fromParam ?? new Date(now.getTime() - (Number(hoursParam) || 24) * 3600_000).toISOString();
         const points = Number(pointsParam) || 48;
-        const maWindow = maWindowParam !== null ? Number(maWindowParam) : undefined;
+        const maWindowRaw = maWindowParam !== null ? Number(maWindowParam) : undefined;
+        const maWindow = maWindowRaw !== undefined && Number.isFinite(maWindowRaw) && maWindowRaw > 0 ? maWindowRaw : undefined;
         json(res, 200, sessionEventStore.getTokenUsageTimeseries(from, to, points, maWindow));
         return;
       }

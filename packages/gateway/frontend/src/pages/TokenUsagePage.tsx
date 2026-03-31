@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Area,
@@ -51,15 +51,29 @@ export function TokenUsagePage() {
   const [maWindow, setMaWindow] = useState<number | undefined>(3600); // 1h default
   const [loading, setLoading] = useState(true);
 
+  const loadIdRef = useRef(0);
   const load = useCallback(async () => {
+    const thisLoadId = ++loadIdRef.current;
     setLoading(true);
-    const result = await fetchTokenUsageTimeseries({
-      hours: period.hours,
-      points: period.points,
-      movingAverageWindow: maWindow,
-    });
-    setData(result);
-    setLoading(false);
+    try {
+      const result = await fetchTokenUsageTimeseries({
+        hours: period.hours,
+        points: period.points,
+        movingAverageWindow: maWindow,
+      });
+      if (thisLoadId === loadIdRef.current) {
+        setData(result);
+      }
+    } catch {
+      // Network error — show empty state
+      if (thisLoadId === loadIdRef.current) {
+        setData([]);
+      }
+    } finally {
+      if (thisLoadId === loadIdRef.current) {
+        setLoading(false);
+      }
+    }
   }, [period, maWindow]);
 
   useEffect(() => { load(); }, [load]);
@@ -78,7 +92,7 @@ export function TokenUsagePage() {
     return data.map((point) => {
       const row: Record<string, unknown> = {
         timestamp: point.timestamp,
-        time: period.hours <= 24 ? formatTime(point.timestamp) : formatDateTime(point.timestamp),
+        time: period.hours < 24 ? formatTime(point.timestamp) : formatDateTime(point.timestamp),
         index: Math.round(point.index),
         movingAverage: point.movingAverage !== undefined ? Math.round(point.movingAverage) : undefined,
       };

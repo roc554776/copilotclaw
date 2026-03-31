@@ -292,6 +292,25 @@ describe("SessionEventStore", () => {
       const usage = store.getTokenUsage("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z");
       expect(usage[0]?.multiplier).toBe(0);
     });
+
+    it("uses last-seen multiplier when same model has multiple events", () => {
+      store.appendEvent("sess-lw", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 10, multiplier: 1 },
+      });
+      store.appendEvent("sess-lw", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:01:00Z",
+        data: { model: "gpt-4.1", inputTokens: 200, outputTokens: 20, multiplier: 2 },
+      });
+
+      const usage = store.getTokenUsage("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z");
+      expect(usage).toHaveLength(1);
+      expect(usage[0]?.inputTokens).toBe(300);
+      // Last-write-wins: multiplier from the second event
+      expect(usage[0]?.multiplier).toBe(2);
+    });
   });
 
   describe("getTokenUsageTimeseries", () => {
@@ -376,6 +395,16 @@ describe("SessionEventStore", () => {
 
       const ts = store.getTokenUsageTimeseries("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z", 1);
       expect(ts[0]!.movingAverage).toBeUndefined();
+    });
+
+    it("returns empty array when from equals to", () => {
+      const ts = store.getTokenUsageTimeseries("2026-03-30T10:00:00Z", "2026-03-30T10:00:00Z", 4);
+      expect(ts).toEqual([]);
+    });
+
+    it("returns empty array when from is after to", () => {
+      const ts = store.getTokenUsageTimeseries("2026-03-30T12:00:00Z", "2026-03-30T10:00:00Z", 4);
+      expect(ts).toEqual([]);
     });
   });
 });
