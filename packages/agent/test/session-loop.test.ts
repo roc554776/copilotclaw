@@ -153,4 +153,46 @@ describe("runSessionLoop", () => {
     // And eventually ended on true idle
     expect(logs.some((l) => l.includes("LLM stopped"))).toBe(true);
   });
+
+  it("rejects with error even after backgroundTasks idle", async () => {
+    const session = createMockSession();
+    session.send = async (options) => {
+      session.sendCalls.push(options);
+      queueMicrotask(() => {
+        session.callbacks?.onIdle(true); // subagent stopped
+        queueMicrotask(() => { session.callbacks?.onError("crash"); });
+      });
+      return "msg-id";
+    };
+
+    await expect(
+      runSessionLoop({ session, initialPrompt: "init" }),
+    ).rejects.toThrow("crash");
+  });
+
+  it("handles multiple consecutive backgroundTasks idles before true idle", async () => {
+    const session = createMockSession();
+    session.send = async (options) => {
+      session.sendCalls.push(options);
+      queueMicrotask(() => {
+        session.callbacks?.onIdle(true); // first subagent
+        queueMicrotask(() => {
+          session.callbacks?.onIdle(true); // second subagent
+          queueMicrotask(() => { session.callbacks?.onIdle(false); }); // true idle
+        });
+      });
+      return "msg-id";
+    };
+
+    const logs: string[] = [];
+    await runSessionLoop({
+      session,
+      initialPrompt: "init",
+      log: (msg) => { logs.push(msg); },
+    });
+
+    const bgLogs = logs.filter((l) => l.includes("backgroundTasks"));
+    expect(bgLogs.length).toBeGreaterThanOrEqual(2);
+    expect(logs.some((l) => l.includes("LLM stopped"))).toBe(true);
+  });
 });

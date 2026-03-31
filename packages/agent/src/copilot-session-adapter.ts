@@ -11,7 +11,10 @@ export function adaptCopilotSession(session: CopilotSession): SessionLike {
         callbacks.onError(event.data.message);
       });
       session.on("session.idle", (event) => {
-        const hasBackgroundTasks = event.data?.backgroundTasks != null;
+        const bg = event.data.backgroundTasks;
+        // backgroundTasks is present and non-empty when a subagent stopped
+        const hasBackgroundTasks = bg != null &&
+          ((bg as { agents?: unknown[] }).agents?.length ?? 0) > 0;
         callbacks.onIdle(hasBackgroundTasks);
       });
     },
