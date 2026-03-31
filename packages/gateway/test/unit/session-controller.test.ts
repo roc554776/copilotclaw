@@ -139,24 +139,12 @@ describe("SessionController — lifecycle decisions", () => {
     expect(result.clearCopilotSessionId).toBe(true);
   });
 
-  it("returns wait when backgroundTasks present", () => {
+  it("always returns stop on idle (agent-side handles backgroundTasks)", () => {
     const { controller } = makeController();
+    // Even after backgroundTasks idle, decideLifecycleAction returns stop
+    // because agent-side session loop handles backgroundTasks continuation
     controller.onSessionIdle("sess-1", true);
     const result = controller.decideLifecycleAction("sess-1", "idle");
-    expect(result.action).toBe("wait");
-  });
-
-  it("returns stop on true idle (no backgroundTasks, no copilotclaw_wait)", () => {
-    const { controller, orchestrator, channelId } = makeController();
-    const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updatePhysicalSession(sessionId, {
-      sessionId: "copilot-123",
-      model: "gpt-4.1",
-      startedAt: new Date().toISOString(),
-      currentState: "idle",
-    });
-    controller.onSessionIdle(sessionId, false);
-    const result = controller.decideLifecycleAction(sessionId, "idle");
     expect(result.action).toBe("stop");
   });
 });
