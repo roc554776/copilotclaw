@@ -326,6 +326,21 @@ async function main(): Promise<void> {
         }
       }
 
+      // Reflect assistant.message to channel timeline as agent message.
+      // The agent forwards all SDK events as session_event; gateway handles the
+      // channel reflection here instead of the agent sending a separate channel_message.
+      if (eventChannelId !== undefined && eventType === "assistant.message") {
+        const content = typeof data["content"] === "string" ? data["content"] : "";
+        if (content.length > 0) {
+          store.addMessage(eventChannelId, "agent", content);
+          serverHandle?.sseBroadcaster?.broadcast({
+            type: "new_message",
+            channelId: eventChannelId,
+            data: { sender: "agent" as const, message: content },
+          });
+        }
+      }
+
       // Subagent completion/failure: insert system message and notify agent
       if (eventChannelId !== undefined && (eventType === "subagent.completed" || eventType === "subagent.failed")) {
         // Only notify for direct subagent calls (no parentToolCallId in the event data)

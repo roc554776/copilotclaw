@@ -69,6 +69,9 @@
 - 理由: `assistant.message` で送出されるメッセージは、本来は agent が channel に送出したいメッセージであるはずだから
   - 本来は `copilotclaw_*` tool で送ってほしいんだけど、上手くいかないこともあるので
 
+<!-- 2026-03-31 -->
+- assistant.message の直接チャンネル反映が agent 側にある wrong-side ロジックの修正。agent の physical-session-manager.ts にある assistant.message イベントハンドラが、gateway 接続中にも関わらず agent 側で直接 channel_message を送信している。gateway は既に session_event として assistant.message を受信しているので、gateway 側の onSessionEvent で処理すべき。agent からこのコードを削除する。
+
 ## post tool use hook による新着通知
 
 - channel に紐づく agent session では、任意の tool を呼び出した後に SDK の `onPostToolUse` hook を発火させる

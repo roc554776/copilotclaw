@@ -455,16 +455,9 @@ export class PhysicalSessionManager {
     // Reminder state (context usage tracking, compaction) is also handled by gateway
     // via session_event messages — agent does not track these locally.
 
-    // Reflect assistant.message events to the channel timeline as agent messages.
-    // This serves as a fallback: ideally the agent uses copilotclaw_send_message,
-    // but when the LLM responds with text instead of calling a tool, this ensures
-    // the response still reaches the user.
-    session.on("assistant.message", (event) => {
-      const content = event.data.content;
-      if (content.length > 0) {
-        this.postMessage(entry.sessionId, content);
-      }
-    });
+    // assistant.message events are reflected to the channel timeline by the gateway's
+    // onSessionEvent handler (via the catch-all session_event forwarding above).
+    // No agent-side channel_message sending needed.
 
     const logPrefix = entry.sessionId.slice(0, 8);
     await runSessionLoop({
@@ -684,10 +677,6 @@ export class PhysicalSessionManager {
   /** Fire-and-forget send to gateway via IPC stream. */
   private postToGateway(msg: Record<string, unknown>): void {
     sendToGateway(msg);
-  }
-
-  private postMessage(sessionId: string, message: string): void {
-    sendToGateway({ type: "channel_message", sessionId, sender: "agent", message });
   }
 
 }
