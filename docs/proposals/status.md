@@ -158,9 +158,10 @@
 
 - 物理セッション停止 API（`POST /api/sessions/{{sessionId}}/stop`、チャンネル設定モーダルからの物理セッションアーカイブに使用）（v0.55.0）
 
+- session.idle での subagent 停止と親 agent idle の区別（backgroundTasks フィールドと copilotclaw_wait 実行状態で判定。subagent 停止時は action: "wait"、真の idle は action: "stop"。backgroundTasks 存在時は currentState を idle に上書きしない）（v0.57.0）
+
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
-- session.idle での subagent 停止と親 agent idle の区別（subagent 停止による session.idle で物理セッション全体が停止する問題。backgroundTasks フィールドと copilotclaw_wait 実行状態で判定すべき）（v0.57.0 で実現済み）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
