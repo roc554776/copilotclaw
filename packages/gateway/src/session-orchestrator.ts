@@ -53,24 +53,32 @@ export class SessionOrchestrator {
     this.loadFromDb();
   }
 
-  private static readonly LATEST_SCHEMA_VERSION = 1;
+  private static readonly LATEST_SCHEMA_VERSION = 3;
+
+  /**
+   * Normalize all channel-bound session statuses to the v0.58.0 idle/new model.
+   * Idempotent — WHERE clauses exclude already-normalized sessions.
+   * Called from multiple migration versions because the migration was consolidated
+   * after v0.58.0 development. All three versions (v0→v1, v1→v2, v2→v3) perform
+   * the same idempotent normalization so that any DB version reaches the correct state.
+   */
+  private static normalizeSessionStatuses(db: Database.Database): void {
+    db.prepare(
+      `UPDATE abstract_sessions SET status = 'idle' WHERE status NOT IN ('idle', 'new') AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
+    ).run();
+    db.prepare(
+      `UPDATE abstract_sessions SET status = 'new' WHERE status NOT IN ('idle', 'new') AND channelId IS NOT NULL AND physicalSessionHistory = '[]'`,
+    ).run();
+  }
 
   private static readonly SCHEMA_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
-    // v0 → v1: Normalize channel-bound session statuses for v0.58.0 idle/new semantics.
-    // Before v0.58.0, all physical session stops set status to "suspended", and sessions
-    // could also be persisted as "starting"/"waiting"/"processing" if the gateway stopped
-    // mid-operation. With the new status model:
-    //   - Sessions with physicalSessionHistory → "idle" (physical session info restorable)
-    //   - Sessions without physicalSessionHistory → "new" (no info to restore)
-    // Idempotent — the WHERE clauses exclude already-normalized sessions.
-    0: (db) => {
-      db.prepare(
-        `UPDATE abstract_sessions SET status = 'idle' WHERE status NOT IN ('idle', 'new') AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
-      ).run();
-      db.prepare(
-        `UPDATE abstract_sessions SET status = 'new' WHERE status NOT IN ('idle', 'new') AND channelId IS NOT NULL AND physicalSessionHistory = '[]'`,
-      ).run();
-    },
+    // v0→v1, v1→v2, v2→v3: All perform the same idempotent session status normalization.
+    // Three versions exist because the migration was developed incrementally during v0.58.0
+    // and some DBs were persisted at version 1, 2, or 3 with incomplete normalization.
+    // Next migration should be added as v3→v4.
+    0: (db) => SessionOrchestrator.normalizeSessionStatuses(db),
+    1: (db) => SessionOrchestrator.normalizeSessionStatuses(db),
+    2: (db) => SessionOrchestrator.normalizeSessionStatuses(db),
   };
 
   private initSchema(): void {
@@ -95,13 +103,6 @@ export class SessionOrchestrator {
   private runDataMigrations(): void {
     const row = this.db.prepare("SELECT version FROM orchestrator_schema_version LIMIT 1").get() as { version: number } | undefined;
     let version = row?.version ?? 0;
-
-    // If the stored version exceeds LATEST, it was set by a prior version of the code
-    // that had more migration steps (v0.58.0 development iterations that were later
-    // consolidated). Those versions completed the same normalization, so clamp to LATEST.
-    if (version > SessionOrchestrator.LATEST_SCHEMA_VERSION) {
-      version = SessionOrchestrator.LATEST_SCHEMA_VERSION;
-    }
 
     while (version < SessionOrchestrator.LATEST_SCHEMA_VERSION) {
       const fn = SessionOrchestrator.SCHEMA_MIGRATIONS[version];
