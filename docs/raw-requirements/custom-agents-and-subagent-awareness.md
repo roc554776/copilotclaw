@@ -73,3 +73,9 @@
 - フィルタリングロジックは agent process ではなく gateway process 側に置く。agent process は通知を受けて wait を解除するだけにする。
 - session event を agent → gateway に送り、gateway 側が必要なフィルタリングをして agent に通知する構成にする。
 - 理由: agent process をミニマルに保ち、gateway の更新だけで最新の機能を享受できるようにするコンセプトを維持するため。
+
+<!-- 2026-03-31 -->
+## subagent のネスト呼び出し通知の抑制
+
+- subagent が呼び出した subagent の完了を、main の agent に伝えてしまうのはやめてください。
+  - wait tool で待っている main agent には、直接呼び出しした subagent の停止だけを伝えてください。 parent tool call の id で判定できるはずです

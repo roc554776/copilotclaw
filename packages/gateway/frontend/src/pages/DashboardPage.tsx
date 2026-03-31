@@ -1502,10 +1502,10 @@ function ChannelSettingsModal({
                   onClick={handleEndTurnRunBtn}
                   style={{
                     padding: "0.3rem 0.8rem",
-                    background: "#21262d",
-                    border: "1px solid #30363d",
+                    background: "#da3633",
+                    border: "none",
                     borderRadius: "0.3rem",
-                    color: "#c9d1d9",
+                    color: "#fff",
                     cursor: "pointer",
                     fontSize: "0.85rem",
                   }}

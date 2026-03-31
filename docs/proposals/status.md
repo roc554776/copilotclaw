@@ -166,6 +166,8 @@
 
 - セッション status の細分化（new/starting/waiting/notified/processing/idle/suspended の 7 状態。tool.execution_start で processing/waiting を自動設定。message 到着時に waiting → notified 遷移）（v0.58.0）
 
+- end turn run ボタンの警戒色（archive physical session と同じ赤色。プレミアムリクエストを消費した run を捨てる操作のため）（v0.58.0）
+
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
