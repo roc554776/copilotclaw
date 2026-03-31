@@ -26,8 +26,12 @@ describe("SessionOrchestrator", () => {
       const sessionId = orch.startSession("ch-1");
       expect(sessionId).toBeTruthy();
       expect(orch.hasSessionForChannel("ch-1")).toBe(true);
-      expect(orch.hasActiveSessionForChannel("ch-1")).toBe(true);
+      // "new" sessions are not active (no physical session yet)
+      expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);
       expect(orch.getSessionIdForChannel("ch-1")).toBe(sessionId);
+      // Becomes active after physical session starts
+      orch.updateSessionStatus(sessionId, "waiting");
+      expect(orch.hasActiveSessionForChannel("ch-1")).toBe(true);
     });
 
     it("returns the same sessionId when channel already has an active session", () => {
@@ -245,6 +249,8 @@ describe("SessionOrchestrator", () => {
       const orch = new SessionOrchestrator();
       const id1 = orch.startSession("ch-1");
       const id2 = orch.startSession("ch-2");
+      orch.updateSessionStatus(id1, "waiting");
+      orch.updateSessionStatus(id2, "waiting");
 
       orch.suspendSession(id1);
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);

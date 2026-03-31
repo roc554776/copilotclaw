@@ -67,8 +67,13 @@ export class SessionOrchestrator {
     // processing, suspended) depending on when the gateway was stopped. All of these
     // are stale after restart and should be "idle" (no running physical session).
     1: (db) => {
+      // Sessions with history → idle (physical session info can be restored from history)
       db.prepare(
-        `UPDATE abstract_sessions SET status = 'idle' WHERE status != 'idle' AND channelId IS NOT NULL`,
+        `UPDATE abstract_sessions SET status = 'idle' WHERE status != 'idle' AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
+      ).run();
+      // Sessions without history → new (no physical session info to restore)
+      db.prepare(
+        `UPDATE abstract_sessions SET status = 'new' WHERE status NOT IN ('idle', 'new') AND channelId IS NOT NULL AND physicalSessionHistory = '[]'`,
       ).run();
     },
   };
@@ -276,8 +281,8 @@ export class SessionOrchestrator {
     if (existingSessionId !== undefined) {
       const existing = this.sessions.get(existingSessionId);
       if (existing !== undefined) {
-        if (existing.status === "suspended" || existing.status === "idle") {
-          // Revive from suspended or idle
+        if (existing.status === "suspended" || existing.status === "idle" || existing.status === "new") {
+          // Revive from suspended, idle, or new
           existing.status = "starting";
           existing.channelId = channelId;
           this.persistSession(existing);
@@ -368,7 +373,7 @@ export class SessionOrchestrator {
     const sessionId = this.channelBindings.get(channelId);
     if (sessionId === undefined) return false;
     const session = this.sessions.get(sessionId);
-    return session !== undefined && session.status !== "suspended" && session.status !== "idle";
+    return session !== undefined && session.status !== "suspended" && session.status !== "idle" && session.status !== "new";
   }
 
   /** Whether the channel is currently in a backoff period. */
@@ -502,7 +507,7 @@ export class SessionOrchestrator {
    */
   idleAllActive(): void {
     for (const [sessionId, session] of this.sessions) {
-      if (session.status !== "suspended" && session.status !== "idle") {
+      if (session.status !== "suspended" && session.status !== "idle" && session.status !== "new") {
         this.idleSession(sessionId);
       }
     }
@@ -525,7 +530,7 @@ export class SessionOrchestrator {
     // This handles: gateway restart → orchestrator loads stale "active" state from SQLite
     // → agent is a new process with no sessions → stale active sessions must be suspended.
     for (const [sessionId, session] of this.sessions) {
-      if (session.status !== "suspended" && session.status !== "idle" && !reportedIds.has(sessionId)) {
+      if (session.status !== "suspended" && session.status !== "idle" && session.status !== "new" && !reportedIds.has(sessionId)) {
         console.error(`[orchestrator] reconciled: idling stale session ${sessionId.slice(0, 8)} (not reported by agent)`);
         this.idleSession(sessionId);
       }
