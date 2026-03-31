@@ -1085,11 +1085,16 @@ function QuotaSection({
   rowStyle: React.CSSProperties;
   labelStyle: React.CSSProperties;
 }) {
+  const [githubExpanded, setGithubExpanded] = useState(false);
   const snapshots = quota?.quotaSnapshots ?? {};
   const keys = Object.keys(snapshots);
+  const githubUsage = quota?.githubUsage;
   return (
     <div style={sectionStyle}>
       <div style={titleStyle}>Premium Requests</div>
+
+      {/* SDK (Copilot) */}
+      <div style={{ fontSize: "0.75rem", color: "#58a6ff", marginBottom: "0.3rem" }}>SDK (Copilot)</div>
       {keys.length === 0 && (
         <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
       )}
@@ -1114,6 +1119,104 @@ function QuotaSection({
           </div>
         );
       })}
+
+      {/* GitHub API Usage */}
+      <div style={{ marginTop: "0.5rem" }}>
+        <div
+          style={{ fontSize: "0.75rem", color: "#58a6ff", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem" }}
+          onClick={() => setGithubExpanded((p) => !p)}
+        >
+          GitHub API Usage {githubExpanded ? "\u25BE" : "\u25B8"}
+        </div>
+        {githubExpanded && (
+          githubUsage === null || githubUsage === undefined ? (
+            <div style={{ color: "#8b949e", fontSize: "0.85rem", marginTop: "0.3rem" }}>GitHub API: unavailable</div>
+          ) : (
+            <div style={{ marginTop: "0.3rem" }}>
+              <div style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                <span style={labelStyle}>Billing period</span>
+                <span>{githubUsage.timePeriod.year}-{String(githubUsage.timePeriod.month).padStart(2, "0")}</span>
+              </div>
+              {githubUsage.usageItems.length === 0 ? (
+                <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>No usage items.</div>
+              ) : (
+                githubUsage.usageItems.map((item, idx) => (
+                  <div key={idx} style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                    <span style={labelStyle}>{item.model}</span>
+                    <span>qty: {item.grossQuantity} @ ${item.pricePerUnit}/unit</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ModelsSection({
+  models,
+  sectionStyle,
+  titleStyle,
+  rowStyle,
+  labelStyle,
+}: {
+  models: ModelsResponse | null;
+  sectionStyle: React.CSSProperties;
+  titleStyle: React.CSSProperties;
+  rowStyle: React.CSSProperties;
+  labelStyle: React.CSSProperties;
+}) {
+  const [githubExpanded, setGithubExpanded] = useState(false);
+  const githubModels = models?.githubModels;
+  return (
+    <div style={sectionStyle}>
+      <div style={titleStyle}>Available Models</div>
+
+      {/* SDK (Copilot) */}
+      <div style={{ fontSize: "0.75rem", color: "#58a6ff", marginBottom: "0.3rem" }}>SDK (Copilot)</div>
+      {models && models.models.length > 0 ? (
+        models.models.map((m) => (
+          <div key={m.id} style={rowStyle}>
+            <span style={labelStyle}>{m.id}</span>
+            <span>x{m.billing?.multiplier ?? "?"}</span>
+          </div>
+        ))
+      ) : (
+        <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
+      )}
+
+      {/* GitHub Models Catalog */}
+      <div style={{ marginTop: "0.5rem" }}>
+        <div
+          style={{ fontSize: "0.75rem", color: "#58a6ff", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem" }}
+          onClick={() => setGithubExpanded((p) => !p)}
+        >
+          GitHub Models Catalog {githubExpanded ? "\u25BE" : "\u25B8"}
+        </div>
+        {githubExpanded && (
+          githubModels === null || githubModels === undefined ? (
+            <div style={{ color: "#8b949e", fontSize: "0.85rem", marginTop: "0.3rem" }}>GitHub API: unavailable</div>
+          ) : (
+            <div style={{ marginTop: "0.3rem" }}>
+              <div style={{ color: "#8b949e", fontSize: "0.75rem", marginBottom: "0.3rem" }}>
+                Multipliers not available from this source.
+              </div>
+              {githubModels.length === 0 ? (
+                <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>No models.</div>
+              ) : (
+                githubModels.map((m) => (
+                  <div key={m.id} style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                    <span style={labelStyle}>{m.name}{m.publisher ? ` (${m.publisher})` : ""}</span>
+                    <span style={{ color: "#8b949e", fontSize: "0.75rem" }}>{m.id}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )
+        )}
+      </div>
     </div>
   );
 }
@@ -1216,19 +1319,13 @@ function StatusModalContent({
       />
 
       {/* Models */}
-      <div style={modalSectionStyle}>
-        <div style={modalTitleStyle}>Available Models</div>
-        {models && models.models.length > 0 ? (
-          models.models.map((m) => (
-            <div key={m.id} style={modalRowStyle}>
-              <span style={modalLabelStyle}>{m.id}</span>
-              <span>x{m.billing?.multiplier ?? "?"}</span>
-            </div>
-          ))
-        ) : (
-          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
-        )}
-      </div>
+      <ModelsSection
+        models={models}
+        sectionStyle={modalSectionStyle}
+        titleStyle={modalTitleStyle}
+        rowStyle={modalRowStyle}
+        labelStyle={modalLabelStyle}
+      />
 
       {/* Original System Prompts */}
       <div style={modalSectionStyle}>

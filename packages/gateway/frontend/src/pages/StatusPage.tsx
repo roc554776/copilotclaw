@@ -106,6 +106,8 @@ export function StatusPage() {
   const [modelsData, setModelsData] = useState<ModelsResponse | null>(null);
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
   const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
+  const [githubQuotaExpanded, setGithubQuotaExpanded] = useState(false);
+  const [githubModelsExpanded, setGithubModelsExpanded] = useState(false);
 
   const toggleSession = (id: string) => {
     setExpandedSessions((prev) => {
@@ -280,6 +282,9 @@ export function StatusPage() {
           {/* Quota */}
           <div style={sectionStyle}>
             <div style={titleStyle}>Premium Requests</div>
+
+            {/* SDK (Copilot) */}
+            <div style={{ fontSize: "0.75rem", color: "#58a6ff", marginBottom: "0.3rem" }}>SDK (Copilot)</div>
             {(() => {
               const snapshots = quota?.quotaSnapshots ?? {};
               const keys = Object.keys(snapshots);
@@ -304,11 +309,46 @@ export function StatusPage() {
                 );
               });
             })()}
+
+            {/* GitHub API Usage */}
+            <div style={{ marginTop: "0.5rem" }}>
+              <div
+                style={{ fontSize: "0.75rem", color: "#58a6ff", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem" }}
+                onClick={() => setGithubQuotaExpanded((p) => !p)}
+              >
+                GitHub API Usage {githubQuotaExpanded ? "\u25BE" : "\u25B8"}
+              </div>
+              {githubQuotaExpanded && (
+                quota?.githubUsage === null || quota?.githubUsage === undefined ? (
+                  <div style={{ color: "#8b949e", fontSize: "0.85rem", marginTop: "0.3rem" }}>GitHub API: unavailable</div>
+                ) : (
+                  <div style={{ marginTop: "0.3rem" }}>
+                    <div style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                      <span style={labelStyle}>Billing period</span>
+                      <span>{quota.githubUsage.timePeriod.year}-{String(quota.githubUsage.timePeriod.month).padStart(2, "0")}</span>
+                    </div>
+                    {quota.githubUsage.usageItems.length === 0 ? (
+                      <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>No usage items.</div>
+                    ) : (
+                      quota.githubUsage.usageItems.map((item, idx) => (
+                        <div key={idx} style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                          <span style={labelStyle}>{item.model}</span>
+                          <span>qty: {item.grossQuantity} @ ${item.pricePerUnit}/unit</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )
+              )}
+            </div>
           </div>
 
           {/* Models */}
           <div style={sectionStyle}>
             <div style={titleStyle}>Available Models</div>
+
+            {/* SDK (Copilot) */}
+            <div style={{ fontSize: "0.75rem", color: "#58a6ff", marginBottom: "0.3rem" }}>SDK (Copilot)</div>
             {modelsData && modelsData.models.length > 0 ? (
               modelsData.models.map((m) => (
                 <div key={m.id} style={rowStyle}>
@@ -319,6 +359,37 @@ export function StatusPage() {
             ) : (
               <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
             )}
+
+            {/* GitHub Models Catalog */}
+            <div style={{ marginTop: "0.5rem" }}>
+              <div
+                style={{ fontSize: "0.75rem", color: "#58a6ff", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem" }}
+                onClick={() => setGithubModelsExpanded((p) => !p)}
+              >
+                GitHub Models Catalog {githubModelsExpanded ? "\u25BE" : "\u25B8"}
+              </div>
+              {githubModelsExpanded && (
+                modelsData?.githubModels === null || modelsData?.githubModels === undefined ? (
+                  <div style={{ color: "#8b949e", fontSize: "0.85rem", marginTop: "0.3rem" }}>GitHub API: unavailable</div>
+                ) : (
+                  <div style={{ marginTop: "0.3rem" }}>
+                    <div style={{ color: "#8b949e", fontSize: "0.75rem", marginBottom: "0.3rem" }}>
+                      Multipliers not available from this source.
+                    </div>
+                    {modelsData.githubModels.length === 0 ? (
+                      <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>No models.</div>
+                    ) : (
+                      modelsData.githubModels.map((m) => (
+                        <div key={m.id} style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                          <span style={labelStyle}>{m.name}{m.publisher ? ` (${m.publisher})` : ""}</span>
+                          <span style={{ color: "#8b949e", fontSize: "0.75rem" }}>{m.id}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )
+              )}
+            </div>
           </div>
         </>
       )}

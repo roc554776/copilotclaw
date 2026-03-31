@@ -63,8 +63,23 @@ export interface QuotaSnapshot {
   overage?: number;
 }
 
+export interface GitHubUsageItem {
+  product: string;
+  model: string;
+  grossQuantity: number;
+  netQuantity: number;
+  pricePerUnit: number;
+}
+
+export interface GitHubUsageResponse {
+  timePeriod: { year: number; month: number };
+  user: string;
+  usageItems: GitHubUsageItem[];
+}
+
 export interface QuotaResponse {
   quotaSnapshots?: Record<string, QuotaSnapshot>;
+  githubUsage?: GitHubUsageResponse | null;
 }
 
 export interface ModelEntry {
@@ -72,8 +87,16 @@ export interface ModelEntry {
   billing?: { multiplier?: number };
 }
 
+export interface GitHubModelEntry {
+  id: string;
+  name: string;
+  publisher?: string;
+  summary?: string;
+}
+
 export interface ModelsResponse {
   models: ModelEntry[];
+  githubModels?: GitHubModelEntry[] | null;
 }
 
 export interface LogEntry {
