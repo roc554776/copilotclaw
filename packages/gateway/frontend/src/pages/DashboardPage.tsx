@@ -145,7 +145,13 @@ export function DashboardPage() {
     if (!initialDraftRestoredRef.current && activeChannelId && channels.length > 0) {
       initialDraftRestoredRef.current = true;
       const ch = channels.find((c) => c.id === activeChannelId);
-      if (ch?.draft) setInputText(ch.draft);
+      if (ch?.draft) {
+        setInputText(ch.draft);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.4) + "px"; }
+        });
+      }
     }
   }, [activeChannelId, channels]);
 
@@ -160,7 +166,10 @@ export function DashboardPage() {
       // Restore draft from channel data
       const ch = channels.find((c) => c.id === activeChannelId);
       setInputText(ch?.draft ?? "");
-      if (inputRef.current) inputRef.current.style.height = "auto";
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.4) + "px"; }
+      });
     }
   }, [activeChannelId, channels]);
 
