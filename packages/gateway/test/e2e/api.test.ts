@@ -352,8 +352,16 @@ describe("GET /api/quota", () => {
   it("returns 200 with empty quota when no active session", async () => {
     const res = await fetch(`${baseUrl}/api/quota`);
     expect(res.status).toBe(200);
-    const body = await res.json() as { quotaSnapshots?: Record<string, unknown> };
+    const body = await res.json() as { quotaSnapshots?: Record<string, unknown>; githubUsage?: unknown };
     expect(body.quotaSnapshots).toBeDefined();
+  });
+
+  it("includes githubUsage field (null when no auth configured)", async () => {
+    const res = await fetch(`${baseUrl}/api/quota`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { githubUsage?: unknown };
+    // Without auth config, githubUsage should be null
+    expect(body.githubUsage).toBeNull();
   });
 });
 
@@ -361,8 +369,16 @@ describe("GET /api/models", () => {
   it("returns 200 with models array when no active session", async () => {
     const res = await fetch(`${baseUrl}/api/models`);
     expect(res.status).toBe(200);
-    const body = await res.json() as { models: unknown[] };
+    const body = await res.json() as { models: unknown[]; githubModels?: unknown };
     expect(Array.isArray(body.models)).toBe(true);
+  });
+
+  it("includes githubModels field (null when no auth configured)", async () => {
+    const res = await fetch(`${baseUrl}/api/models`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { githubModels?: unknown };
+    // Without auth config, githubModels should be null
+    expect(body.githubModels).toBeNull();
   });
 });
 
