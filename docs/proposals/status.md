@@ -183,8 +183,10 @@
 - トークン消費時系列 API（`GET /api/token-usage/timeseries`、期間・ポイント数・移動平均窓を指定、モデル別消費量・指数・移動平均を返却）（v0.63.0）
 - トークン消費グラフ UI（`/token-usage` ページ、recharts による指数折れ線グラフ + モデル別積み上げ面グラフ、期間・MA 窓の切り替え）（v0.63.0）
 
+- メッセージ消費とセッションステータス管理の設計整理 — SessionController 導入（v0.64.0）。POST handler のセッション即時起動、pending flush の安全化、lifecycle "wait" ゾンビ修正、notifyAgent 死セッション対応、swallowed-message 誤発火修正、double drain バイパス修正、cron notify タイミング、SSE broadcast 追加、gateway 再起動 stale 状態
+
 **未実現:**
-- メッセージ消費とセッションステータス管理のバグ修正 — SessionController 導入による設計整理。POST handler のセッション即時起動、pending flush の安全化、lifecycle "wait" ゾンビ修正、notifyAgent 死セッション対応、swallowed-message 誤発火修正、double drain バイパス修正、startPhysicalSession ack、cron notify タイミング、SSE broadcast 追加、gateway 再起動 stale 状態、IPC reconnect flush 順序
+- メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
 **今後の課題:**
