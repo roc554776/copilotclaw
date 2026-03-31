@@ -88,14 +88,25 @@ export class SessionOrchestrator {
         // Invalid JSON — use empty array
       }
 
+      let status = (row.status as AbstractSessionStatus) ?? "suspended";
+
+      // Migration: convert legacy "suspended" sessions with channel binding to "idle"
+      // and restore physicalSession from history so the session remains visible.
+      let physicalSession: PhysicalSessionSummary | undefined;
+      if (status === "suspended" && row.channelId !== null && history.length > 0) {
+        physicalSession = { ...history[history.length - 1]!, currentState: "stopped" };
+        status = "idle";
+      }
+
       const session: AbstractSession = {
         sessionId: row.sessionId,
-        status: (row.status as AbstractSessionStatus) ?? "suspended",
+        status,
         channelId: row.channelId ?? undefined,
         startedAt: row.startedAt,
         copilotSessionId: row.copilotSessionId ?? undefined,
         cumulativeInputTokens: row.cumulativeInputTokens,
         cumulativeOutputTokens: row.cumulativeOutputTokens,
+        physicalSession,
         physicalSessionHistory: history,
       };
       this.sessions.set(session.sessionId, session);

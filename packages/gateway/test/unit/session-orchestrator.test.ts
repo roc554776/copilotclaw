@@ -323,7 +323,10 @@ describe("SessionOrchestrator", () => {
 
       const statuses = orch2.getSessionStatuses();
       expect(Object.keys(statuses)).toHaveLength(2);
-      expect(statuses[id1].status).toBe("suspended");
+      // Migration: suspended with channel binding + history → "idle" with physicalSession restored
+      expect(statuses[id1].status).toBe("idle");
+      expect(statuses[id1].physicalSession).toBeDefined();
+      expect(statuses[id1].physicalSession!.currentState).toBe("stopped");
       expect(statuses[id1].cumulativeInputTokens).toBe(10);
       expect(statuses[id1].cumulativeOutputTokens).toBe(20);
       expect(statuses[id1].physicalSessionHistory).toHaveLength(1);
@@ -537,7 +540,10 @@ describe("SessionOrchestrator", () => {
       expect(orch.hasSessionForChannel("ch-1")).toBe(true);
       const session = orch.getSessionStatuses()["sess-1"];
       expect(session).toBeDefined();
-      expect(session.status).toBe("suspended");
+      // Migration: suspended with channel + history → idle with restored physicalSession
+      expect(session.status).toBe("idle");
+      expect(session.physicalSession).toBeDefined();
+      expect(session.physicalSession!.currentState).toBe("stopped");
       expect(session.cumulativeInputTokens).toBe(100);
       expect(session.physicalSessionHistory).toHaveLength(1);
       orch.close();
