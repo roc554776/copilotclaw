@@ -1122,34 +1122,45 @@ function QuotaSection({
 
       {/* GitHub API Usage */}
       <div style={{ marginTop: "0.5rem" }}>
-        <div
-          style={{ fontSize: "0.75rem", color: "#58a6ff", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem" }}
-          onClick={() => setGithubExpanded((p) => !p)}
-        >
-          GitHub API Usage {githubExpanded ? "\u25BE" : "\u25B8"}
-        </div>
-        {githubExpanded && (
-          githubUsage === null || githubUsage === undefined ? (
-            <div style={{ color: "#8b949e", fontSize: "0.85rem", marginTop: "0.3rem" }}>GitHub API: unavailable</div>
-          ) : (
-            <div style={{ marginTop: "0.3rem" }}>
-              <div style={{ ...rowStyle, fontSize: "0.8rem" }}>
-                <span style={labelStyle}>Billing period</span>
-                <span>{githubUsage.timePeriod.year}-{String(githubUsage.timePeriod.month).padStart(2, "0")}</span>
+        <div style={{ fontSize: "0.75rem", color: "#58a6ff", marginBottom: "0.3rem" }}>GitHub API</div>
+        {githubUsage === null || githubUsage === undefined ? (
+          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>unavailable</div>
+        ) : (() => {
+          const totalUsed = Math.round(githubUsage.usageItems.reduce((sum, item) => sum + item.grossQuantity, 0) * 100) / 100;
+          const premiumSnap = snapshots["premium_interactions"];
+          const totalAllowance = premiumSnap?.entitlementRequests ?? 0;
+          return (
+            <>
+              <div style={rowStyle}>
+                <span style={labelStyle}>Premium requests used</span>
+                <span>{totalUsed}{totalAllowance > 0 ? ` / ${totalAllowance}` : ""}</span>
               </div>
-              {githubUsage.usageItems.length === 0 ? (
-                <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>No usage items.</div>
-              ) : (
-                githubUsage.usageItems.map((item, idx) => (
-                  <div key={idx} style={{ ...rowStyle, fontSize: "0.8rem" }}>
-                    <span style={labelStyle}>{item.model}</span>
-                    <span>qty: {item.grossQuantity} @ ${item.pricePerUnit}/unit</span>
+              <div style={{ marginTop: "0.3rem" }}>
+                <a
+                  href="#"
+                  onClick={(e) => { e.preventDefault(); setGithubExpanded((p) => !p); }}
+                  style={{ fontSize: "0.75rem", color: "#8b949e", cursor: "pointer" }}
+                >
+                  Per-model breakdown {githubExpanded ? "\u25BE" : "\u25B8"}
+                </a>
+                {githubExpanded && (
+                  <div style={{ marginTop: "0.3rem" }}>
+                    <div style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                      <span style={labelStyle}>Billing period</span>
+                      <span>{githubUsage.timePeriod.year}-{String(githubUsage.timePeriod.month).padStart(2, "0")}</span>
+                    </div>
+                    {githubUsage.usageItems.map((item, idx) => (
+                      <div key={idx} style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                        <span style={labelStyle}>{item.model}</span>
+                        <span>{item.grossQuantity} reqs</span>
+                      </div>
+                    ))}
                   </div>
-                ))
-              )}
-            </div>
-          )
-        )}
+                )}
+              </div>
+            </>
+          );
+        })()}
       </div>
     </div>
   );
