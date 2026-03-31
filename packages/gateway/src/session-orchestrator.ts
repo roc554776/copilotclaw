@@ -53,35 +53,22 @@ export class SessionOrchestrator {
     this.loadFromDb();
   }
 
-  private static readonly LATEST_SCHEMA_VERSION = 3;
+  private static readonly LATEST_SCHEMA_VERSION = 1;
 
   private static readonly SCHEMA_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
-    // v0 → v1: Convert legacy "suspended" sessions with channel binding + history to "idle".
+    // v0 → v1: Normalize channel-bound session statuses for v0.58.0 idle/new semantics.
+    // Before v0.58.0, all physical session stops set status to "suspended", and sessions
+    // could also be persisted as "starting"/"waiting"/"processing" if the gateway stopped
+    // mid-operation. With the new status model:
+    //   - Sessions with physicalSessionHistory → "idle" (physical session info restorable)
+    //   - Sessions without physicalSessionHistory → "new" (no info to restore)
+    // Idempotent — the WHERE clauses exclude already-normalized sessions.
     0: (db) => {
       db.prepare(
-        `UPDATE abstract_sessions SET status = 'idle' WHERE status = 'suspended' AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
+        `UPDATE abstract_sessions SET status = 'idle' WHERE status NOT IN ('idle', 'new') AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
       ).run();
-    },
-    // v1 → v2: Convert all non-idle channel-bound sessions to "idle" on startup.
-    // Before v0.58.0, sessions could be persisted in any status (starting, waiting,
-    // processing, suspended) depending on when the gateway was stopped. All of these
-    // are stale after restart and should be "idle" (no running physical session).
-    1: (db) => {
-      // Sessions with history → idle (physical session info can be restored from history)
-      db.prepare(
-        `UPDATE abstract_sessions SET status = 'idle' WHERE status != 'idle' AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
-      ).run();
-      // Sessions without history → new (no physical session info to restore)
       db.prepare(
         `UPDATE abstract_sessions SET status = 'new' WHERE status NOT IN ('idle', 'new') AND channelId IS NOT NULL AND physicalSessionHistory = '[]'`,
-      ).run();
-    },
-    // v2 → v3: Fix sessions left as "idle" without history (should be "new").
-    // v1→v2 migration set history=0 sessions to "new" but only ran on fresh installs.
-    // Existing DBs that already had version=2 need this cleanup.
-    2: (db) => {
-      db.prepare(
-        `UPDATE abstract_sessions SET status = 'new' WHERE status = 'idle' AND channelId IS NOT NULL AND physicalSessionHistory = '[]'`,
       ).run();
     },
   };
@@ -108,6 +95,13 @@ export class SessionOrchestrator {
   private runDataMigrations(): void {
     const row = this.db.prepare("SELECT version FROM orchestrator_schema_version LIMIT 1").get() as { version: number } | undefined;
     let version = row?.version ?? 0;
+
+    // If the stored version exceeds LATEST, the DB was migrated by a prior version of the
+    // code that had more migration steps (v0.58.0 development iterations). Reset to 0 so
+    // the consolidated migration runs. The migration is idempotent so re-applying is safe.
+    if (version > SessionOrchestrator.LATEST_SCHEMA_VERSION) {
+      version = 0;
+    }
 
     while (version < SessionOrchestrator.LATEST_SCHEMA_VERSION) {
       const fn = SessionOrchestrator.SCHEMA_MIGRATIONS[version];
