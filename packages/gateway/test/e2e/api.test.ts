@@ -424,11 +424,20 @@ describe("PATCH /api/channels/:id (archive/unarchive)", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 400 without archived field", async () => {
+  it("returns 200 for empty body (no-op PATCH)", async () => {
     const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 400 for invalid body", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: "not-json",
     });
     expect(res.status).toBe(400);
   });
@@ -624,6 +633,56 @@ describe("GET /api/token-usage", () => {
     expect(res.status).toBe(200);
     const data = await res.json() as unknown[];
     expect(Array.isArray(data)).toBe(true);
+  });
+});
+
+describe("PATCH /api/channels/:id (model setting)", () => {
+  it("sets channel model", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-4.1" }),
+    });
+    expect(res.status).toBe(200);
+    const ch = await res.json() as { id: string; model: string | null };
+    expect(ch.model).toBe("gpt-4.1");
+  });
+
+  it("clears channel model with null", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: null }),
+    });
+    expect(res.status).toBe(200);
+    const ch = await res.json() as { id: string; model: string | null };
+    expect(ch.model).toBeNull();
+  });
+
+  it("returns 400 for non-string/null model", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: 123 }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/cron", () => {
+  it("returns empty list when no cron functions provided", async () => {
+    const res = await fetch(`${baseUrl}/api/cron`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as unknown[];
+    expect(Array.isArray(data)).toBe(true);
+    expect(data).toHaveLength(0);
+  });
+});
+
+describe("POST /api/cron/reload", () => {
+  it("returns 503 when no cron reload handler", async () => {
+    const res = await fetch(`${baseUrl}/api/cron/reload`, { method: "POST" });
+    expect(res.status).toBe(503);
   });
 });
 

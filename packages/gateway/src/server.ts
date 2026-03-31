@@ -122,6 +122,15 @@ function parseChannelRoute(pathname: string): { channelId: string; action: strin
   return undefined;
 }
 
+export interface CronJobStatus {
+  id: string;
+  channelId: string;
+  intervalMs: number;
+  message: string;
+  disabled: boolean;
+  scheduled: boolean;
+}
+
 export interface ServerDeps {
   port?: number;
   store?: Store;
@@ -132,6 +141,8 @@ export interface ServerDeps {
   logBuffer?: LogBuffer;
   sessionEventStore?: SessionEventStore;
   sessionOrchestrator?: SessionOrchestrator;
+  onCronReload?: () => void;
+  getCronJobStatuses?: () => CronJobStatus[];
 }
 
 function createRequestHandler(
@@ -142,6 +153,8 @@ function createRequestHandler(
   logBuffer: LogBuffer,
   sessionEventStore: SessionEventStore | null,
   sessionOrchestrator: SessionOrchestrator | null,
+  onCronReload: (() => void) | null,
+  getCronJobStatuses: (() => CronJobStatus[]) | null,
 ) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
@@ -262,6 +275,40 @@ function createRequestHandler(
       return;
     }
 
+    // Cron management
+    if (fullPathname === "/api/cron" && method === "GET") {
+      if (getCronJobStatuses !== null) {
+        json(res, 200, getCronJobStatuses());
+      } else {
+        json(res, 200, []);
+      }
+      return;
+    }
+
+    if (fullPathname === "/api/cron/reload" && method === "POST") {
+      if (onCronReload !== null) {
+        onCronReload();
+        json(res, 200, { status: "reloaded" });
+      } else {
+        json(res, 503, { error: "cron reload not available" });
+      }
+      return;
+    }
+
+    // Physical session stop via API (for channel settings modal)
+    const sessionStopMatch = /^\/api\/sessions\/([^/]+)\/stop$/.exec(fullPathname);
+    if (sessionStopMatch !== null && method === "POST") {
+      if (agentManager === null || sessionOrchestrator === null) {
+        json(res, 503, { error: "agent not available" });
+        return;
+      }
+      const sessionId = decodeURIComponent(sessionStopMatch[1]!);
+      agentManager.stopPhysicalSession(sessionId);
+      sessionOrchestrator.suspendSession(sessionId);
+      json(res, 200, { status: "stopped" });
+      return;
+    }
+
     // Channel management (core — provider-agnostic)
     if (fullPathname === "/api/channels" && method === "GET") {
       const includeArchived = params.get("includeArchived") === "true";
@@ -280,23 +327,47 @@ function createRequestHandler(
       return;
     }
 
-    // Channel archive/unarchive
+    // Channel update (archive/unarchive and/or model setting)
     const channelPatchMatch = /^\/api\/channels\/([^/]+)$/.exec(fullPathname);
     if (channelPatchMatch !== null && method === "PATCH") {
       const channelId = decodeURIComponent(channelPatchMatch[1]!);
       const body = parseJson(await readBody(req));
-      if (!isRecord(body) || typeof body["archived"] !== "boolean") {
-        json(res, 400, { error: "missing 'archived' boolean field" });
+      if (!isRecord(body)) {
+        json(res, 400, { error: "invalid request body" });
         return;
       }
-      const ok = body["archived"]
-        ? store.archiveChannel(channelId)
-        : store.unarchiveChannel(channelId);
-      if (!ok) {
-        json(res, 404, { error: "channel not found or already in requested state" });
+
+      // Handle archive/unarchive
+      if (typeof body["archived"] === "boolean") {
+        const ok = body["archived"]
+          ? store.archiveChannel(channelId)
+          : store.unarchiveChannel(channelId);
+        if (!ok) {
+          json(res, 404, { error: "channel not found or already in requested state" });
+          return;
+        }
+      }
+
+      // Handle model setting (string to set, null to clear)
+      if ("model" in body) {
+        const modelVal = body["model"];
+        if (modelVal !== null && typeof modelVal !== "string") {
+          json(res, 400, { error: "'model' must be a string or null" });
+          return;
+        }
+        const ok = store.updateChannelModel(channelId, modelVal as string | null);
+        if (!ok) {
+          json(res, 404, { error: "channel not found" });
+          return;
+        }
+      }
+
+      const channel = store.getChannel(channelId);
+      if (channel === undefined) {
+        json(res, 404, { error: "channel not found" });
         return;
       }
-      json(res, 200, store.getChannel(channelId));
+      json(res, 200, channel);
       return;
     }
 
@@ -557,7 +628,9 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
     new BuiltinChatChannel({ store, agentManager, sseBroadcaster }),
   ];
 
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator);
+  const onCronReload = options?.onCronReload ?? null;
+  const getCronJobStatuses = options?.getCronJobStatuses ?? null;
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, onCronReload, getCronJobStatuses);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {

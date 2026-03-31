@@ -4,16 +4,22 @@ import {
   archiveChannel,
   createChannel,
   fetchChannels,
+  fetchCronJobs,
   fetchLogs,
   fetchMessages,
   fetchModels,
   fetchQuota,
   fetchStatus,
+  reloadCron,
   sendMessage,
+  stopSession,
   unarchiveChannel,
+  updateChannelModel,
   type Channel,
+  type CronJobStatus,
   type LogEntry,
   type Message,
+  type ModelEntry,
   type ModelsResponse,
   type QuotaResponse,
   type StatusResponse,
@@ -61,6 +67,9 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [channelSettingsId, setChannelSettingsId] = useState<string | null>(null);
+  const [channelSettingsModels, setChannelSettingsModels] = useState<ModelEntry[]>([]);
+  const [channelSettingsCron, setChannelSettingsCron] = useState<CronJobStatus[]>([]);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const evtSourceRef = useRef<EventSource | null>(null);
@@ -372,6 +381,37 @@ export function DashboardPage() {
     }
   }, [setSearchParams]);
 
+  const openChannelSettings = useCallback(async (channelId: string) => {
+    setChannelSettingsId(channelId);
+    const [models, cron, status] = await Promise.all([
+      fetchModels().then((r) => r?.models ?? []).catch(() => [] as ModelEntry[]),
+      fetchCronJobs().catch(() => [] as CronJobStatus[]),
+      fetchStatus().catch(() => null),
+    ]);
+    setChannelSettingsModels(models);
+    setChannelSettingsCron(cron.filter((j) => j.channelId === channelId));
+    if (status !== null) setModalStatus(status);
+  }, []);
+
+  const closeChannelSettings = useCallback(() => {
+    setChannelSettingsId(null);
+  }, []);
+
+  const handleChannelModelChange = useCallback(async (channelId: string, model: string | null) => {
+    try {
+      const updated = await updateChannelModel(channelId, model);
+      setChannels((prev) => prev.map((ch) => (ch.id === channelId ? updated : ch)));
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleStopPhysicalSession = useCallback(async (sessionId: string) => {
+    try {
+      await stopSession(sessionId);
+      // Refresh status to reflect the change
+      refreshStatusRef.current();
+    } catch { /* ignore */ }
+  }, []);
+
   const compatLabel =
     compatibility && compatibility !== "compatible"
       ? ` [${compatibility}]`
@@ -554,6 +594,39 @@ export function DashboardPage() {
         </>
       )}
 
+      {/* Channel Settings Modal */}
+      {channelSettingsId !== null && (
+        <ChannelSettingsModal
+          channelId={channelSettingsId}
+          channel={channels.find((ch) => ch.id === channelSettingsId) ?? null}
+          models={channelSettingsModels}
+          cronJobs={channelSettingsCron}
+          activeSession={(() => {
+            // Find the active physical session for this channel from the last status poll
+            if (!modalStatus?.agent?.sessions) return null;
+            for (const s of Object.values(modalStatus.agent.sessions)) {
+              if (s.boundChannelId === channelSettingsId && s.physicalSession) {
+                return s.physicalSession;
+              }
+            }
+            return null;
+          })()}
+          activeSessionId={(() => {
+            if (!modalStatus?.agent?.sessions) return undefined;
+            for (const [sid, s] of Object.entries(modalStatus.agent.sessions)) {
+              if (s.boundChannelId === channelSettingsId && s.status !== "suspended") {
+                return sid;
+              }
+            }
+            return undefined;
+          })()}
+          onClose={closeChannelSettings}
+          onModelChange={handleChannelModelChange}
+          onStopSession={handleStopPhysicalSession}
+          onRefreshStatus={refreshStatusRef.current}
+        />
+      )}
+
       {/* Tabs */}
       <div
         style={{
@@ -586,23 +659,31 @@ export function DashboardPage() {
                 marginBottom: isActive ? -1 : 0,
                 flexShrink: 0,
                 whiteSpace: "nowrap",
+                cursor: "pointer",
               }}
+              onClick={() => setSearchParams({ channel: ch.id })}
             >
-              <a
-                href={`/?channel=${ch.id}`}
+              <span
                 onClick={(e) => {
-                  e.preventDefault();
-                  setSearchParams({ channel: ch.id });
+                  e.stopPropagation();
+                  if (isActive) {
+                    openChannelSettings(ch.id);
+                  } else {
+                    setSearchParams({ channel: ch.id });
+                  }
                 }}
                 style={{
                   color: isArchived ? "#484f58" : isActive ? "#58a6ff" : "#8b949e",
-                  textDecoration: "none",
+                  textDecoration: isActive ? "underline" : "none",
+                  textDecorationStyle: isActive ? ("dotted" as const) : undefined,
                   fontSize: "0.85rem",
                   fontStyle: isArchived ? "italic" : "normal",
+                  cursor: isActive ? "pointer" : "default",
                 }}
+                title={isActive ? "Channel settings" : undefined}
               >
                 {ch.id.slice(0, SESSION_ID_SHORT)}
-              </a>
+              </span>
               <button
                 onClick={() => isArchived ? handleUnarchiveChannel(ch.id) : handleArchiveChannel(ch.id)}
                 title={isArchived ? "Unarchive" : "Archive"}
@@ -1199,6 +1280,238 @@ function StatusModalContent({
         ) : (
           <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
         )}
+      </div>
+    </>
+  );
+}
+
+function ChannelSettingsModal({
+  channelId,
+  channel,
+  models,
+  cronJobs,
+  activeSession,
+  activeSessionId,
+  onClose,
+  onModelChange,
+  onStopSession,
+  onRefreshStatus,
+}: {
+  channelId: string;
+  channel: Channel | null;
+  models: ModelEntry[];
+  cronJobs: CronJobStatus[];
+  activeSession: { model: string } | null;
+  activeSessionId?: string;
+  onClose: () => void;
+  onModelChange: (channelId: string, model: string | null) => Promise<void>;
+  onStopSession: (sessionId: string) => Promise<void>;
+  onRefreshStatus: () => void;
+}) {
+  const [selectedModel, setSelectedModel] = useState<string>(channel?.model ?? "");
+  const [saving, setSaving] = useState(false);
+
+  const handleModelSave = async () => {
+    setSaving(true);
+    try {
+      await onModelChange(channelId, selectedModel === "" ? null : selectedModel);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleArchiveSession = async () => {
+    if (activeSessionId === undefined) return;
+    await onStopSession(activeSessionId);
+    onRefreshStatus();
+  };
+
+  const handleCronReload = async () => {
+    try {
+      await reloadCron();
+    } catch { /* ignore */ }
+  };
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.5)",
+          zIndex: 1000,
+        }}
+      />
+      <div
+        style={{
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          background: "#161b22",
+          border: "1px solid #30363d",
+          borderRadius: "0.5rem",
+          padding: "1.5rem",
+          zIndex: 1001,
+          width: "min(90vw, 500px)",
+          maxHeight: "80vh",
+          overflowY: "auto",
+          color: "#c9d1d9",
+        }}
+      >
+        <button
+          onClick={onClose}
+          style={{
+            float: "right",
+            background: "none",
+            border: "none",
+            color: "#8b949e",
+            cursor: "pointer",
+            fontSize: "1.2rem",
+          }}
+        >
+          &times;
+        </button>
+        <h3 style={{ marginBottom: "1rem", fontSize: "1rem", color: "#58a6ff" }}>
+          Channel Settings — {channelId.slice(0, SESSION_ID_SHORT)}
+        </h3>
+
+        {/* Model Section */}
+        <div style={modalSectionStyle}>
+          <div style={modalTitleStyle}>Model</div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Current physical session</span>
+            <span>{activeSession?.model ?? "none"}</span>
+          </div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Setting</span>
+            <span>{channel?.model ?? "default"}</span>
+          </div>
+          <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              style={{
+                flex: 1,
+                padding: "0.3rem",
+                background: "#0d1117",
+                border: "1px solid #30363d",
+                borderRadius: "0.3rem",
+                color: "#c9d1d9",
+                fontSize: "0.85rem",
+              }}
+            >
+              <option value="">Default (global)</option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id}{m.billing?.multiplier !== undefined ? ` (x${m.billing.multiplier})` : ""}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={handleModelSave}
+              disabled={saving}
+              style={{
+                padding: "0.3rem 0.8rem",
+                background: "#238636",
+                border: "none",
+                borderRadius: "0.3rem",
+                color: "#fff",
+                cursor: saving ? "default" : "pointer",
+                fontSize: "0.85rem",
+                opacity: saving ? 0.6 : 1,
+              }}
+            >
+              {saving ? "..." : "Apply"}
+            </button>
+          </div>
+        </div>
+
+        {/* Physical Session Section */}
+        <div style={modalSectionStyle}>
+          <div style={modalTitleStyle}>Physical Session</div>
+          {activeSession !== null && activeSessionId !== undefined ? (
+            <div>
+              <div style={modalRowStyle}>
+                <span style={modalLabelStyle}>Session</span>
+                <span>{activeSessionId.slice(0, SESSION_ID_SHORT)}</span>
+              </div>
+              <div style={modalRowStyle}>
+                <span style={modalLabelStyle}>Model</span>
+                <span>{activeSession.model}</span>
+              </div>
+              <button
+                onClick={handleArchiveSession}
+                style={{
+                  marginTop: "0.5rem",
+                  padding: "0.3rem 0.8rem",
+                  background: "#da3633",
+                  border: "none",
+                  borderRadius: "0.3rem",
+                  color: "#fff",
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                }}
+              >
+                Archive physical session
+              </button>
+              <div style={{ fontSize: "0.75rem", color: "#8b949e", marginTop: "0.3rem" }}>
+                Stops the current session. A new one starts on next message.
+              </div>
+            </div>
+          ) : (
+            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No active physical session</div>
+          )}
+        </div>
+
+        {/* Cron Section */}
+        <div style={modalSectionStyle}>
+          <div style={modalTitleStyle}>Cron Jobs</div>
+          {cronJobs.length > 0 ? (
+            cronJobs.map((job) => (
+              <div
+                key={job.id}
+                style={{
+                  padding: "0.3rem",
+                  marginBottom: "0.3rem",
+                  border: "1px solid #21262d",
+                  borderRadius: "0.3rem",
+                }}
+              >
+                <div style={modalRowStyle}>
+                  <span style={modalLabelStyle}>{job.id}</span>
+                  <span style={{ color: job.scheduled ? "#3fb950" : "#f85149" }}>
+                    {job.scheduled ? "scheduled" : job.disabled ? "disabled" : "inactive"}
+                  </span>
+                </div>
+                <div style={{ fontSize: "0.75rem", color: "#8b949e" }}>
+                  Every {Math.round(job.intervalMs / 1000)}s — {job.message.slice(0, 60)}{job.message.length > 60 ? "..." : ""}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No cron jobs for this channel</div>
+          )}
+          <div style={{ fontSize: "0.75rem", color: "#8b949e", marginTop: "0.3rem" }}>
+            Edit cron jobs in config.json, then reload.
+          </div>
+          <button
+            onClick={handleCronReload}
+            style={{
+              marginTop: "0.3rem",
+              padding: "0.3rem 0.8rem",
+              background: "#21262d",
+              border: "1px solid #30363d",
+              borderRadius: "0.3rem",
+              color: "#c9d1d9",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+            }}
+          >
+            Reload cron
+          </button>
+        </div>
       </div>
     </>
   );

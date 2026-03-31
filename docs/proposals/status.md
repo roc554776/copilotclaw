@@ -146,8 +146,25 @@
 
 - Gateway-Agent 責務の再配置（v0.54.0）: swallowed-message 検出を gateway に移行、MAX_REINJECT を gateway config 化、reminderState を gateway に移行（session_event 監視で判定）、agent コメントの abstract session 言及修正、初期化シーケンス修正（stream_connected ハンドラを config 受信前に登録）、pooled CopilotClient の start 修正
 
+- チャンネルごとのモデル設定（channels テーブルに model カラム追加、PATCH API 拡張、物理セッション起動時にチャンネル model 優先）（v0.55.0）
+
+- Cron の `enabled` → `disabled` フラグ変更（デフォルト `false` の否定形フラグに変更、config migration v4→v5）（v0.55.0）
+
+- アーカイブされたチャンネルの cron 無効化（スケジューラ登録時・tick 時にアーカイブ状態確認、アーカイブ済みチャンネルのジョブをスキップ）（v0.55.0）
+
+- Cron 設定のリロード（`copilotclaw cron reload` CLI、`POST /api/cron/reload` API、設定差分なしジョブのタイマー保持。`copilotclaw cron list` CLI、`GET /api/cron` API）（v0.55.0）
+
+- チャンネル設定モーダル（chat 画面のタブ channel ID クリックで開く。モデル表示・設定、物理セッションアーカイブ、cron ジョブ表示・リロード）（v0.55.0）
+
+- 物理セッション停止 API（`POST /api/sessions/{{sessionId}}/stop`、チャンネル設定モーダルからの物理セッションアーカイブに使用）（v0.55.0）
+
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
+- チャンネルごとのモデル設定（channels テーブルに model カラム追加、PATCH API 拡張、モデル解決の優先順位変更）
+- Cron 設定のリロードコマンド（`cron reload` / `cron list` CLI コマンド、`POST /api/cron/reload` / `GET /api/cron` API）
+- Cron の `enabled` → `disabled` フラグ変更（デフォルト `false` の否定形フラグに変更、config migration）
+- アーカイブされたチャンネルの cron 無効化（アーカイブ済みチャンネルの cron を設定値に関係なく無効化）
+- チャンネル設定モーダル（chat 画面のタブ channel ID クリックでモーダル表示。モデル設定・物理セッションアーカイブ・cron 設定の変更/追加/削除）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）

@@ -42,7 +42,8 @@ export interface CronJobConfig {
   channelId: string;
   intervalMs: number;
   message: string;
-  enabled?: boolean;
+  /** If true, this cron job is disabled and will not be scheduled. Default: false. */
+  disabled?: boolean;
 }
 
 export interface CopilotclawConfig {
@@ -60,7 +61,7 @@ export interface CopilotclawConfig {
 }
 
 /** Current schema version. Increment when a breaking config change is introduced. */
-export const LATEST_CONFIG_VERSION = 4;
+export const LATEST_CONFIG_VERSION = 5;
 
 /** Migration function type: transforms a raw config object from version N to N+1. */
 type MigrationFn = (config: Record<string, unknown>) => Record<string, unknown>;
@@ -89,6 +90,23 @@ const MIGRATIONS: Record<number, MigrationFn> = {
   2: (config) => ({ ...config, configVersion: 3 }),
   // v3 → v4: Add debug namespace. No schema changes (debug is optional).
   3: (config) => ({ ...config, configVersion: 4 }),
+  // v4 → v5: Rename cron[].enabled to cron[].disabled (invert semantics).
+  4: (config) => {
+    const cron = config["cron"] as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(cron)) {
+      const migrated = cron.map((job) => {
+        const { enabled, ...rest } = job;
+        if (enabled === false) {
+          return { ...rest, disabled: true };
+        }
+        // enabled: true or undefined → disabled defaults to false, omit field
+        const { disabled: _d, ...clean } = rest;
+        return clean;
+      });
+      return { ...config, cron: migrated, configVersion: 5 };
+    }
+    return { ...config, configVersion: 5 };
+  },
 };
 
 /**

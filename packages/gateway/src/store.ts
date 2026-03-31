@@ -16,6 +16,7 @@ export interface Channel {
   id: string;
   createdAt: string;
   archivedAt?: string | null;
+  model?: string | null;
 }
 
 export interface StoreOptions {
@@ -44,7 +45,7 @@ export class Store {
     }
   }
 
-  private static readonly LATEST_STORE_VERSION = 2;
+  private static readonly LATEST_STORE_VERSION = 3;
 
   private static readonly STORE_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // v0 → v1: Add archivedAt column to channels
@@ -78,6 +79,13 @@ export class Store {
           CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channelId, createdAt);
           PRAGMA foreign_keys = ON;
         `);
+      }
+    },
+    // v2 → v3: Add model column to channels for per-channel model setting
+    2: (db) => {
+      const columns = db.pragma("table_info(channels)") as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === "model")) {
+        db.exec("ALTER TABLE channels ADD COLUMN model TEXT");
       }
     },
   };
@@ -186,14 +194,20 @@ export class Store {
   }
 
   getChannel(channelId: string): Channel | undefined {
-    return this.db.prepare("SELECT id, createdAt, archivedAt FROM channels WHERE id = ?").get(channelId) as Channel | undefined;
+    return this.db.prepare("SELECT id, createdAt, archivedAt, model FROM channels WHERE id = ?").get(channelId) as Channel | undefined;
   }
 
   listChannels(options?: { includeArchived?: boolean }): Channel[] {
     if (options?.includeArchived) {
-      return this.db.prepare("SELECT id, createdAt, archivedAt FROM channels ORDER BY createdAt ASC").all() as Channel[];
+      return this.db.prepare("SELECT id, createdAt, archivedAt, model FROM channels ORDER BY createdAt ASC").all() as Channel[];
     }
-    return this.db.prepare("SELECT id, createdAt, archivedAt FROM channels WHERE archivedAt IS NULL ORDER BY createdAt ASC").all() as Channel[];
+    return this.db.prepare("SELECT id, createdAt, archivedAt, model FROM channels WHERE archivedAt IS NULL ORDER BY createdAt ASC").all() as Channel[];
+  }
+
+  /** Update the model setting for a channel. Pass null to clear (use global default). */
+  updateChannelModel(channelId: string, model: string | null): boolean {
+    const result = this.db.prepare("UPDATE channels SET model = ? WHERE id = ?").run(model, channelId);
+    return result.changes > 0;
   }
 
   archiveChannel(channelId: string): boolean {

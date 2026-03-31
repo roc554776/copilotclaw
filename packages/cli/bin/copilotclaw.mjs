@@ -40,6 +40,8 @@ Commands:
   update               Update copilotclaw (git pull + build)
   config get <key>     Show config value
   config set <key> <v> Set config value
+  cron reload          Reload cron scheduler from config
+  cron list            List cron jobs and their status
   doctor [--fix]       Diagnose environment (fix issues with --fix)
   agent stop           Stop the agent process only
 
@@ -94,6 +96,12 @@ async function run() {
     case "config": {
       const { main: configMain } = await import(join(gatewayDist, "config-cli.js"));
       configMain(args);
+      break;
+    }
+
+    case "cron": {
+      const { main: cronMain } = await import(join(gatewayDist, "cron-cli.js"));
+      await cronMain(args);
       break;
     }
 

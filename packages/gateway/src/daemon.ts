@@ -416,11 +416,13 @@ async function main(): Promise<void> {
     const sessionId = orchestrator.startSession(channelId);
     const session = orchestrator.getSessionStatuses()[sessionId];
 
-    // Resolve model on gateway side
+    // Resolve model on gateway side (channel model overrides global config)
     let resolvedModelName: string | undefined;
     try {
       const modelsResponse = await agentManager.getModels();
-      resolvedModelName = resolveModel(modelsResponse, config.model ?? null, config.zeroPremium ?? false);
+      const channel = store.getChannel(channelId);
+      const configModel = channel?.model ?? config.model ?? null;
+      resolvedModelName = resolveModel(modelsResponse, configModel, config.zeroPremium ?? false);
     } catch {
       // Model resolution failed — agent will fall back to its own resolution
     }
@@ -446,20 +448,38 @@ async function main(): Promise<void> {
     }
   };
 
-  // Need to capture serverHandle for SSE broadcaster access in stream handler
-  let serverHandle: Awaited<ReturnType<typeof startServer>> | undefined;
-  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator });
+  // Cron scheduler: periodically send cron messages to channels.
+  // Supports dynamic reload — existing timers for unchanged jobs are preserved.
+  interface CronTimerEntry {
+    job: import("./config.js").CronJobConfig;
+    timer: ReturnType<typeof setInterval>;
+  }
+  const cronTimerMap = new Map<string, CronTimerEntry>();
 
-  // Cron scheduler: periodically send cron messages to channels
-  const cronJobs = config.cron ?? [];
-  const cronTimers: ReturnType<typeof setInterval>[] = [];
-  for (const job of cronJobs) {
-    if (job.enabled === false) {
+  /** Serialize a cron job config for diff comparison (all fields that affect scheduling). */
+  const cronJobKey = (job: import("./config.js").CronJobConfig): string =>
+    JSON.stringify({ id: job.id, channelId: job.channelId, intervalMs: job.intervalMs, message: job.message, disabled: job.disabled ?? false });
+
+  /** Schedule a single cron job. Returns the timer entry or undefined if skipped. */
+  const scheduleCronJob = (job: import("./config.js").CronJobConfig): CronTimerEntry | undefined => {
+    if (job.disabled === true) {
       console.error(`[gateway] cron job '${job.id}' skipped (disabled)`);
-      continue;
+      return undefined;
+    }
+    // Skip if channel is archived
+    const ch = store.getChannel(job.channelId);
+    if (ch?.archivedAt != null) {
+      console.error(`[gateway] cron job '${job.id}' skipped (channel archived)`);
+      return undefined;
     }
     const timer = setInterval(() => {
       console.error(`[gateway] cron tick: ${job.id}`);
+      // Re-check archive status on each tick
+      const tickCh = store.getChannel(job.channelId);
+      if (tickCh?.archivedAt != null) {
+        console.error(`[gateway] cron ${job.id}: skipped (channel archived)`);
+        return;
+      }
       const prefix = `[cron:${job.id}] `;
       if (store.hasPendingCronMessage(job.channelId, prefix)) {
         console.error(`[gateway] cron ${job.id}: skipped (pending dedup)`);
@@ -470,7 +490,6 @@ async function main(): Promise<void> {
         startSessionForChannel(job.channelId).catch((err: unknown) => {
           console.error(`[gateway] cron ${job.id}: failed to start session:`, err);
         });
-        // Fallback: also send agent_notify for backward compat
         const cronSessionId = orchestrator.getSessionIdForChannel(job.channelId);
         if (cronSessionId !== undefined) {
           agentManager.notifyAgent(cronSessionId);
@@ -478,9 +497,70 @@ async function main(): Promise<void> {
       }
     }, job.intervalMs);
     timer.unref();
-    cronTimers.push(timer);
     console.error(`[gateway] cron job '${job.id}' scheduled for channel ${job.channelId.slice(0, 8)} every ${Math.round(job.intervalMs / 1000)}s`);
-  }
+    return { job, timer };
+  };
+
+  /** Reload cron scheduler from a list of job configs. Preserves timers for unchanged jobs. */
+  const reloadCronScheduler = (jobs: import("./config.js").CronJobConfig[]) => {
+    const newKeys = new Map<string, import("./config.js").CronJobConfig>();
+    for (const job of jobs) {
+      newKeys.set(job.id, job);
+    }
+
+    // Remove jobs that no longer exist or have changed
+    for (const [id, entry] of cronTimerMap) {
+      const newJob = newKeys.get(id);
+      if (newJob === undefined || cronJobKey(newJob) !== cronJobKey(entry.job)) {
+        clearInterval(entry.timer);
+        cronTimerMap.delete(id);
+        if (newJob === undefined) {
+          console.error(`[gateway] cron job '${id}' removed`);
+        } else {
+          console.error(`[gateway] cron job '${id}' changed, rescheduling`);
+        }
+      }
+    }
+
+    // Add new or changed jobs
+    for (const job of jobs) {
+      if (cronTimerMap.has(job.id)) continue; // unchanged, keep existing timer
+      const entry = scheduleCronJob(job);
+      if (entry !== undefined) {
+        cronTimerMap.set(job.id, entry);
+      }
+    }
+  };
+
+  /** Get the current list of cron jobs with their scheduling status. */
+  const getCronJobStatuses = (): Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled: boolean; scheduled: boolean }> => {
+    const currentConfig = loadConfig(getProfileName());
+    const jobs = currentConfig.cron ?? [];
+    return jobs.map((job) => {
+      const ch = store.getChannel(job.channelId);
+      const effectivelyDisabled = (job.disabled === true) || (ch?.archivedAt != null);
+      return {
+        id: job.id,
+        channelId: job.channelId,
+        intervalMs: job.intervalMs,
+        message: job.message,
+        disabled: job.disabled ?? false,
+        scheduled: cronTimerMap.has(job.id) && !effectivelyDisabled,
+      };
+    });
+  };
+
+  // Initial cron scheduling
+  reloadCronScheduler(config.cron ?? []);
+
+  // Start HTTP server (after cron scheduler is initialized, so reload/list handlers are available)
+  const onCronReload = () => {
+    const freshConfig = loadConfig(getProfileName());
+    reloadCronScheduler(freshConfig.cron ?? []);
+    console.error("[gateway] cron scheduler reloaded");
+  };
+  let serverHandle: Awaited<ReturnType<typeof startServer>> | undefined;
+  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator, onCronReload, getCronJobStatuses: () => getCronJobStatuses() });
 
   // Periodic agent process monitoring
   let consecutiveFailures = 0;

@@ -108,6 +108,36 @@ describe("config migration", () => {
       expect(config["configVersion"]).toBe(99);
       expect(config["port"]).toBe(19741);
     });
+
+    it("migrates cron enabled:false to disabled:true (v4→v5)", () => {
+      const { config, migrated } = migrateConfig({
+        configVersion: 4,
+        cron: [
+          { id: "a", channelId: "ch1", intervalMs: 1000, message: "test", enabled: false },
+          { id: "b", channelId: "ch2", intervalMs: 2000, message: "test2", enabled: true },
+          { id: "c", channelId: "ch3", intervalMs: 3000, message: "test3" },
+        ],
+      });
+      expect(migrated).toBe(true);
+      expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
+      const cron = config["cron"] as Array<Record<string, unknown>>;
+      // enabled:false → disabled:true
+      expect(cron[0]!["disabled"]).toBe(true);
+      expect(cron[0]!["enabled"]).toBeUndefined();
+      // enabled:true → no disabled field
+      expect(cron[1]!["disabled"]).toBeUndefined();
+      expect(cron[1]!["enabled"]).toBeUndefined();
+      // no enabled → no disabled field
+      expect(cron[2]!["disabled"]).toBeUndefined();
+      expect(cron[2]!["enabled"]).toBeUndefined();
+    });
+
+    it("migrates v4→v5 without cron field", () => {
+      const { config, migrated } = migrateConfig({ configVersion: 4, port: 19741 });
+      expect(migrated).toBe(true);
+      expect(config["configVersion"]).toBe(LATEST_CONFIG_VERSION);
+      expect(config["cron"]).toBeUndefined();
+    });
   });
 
   describe("loadConfig migration write-back", () => {
