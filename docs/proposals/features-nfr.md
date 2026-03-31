@@ -246,7 +246,7 @@ chat UI の入力欄の操作性を改善する。
 - debounce: 変更イベントを一定期間（例: 1 秒）集約し、最終結果のみ送信する
 - チャンネル切り替え時に下書きを復元する
 
-### NFR: System Status UI 改善（未実現）
+### NFR: System Status UI 改善（v0.60.0 で実現済み）
 
 System Status モーダルと `/status` ページの表示を改善し、内容を統一する。
 
