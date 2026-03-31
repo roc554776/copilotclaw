@@ -705,6 +705,165 @@ describe("PUT /api/cron", () => {
     // Without saveCronJobs handler, returns 503 before validation
     expect(res.status).toBe(503);
   });
+
+  it("saves valid cron jobs when handler is provided", async () => {
+    const saved: unknown[] = [];
+    const freshHandle = await startServer({
+      port: 0,
+      store: new Store(),
+      agentManager: null,
+      saveCronJobs: (jobs) => { saved.push(jobs); },
+    });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const res = await fetch(`${url}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([{ id: "test-job", channelId: chId, intervalMs: 60000, message: "hello" }]),
+    });
+    expect(res.status).toBe(200);
+    expect(saved).toHaveLength(1);
+    await freshHandle.close();
+  });
+
+  it("accepts empty array (delete all jobs)", async () => {
+    const saved: unknown[] = [];
+    const freshHandle = await startServer({
+      port: 0,
+      store: new Store(),
+      agentManager: null,
+      saveCronJobs: (jobs) => { saved.push(jobs); },
+    });
+    const url = `http://localhost:${freshHandle.port}`;
+
+    const res = await fetch(`${url}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([]),
+    });
+    expect(res.status).toBe(200);
+    expect(saved).toHaveLength(1);
+    await freshHandle.close();
+  });
+
+  it("rejects non-array body", async () => {
+    const freshHandle = await startServer({
+      port: 0,
+      store: new Store(),
+      agentManager: null,
+      saveCronJobs: () => {},
+    });
+    const url = `http://localhost:${freshHandle.port}`;
+
+    const res = await fetch(`${url}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "test" }),
+    });
+    expect(res.status).toBe(400);
+    await freshHandle.close();
+  });
+
+  it("rejects job with missing fields", async () => {
+    const freshHandle = await startServer({
+      port: 0,
+      store: new Store(),
+      agentManager: null,
+      saveCronJobs: () => {},
+    });
+    const url = `http://localhost:${freshHandle.port}`;
+
+    const res = await fetch(`${url}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([{ id: "test" }]),
+    });
+    expect(res.status).toBe(400);
+    await freshHandle.close();
+  });
+
+  it("rejects job with empty id", async () => {
+    const freshHandle = await startServer({
+      port: 0,
+      store: new Store(),
+      agentManager: null,
+      saveCronJobs: () => {},
+    });
+    const url = `http://localhost:${freshHandle.port}`;
+
+    const res = await fetch(`${url}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([{ id: "", channelId: "ch1", intervalMs: 60000, message: "hello" }]),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain("non-empty");
+    await freshHandle.close();
+  });
+
+  it("rejects job with intervalMs too small", async () => {
+    const freshHandle = await startServer({
+      port: 0,
+      store: new Store(),
+      agentManager: null,
+      saveCronJobs: () => {},
+    });
+    const url = `http://localhost:${freshHandle.port}`;
+
+    const res = await fetch(`${url}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([{ id: "test", channelId: "ch1", intervalMs: 100, message: "hello" }]),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain("intervalMs");
+    await freshHandle.close();
+  });
+
+  it("rejects duplicate job IDs", async () => {
+    const freshHandle = await startServer({
+      port: 0,
+      store: new Store(),
+      agentManager: null,
+      saveCronJobs: () => {},
+    });
+    const url = `http://localhost:${freshHandle.port}`;
+
+    const res = await fetch(`${url}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([
+        { id: "dup", channelId: "ch1", intervalMs: 60000, message: "a" },
+        { id: "dup", channelId: "ch1", intervalMs: 60000, message: "b" },
+      ]),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain("duplicate");
+    await freshHandle.close();
+  });
+
+  it("rejects non-boolean disabled field", async () => {
+    const freshHandle = await startServer({
+      port: 0,
+      store: new Store(),
+      agentManager: null,
+      saveCronJobs: () => {},
+    });
+    const url = `http://localhost:${freshHandle.port}`;
+
+    const res = await fetch(`${url}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([{ id: "test", channelId: "ch1", intervalMs: 60000, message: "hello", disabled: "yes" }]),
+    });
+    expect(res.status).toBe(400);
+    await freshHandle.close();
+  });
 });
 
 describe("unknown routes", () => {

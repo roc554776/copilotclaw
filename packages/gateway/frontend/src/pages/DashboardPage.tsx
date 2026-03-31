@@ -1313,7 +1313,7 @@ function ChannelSettingsModal({
   const [selectedModel, setSelectedModel] = useState<string>(channel?.model ?? "");
   const [saving, setSaving] = useState(false);
   const [editingCron, setEditingCron] = useState<CronJobInput[]>(
-    cronJobs.map((j) => ({ id: j.id, channelId: j.channelId, intervalMs: j.intervalMs, message: j.message, disabled: j.disabled || undefined })),
+    cronJobs.map((j) => ({ id: j.id, channelId: j.channelId, intervalMs: j.intervalMs, message: j.message, disabled: j.disabled ? true : undefined })),
   );
   const [cronSaving, setCronSaving] = useState(false);
 
@@ -1352,7 +1352,7 @@ function ChannelSettingsModal({
       const allJobs = await fetchCronJobs();
       const otherChannelJobs: CronJobInput[] = allJobs
         .filter((j) => j.channelId !== channelId)
-        .map((j) => ({ id: j.id, channelId: j.channelId, intervalMs: j.intervalMs, message: j.message, disabled: j.disabled || undefined }));
+        .map((j) => ({ id: j.id, channelId: j.channelId, intervalMs: j.intervalMs, message: j.message, disabled: j.disabled ? true : undefined }));
       const merged = [...otherChannelJobs, ...editingCron];
       await saveCronJobs(merged);
     } catch { /* ignore */ }

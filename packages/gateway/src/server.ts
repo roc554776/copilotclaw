@@ -307,16 +307,35 @@ function createRequestHandler(
         json(res, 400, { error: "body must be an array of cron jobs" });
         return;
       }
+      const MIN_INTERVAL_MS = 10_000; // 10 seconds minimum to prevent abuse
       for (const job of body) {
         if (!isRecord(job) || typeof job["id"] !== "string" || typeof job["channelId"] !== "string" ||
             typeof job["intervalMs"] !== "number" || typeof job["message"] !== "string") {
           json(res, 400, { error: "each cron job must have id (string), channelId (string), intervalMs (number), message (string)" });
           return;
         }
+        if ((job["id"] as string).trim() === "" || (job["message"] as string).trim() === "") {
+          json(res, 400, { error: "id and message must be non-empty strings" });
+          return;
+        }
+        if (!Number.isFinite(job["intervalMs"]) || (job["intervalMs"] as number) < MIN_INTERVAL_MS) {
+          json(res, 400, { error: `intervalMs must be a finite number >= ${MIN_INTERVAL_MS}` });
+          return;
+        }
         if (job["disabled"] !== undefined && typeof job["disabled"] !== "boolean") {
           json(res, 400, { error: "disabled must be a boolean if provided" });
           return;
         }
+      }
+      // Reject duplicate IDs
+      const ids = new Set<string>();
+      for (const job of body) {
+        const id = (job as Record<string, unknown>)["id"] as string;
+        if (ids.has(id)) {
+          json(res, 400, { error: `duplicate cron job id: ${id}` });
+          return;
+        }
+        ids.add(id);
       }
       saveCronJobs(body as Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>);
       json(res, 200, { status: "saved" });
