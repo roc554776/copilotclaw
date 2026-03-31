@@ -326,10 +326,16 @@ export class SessionOrchestrator {
     if (session === undefined) return;
 
     if (session.physicalSession !== undefined) {
-      session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
-      session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
-      session.physicalSessionHistory.push(session.physicalSession);
-      session.physicalSession = undefined;
+      // If already idle, tokens were already accumulated and physicalSession
+      // was already pushed to history — just clear the visible reference.
+      if (session.status === "idle") {
+        session.physicalSession = undefined;
+      } else {
+        session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
+        session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
+        session.physicalSessionHistory.push(session.physicalSession);
+        session.physicalSession = undefined;
+      }
     }
     session.subagentSessions = undefined;
     session.processingStartedAt = undefined;
@@ -339,16 +345,19 @@ export class SessionOrchestrator {
 
   /**
    * Transition a session to idle (turn run ended).
-   * Unlike suspendSession, keeps the physical session info visible (not archived).
-   * Accumulates token counts but does NOT move physicalSession to history.
+   * Accumulates token counts, archives physicalSession to history (so it
+   * survives restart), and keeps a visible reference with zeroed tokens.
    */
   idleSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
 
-    if (session.physicalSession !== undefined) {
+    if (session.physicalSession !== undefined && session.status !== "idle") {
       session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
       session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
+      // Push to history with original token counts before zeroing, so that
+      // loadFromDb can restore a visible physicalSession on restart.
+      session.physicalSessionHistory.push({ ...session.physicalSession });
       // Zero out to prevent double-counting if idleSession or suspendSession is called
       // again on the same physical session (e.g., end-turn-run API followed by
       // onPhysicalSessionEnded callback).
@@ -429,6 +438,11 @@ export class SessionOrchestrator {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     session.status = status;
+    if (status === "processing") {
+      session.processingStartedAt = new Date().toISOString();
+    } else {
+      session.processingStartedAt = undefined;
+    }
     this.persistSession(session);
   }
 
@@ -503,11 +517,6 @@ export class SessionOrchestrator {
     this.deleteSessionFromDb(sessionId);
   }
 
-  /**
-   * Suspend all non-suspended sessions.
-   * Used when the agent stream disconnects (agent restart) to mark all
-   * physical sessions as ended while keeping abstract sessions alive.
-   */
   /**
    * Transition all active sessions to idle (not suspended).
    * Used when the agent stream disconnects (agent restart) — physical sessions

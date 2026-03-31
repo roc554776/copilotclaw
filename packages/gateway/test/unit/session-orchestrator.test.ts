@@ -366,6 +366,30 @@ describe("SessionOrchestrator", () => {
       orch.close();
       orch2.close();
     });
+
+    it("idle session survives restart with physicalSession restored from history", () => {
+      const orch = new SessionOrchestrator({ persistPath: dbPath });
+      const sessionId = orch.startSession("ch-1");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 300, totalOutputTokens: 150 }));
+      orch.idleSession(sessionId);
+
+      // Verify in-memory state before restart
+      const preRestart = orch.getSessionStatuses()[sessionId]!;
+      expect(preRestart.status).toBe("idle");
+      expect(preRestart.cumulativeInputTokens).toBe(300);
+      orch.close();
+
+      // Restart — should restore idle session with physicalSession from history
+      const orch2 = new SessionOrchestrator({ persistPath: dbPath });
+      const restored = orch2.getSessionStatuses()[sessionId]!;
+      expect(restored.status).toBe("idle");
+      expect(restored.cumulativeInputTokens).toBe(300);
+      expect(restored.cumulativeOutputTokens).toBe(150);
+      expect(restored.physicalSession).toBeDefined();
+      expect(restored.physicalSession!.currentState).toBe("stopped");
+      expect(restored.physicalSessionHistory).toHaveLength(1);
+      orch2.close();
+    });
   });
 
   describe("real-time physical session state updates from events", () => {
@@ -596,7 +620,7 @@ describe("SessionOrchestrator", () => {
       expect(statuses[sessionId]?.status).toBe("new");
     });
 
-    it("idleSession keeps physicalSession visible with stopped state", () => {
+    it("idleSession keeps physicalSession visible with stopped state and archives to history", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-idle");
       orch.updatePhysicalSession(sessionId, makePhysicalSession());
@@ -609,7 +633,13 @@ describe("SessionOrchestrator", () => {
       expect(session.status).toBe("idle");
       expect(session.physicalSession).toBeDefined();
       expect(session.physicalSession!.currentState).toBe("stopped");
-      expect(session.physicalSessionHistory).toHaveLength(0);
+      // Visible physicalSession has zeroed tokens (accumulated into cumulative)
+      expect(session.physicalSession!.totalInputTokens).toBe(0);
+      expect(session.physicalSession!.totalOutputTokens).toBe(0);
+      // History has the archived copy with original token counts
+      expect(session.physicalSessionHistory).toHaveLength(1);
+      expect(session.physicalSessionHistory[0]!.totalInputTokens).toBe(100);
+      expect(session.physicalSessionHistory[0]!.totalOutputTokens).toBe(200);
     });
 
     it("suspendSession archives physicalSession to history", () => {
@@ -684,7 +714,13 @@ describe("SessionOrchestrator", () => {
       const session = orch.getSessionStatuses()[sessionId]!;
       expect(session.cumulativeInputTokens).toBe(200);
       expect(session.cumulativeOutputTokens).toBe(80);
+      // idleSession pushes to history, suspendSession skips push for already-idle sessions
       expect(session.physicalSessionHistory).toHaveLength(1);
+      // History entry has original token counts (not zeroed)
+      expect(session.physicalSessionHistory[0]!.totalInputTokens).toBe(200);
+      expect(session.physicalSessionHistory[0]!.totalOutputTokens).toBe(80);
+      // physicalSession cleared by suspendSession
+      expect(session.physicalSession).toBeUndefined();
     });
   });
 
@@ -695,6 +731,27 @@ describe("SessionOrchestrator", () => {
       orch.updateSessionStatus(sessionId, "waiting");
       orch.updateSessionStatus(sessionId, "notified");
       expect(orch.getSessionStatuses()[sessionId]?.status).toBe("notified");
+    });
+  });
+
+  describe("processingStartedAt tracking", () => {
+    it("sets processingStartedAt on transition to processing", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-proc");
+      orch.updateSessionStatus(sessionId, "processing");
+      const session = orch.getSessionStatuses()[sessionId]!;
+      expect(session.processingStartedAt).toBeDefined();
+      expect(typeof session.processingStartedAt).toBe("string");
+    });
+
+    it("clears processingStartedAt on transition away from processing", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-proc2");
+      orch.updateSessionStatus(sessionId, "processing");
+      expect(orch.getSessionStatuses()[sessionId]!.processingStartedAt).toBeDefined();
+
+      orch.updateSessionStatus(sessionId, "waiting");
+      expect(orch.getSessionStatuses()[sessionId]!.processingStartedAt).toBeUndefined();
     });
   });
 
