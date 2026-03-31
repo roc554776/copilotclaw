@@ -246,3 +246,30 @@ chat UI の入力欄の操作性を改善する。
 - debounce: 変更イベントを一定期間（例: 1 秒）集約し、最終結果のみ送信する
 - チャンネル切り替え時に下書きを復元する
 
+### NFR: System Status UI 改善（未実現）
+
+System Status モーダルと `/status` ページの表示を改善し、内容を統一する。
+
+**Original System Prompts のアコーディオン:**
+- Effective Prompt と同様に view/hide で折り畳む方式にする
+- デフォルトで折り畳まれている
+- 内部的にスクロールできる仕様はそのまま
+
+**System Status モーダルの Open in new tab:**
+- 「Open in new tab →」リンクを `target="_blank"` にして通常クリックで新しいタブに開く
+
+**セッションのアコーディオン:**
+- abstract session は id のみ表示し、詳細は view/hide で折り畳む
+- デフォルトで折り畳まれている
+
+**セクション順序:**
+- モーダルと `/status` ページで同じ順序にする
+- Sessions を最後に配置する
+
+**内容統一:**
+- モーダルと `/status` ページで同様の内容を表示する
+- 現状の差分:
+  - モーダルにない: Config, Original System Prompts, Token Consumption
+  - `/status` にない: 独立した Models セクション
+- 両方を足し合わせた内容を両方に表示する
+

@@ -172,6 +172,8 @@
 
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
+- end turn run で物理セッションを停止しない（turn run の終了のみ。次回メッセージで同じ物理セッションから再開）
+- System Status UI 改善（Original Prompts アコーディオン、Open in new tab リンク修正、セッションアコーディオン、セクション順序変更、モーダルと /status の内容統一）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）

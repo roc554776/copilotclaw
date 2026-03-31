@@ -3,10 +3,13 @@ import {
   fetchModels,
   fetchOriginalPrompts,
   fetchEffectivePrompt,
+  fetchQuota,
   fetchStatus,
   fetchTokenUsage,
   type EffectivePrompt,
+  type ModelsResponse,
   type OriginalPrompt,
+  type QuotaResponse,
   type StatusResponse,
   type TokenUsageEntry,
 } from "../api";
@@ -99,6 +102,19 @@ export function StatusPage() {
   const [tokenUsage5h, setTokenUsage5h] = useState<TokenUsageEntry[]>([]);
   const [tokenUsagePeriods, setTokenUsagePeriods] = useState<Array<{ label: string; data: TokenUsageEntry[] }>>([]);
   const [modelMultipliers, setModelMultipliers] = useState<Record<string, number>>({});
+  const [quota, setQuota] = useState<QuotaResponse | null>(null);
+  const [modelsData, setModelsData] = useState<ModelsResponse | null>(null);
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
+  const [promptsExpanded, setPromptsExpanded] = useState(false);
+
+  const toggleSession = (id: string) => {
+    setExpandedSessions((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -128,7 +144,14 @@ export function StatusPage() {
           m[model.id] = model.billing?.multiplier ?? 0;
         }
         setModelMultipliers(m);
+        setModelsData(models);
       }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const q = await fetchQuota();
+      setQuota(q);
     } catch {
       /* ignore */
     }
@@ -196,6 +219,7 @@ export function StatusPage() {
 
       {status && (
         <>
+          {/* Gateway */}
           <div style={sectionStyle}>
             <div style={titleStyle}>Gateway</div>
             <div style={rowStyle}>
@@ -212,328 +236,23 @@ export function StatusPage() {
             </div>
           </div>
 
+          {/* Agent */}
           {status.agent ? (
-            <>
-              <div style={sectionStyle}>
-                <div style={titleStyle}>Agent</div>
-                <div style={rowStyle}>
-                  <span style={labelStyle}>Version</span>
-                  <span>{status.agent.version ?? "?"}</span>
-                </div>
-                <div style={rowStyle}>
-                  <span style={labelStyle}>Started</span>
-                  <span>{status.agent.startedAt ?? "?"}</span>
-                </div>
-                <div style={rowStyle}>
-                  <span style={labelStyle}>Compatibility</span>
-                  <span>{status.agentCompatibility}</span>
-                </div>
+            <div style={sectionStyle}>
+              <div style={titleStyle}>Agent</div>
+              <div style={rowStyle}>
+                <span style={labelStyle}>Version</span>
+                <span>{status.agent.version ?? "?"}</span>
               </div>
-
-              <div style={sectionStyle}>
-                  <div style={titleStyle}>
-                    Sessions{" "}
-                    <a
-                      href="/sessions"
-                      style={{
-                        fontWeight: "normal",
-                        textTransform: "none",
-                      }}
-                    >
-                      All sessions &rarr;
-                    </a>
-                  </div>
-                  {Object.entries(status.agent.sessions).length === 0 && (
-                    <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
-                      No active sessions.
-                    </div>
-                  )}
-                  {Object.entries(status.agent.sessions).map(
-                    ([id, sess]) => (
-                      <div key={id} style={{ marginBottom: "0.5rem" }}>
-                        <div style={rowStyle}>
-                          <span style={labelStyle}>
-                            {id.slice(0, SESSION_ID_SHORT)}
-                            {sess.boundChannelId
-                              ? ` → ch:${sess.boundChannelId.slice(0, SESSION_ID_SHORT)}`
-                              : ""}
-                          </span>
-                          <span>{sess.status}</span>
-                        </div>
-                        {sess.startedAt && (
-                          <div
-                            style={{
-                              marginLeft: "1rem",
-                              fontSize: "0.8rem",
-                              color: "#8b949e",
-                            }}
-                          >
-                            <div style={rowStyle}>
-                              <span style={labelStyle}>
-                                Session started
-                              </span>
-                              <span>
-                                {sess.startedAt} (
-                                {elapsed(sess.startedAt)})
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                        {sess.physicalSession && (
-                          <div
-                            style={{
-                              marginLeft: "1rem",
-                              fontSize: "0.8rem",
-                              color: "#8b949e",
-                            }}
-                          >
-                            <div style={rowStyle}>
-                              <span style={labelStyle}>
-                                SDK Session
-                              </span>
-                              <span>
-                                {sess.physicalSession.sessionId.slice(
-                                  0,
-                                  SDK_SESSION_ID_SHORT,
-                                )}
-                              </span>
-                            </div>
-                            <div style={rowStyle}>
-                              <span style={labelStyle}>Model</span>
-                              <span>
-                                {sess.physicalSession.model}
-                              </span>
-                            </div>
-                            <div style={rowStyle}>
-                              <span style={labelStyle}>State</span>
-                              <span>
-                                {sess.physicalSession.currentState}
-                              </span>
-                            </div>
-                            {sess.physicalSession.currentTokens !=
-                              null &&
-                              sess.physicalSession.tokenLimit !=
-                                null && (
-                                <div style={rowStyle}>
-                                  <span style={labelStyle}>
-                                    Context
-                                  </span>
-                                  <span>
-                                    {
-                                      sess.physicalSession
-                                        .currentTokens
-                                    }{" "}
-                                    /{" "}
-                                    {
-                                      sess.physicalSession.tokenLimit
-                                    }{" "}
-                                    (
-                                    {Math.round(
-                                      (sess.physicalSession
-                                        .currentTokens /
-                                        sess.physicalSession
-                                          .tokenLimit) *
-                                        100,
-                                    )}
-                                    %)
-                                  </span>
-                                </div>
-                              )}
-                            {(sess.physicalSession
-                              .totalInputTokens != null ||
-                              sess.physicalSession
-                                .totalOutputTokens != null) && (
-                              <div style={rowStyle}>
-                                <span style={labelStyle}>
-                                  Tokens used
-                                </span>
-                                <span>
-                                  in:{" "}
-                                  {sess.physicalSession
-                                    .totalInputTokens ?? 0}{" "}
-                                  / out:{" "}
-                                  {sess.physicalSession
-                                    .totalOutputTokens ?? 0}{" "}
-                                  / total:{" "}
-                                  {(sess.physicalSession
-                                    .totalInputTokens ?? 0) +
-                                    (sess.physicalSession
-                                      .totalOutputTokens ?? 0)}
-                                </span>
-                              </div>
-                            )}
-                            <div style={rowStyle}>
-                              <span style={labelStyle}>Started</span>
-                              <span>
-                                {sess.physicalSession.startedAt} (
-                                {elapsed(
-                                  sess.physicalSession.startedAt,
-                                )}
-                                )
-                              </span>
-                            </div>
-                            <div style={rowStyle}>
-                              <span style={labelStyle}>Events</span>
-                              <span>
-                                <a
-                                  href={`/sessions/${encodeURIComponent(sess.physicalSession.sessionId)}/events`}
-                                >
-                                  View events &rarr;
-                                </a>
-                              </span>
-                            </div>
-                            <div style={rowStyle}>
-                              <span style={labelStyle}>
-                                Effective Prompt
-                              </span>
-                              <span>
-                                {(() => {
-                                  const loaded = effectivePrompts.find((sp) => sp.sessionId === sess.physicalSession!.sessionId);
-                                  if (loaded === undefined) {
-                                    return <a href="#" onClick={(e) => { e.preventDefault(); loadEffectivePrompt(sess.physicalSession!.sessionId); }}>View &rarr;</a>;
-                                  }
-                                  if (loaded.data === null) {
-                                    return <span style={{ color: "#8b949e" }}>Not available</span>;
-                                  }
-                                  return <a href="#" onClick={(e) => { e.preventDefault(); setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== sess.physicalSession!.sessionId)); }}>Hide</a>;
-                                })()}
-                              </span>
-                            </div>
-                            {effectivePrompts
-                              .filter((sp) => sp.sessionId === sess.physicalSession!.sessionId && sp.data !== null)
-                              .map((sp) => (
-                                <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
-                                  <pre style={preStyle}>{sp.data!.prompt}</pre>
-                                </div>
-                              ))}
-                          </div>
-                        )}
-                        <CumulativeTokens sess={sess} />
-                        {sess.physicalSessionHistory &&
-                          sess.physicalSessionHistory.length > 0 && (
-                            <div
-                              style={{
-                                marginLeft: "1rem",
-                                fontSize: "0.8rem",
-                                marginTop: "0.3rem",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  color: "#8b949e",
-                                  marginBottom: "0.3rem",
-                                }}
-                              >
-                                Physical sessions (
-                                {sess.physicalSessionHistory.length})
-                              </div>
-                              {sess.physicalSessionHistory.map(
-                                (hps) => (
-                                  <div
-                                    key={hps.sessionId}
-                                    style={{
-                                      margin: "0.3rem 0",
-                                      padding: "0.3rem",
-                                      border: "1px solid #21262d",
-                                      borderRadius: "0.3rem",
-                                      color: "#8b949e",
-                                    }}
-                                  >
-                                    <div style={rowStyle}>
-                                      <span style={labelStyle}>
-                                        SDK Session
-                                      </span>
-                                      <span>
-                                        {hps.sessionId.slice(
-                                          0,
-                                          SDK_SESSION_ID_SHORT,
-                                        )}
-                                      </span>
-                                    </div>
-                                    <div style={rowStyle}>
-                                      <span style={labelStyle}>
-                                        Model
-                                      </span>
-                                      <span>{hps.model}</span>
-                                    </div>
-                                    <div style={rowStyle}>
-                                      <span style={labelStyle}>
-                                        State
-                                      </span>
-                                      <span>
-                                        {hps.currentState ||
-                                          "stopped"}
-                                      </span>
-                                    </div>
-                                    {(hps.totalInputTokens != null ||
-                                      hps.totalOutputTokens !=
-                                        null) && (
-                                      <div style={rowStyle}>
-                                        <span style={labelStyle}>
-                                          Tokens
-                                        </span>
-                                        <span>
-                                          in:{" "}
-                                          {hps.totalInputTokens ??
-                                            0}{" "}
-                                          / out:{" "}
-                                          {hps.totalOutputTokens ??
-                                            0}
-                                        </span>
-                                      </div>
-                                    )}
-                                    <div style={rowStyle}>
-                                      <span style={labelStyle}>
-                                        Started
-                                      </span>
-                                      <span>{hps.startedAt}</span>
-                                    </div>
-                                    <div style={rowStyle}>
-                                      <span style={labelStyle}>
-                                        Events
-                                      </span>
-                                      <span>
-                                        <a
-                                          href={`/sessions/${encodeURIComponent(hps.sessionId)}/events`}
-                                        >
-                                          View events &rarr;
-                                        </a>
-                                      </span>
-                                    </div>
-                                    <div style={rowStyle}>
-                                      <span style={labelStyle}>
-                                        Effective Prompt
-                                      </span>
-                                      <span>
-                                        {(() => {
-                                          const loaded = effectivePrompts.find((sp) => sp.sessionId === hps.sessionId);
-                                          if (loaded === undefined) {
-                                            return <a href="#" onClick={(e) => { e.preventDefault(); loadEffectivePrompt(hps.sessionId); }}>View &rarr;</a>;
-                                          }
-                                          if (loaded.data === null) {
-                                            return <span style={{ color: "#8b949e" }}>Not available</span>;
-                                          }
-                                          return <a href="#" onClick={(e) => { e.preventDefault(); setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== hps.sessionId)); }}>Hide</a>;
-                                        })()}
-                                      </span>
-                                    </div>
-                                    {effectivePrompts
-                                      .filter((sp) => sp.sessionId === hps.sessionId && sp.data !== null)
-                                      .map((sp) => (
-                                        <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
-                                          <pre style={preStyle}>{sp.data!.prompt}</pre>
-                                        </div>
-                                      ))}
-                                  </div>
-                                ),
-                              )}
-                            </div>
-                          )}
-                      </div>
-                    ),
-                  )}
-                </div>
-            </>
+              <div style={rowStyle}>
+                <span style={labelStyle}>Started</span>
+                <span>{status.agent.startedAt ?? "?"}</span>
+              </div>
+              <div style={rowStyle}>
+                <span style={labelStyle}>Compatibility</span>
+                <span>{status.agentCompatibility}</span>
+              </div>
+            </div>
           ) : (
             <div style={sectionStyle}>
               <div style={titleStyle}>Agent</div>
@@ -543,6 +262,7 @@ export function StatusPage() {
             </div>
           )}
 
+          {/* Config */}
           {status.config && (
             <div style={sectionStyle}>
               <div style={titleStyle}>Config</div>
@@ -556,35 +276,91 @@ export function StatusPage() {
               </div>
             </div>
           )}
+
+          {/* Quota */}
+          <div style={sectionStyle}>
+            <div style={titleStyle}>Premium Requests</div>
+            {(() => {
+              const snapshots = quota?.quotaSnapshots ?? {};
+              const keys = Object.keys(snapshots);
+              if (keys.length === 0) return <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>;
+              return keys.map((key) => {
+                const q = snapshots[key]!;
+                const used = q.usedRequests ?? 0;
+                const total = q.entitlementRequests ?? 0;
+                return (
+                  <div key={key}>
+                    <div style={rowStyle}>
+                      <span style={labelStyle}>{key}</span>
+                      <span>{total - used} / {total}</span>
+                    </div>
+                    {(q.overage ?? 0) > 0 && (
+                      <div style={rowStyle}>
+                        <span style={labelStyle}>Overage</span>
+                        <span>{q.overage}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          {/* Models */}
+          <div style={sectionStyle}>
+            <div style={titleStyle}>Available Models</div>
+            {modelsData && modelsData.models.length > 0 ? (
+              modelsData.models.map((m) => (
+                <div key={m.id} style={rowStyle}>
+                  <span style={labelStyle}>{m.id}</span>
+                  <span>x{m.billing?.multiplier ?? "?"}</span>
+                </div>
+              ))
+            ) : (
+              <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
+            )}
+          </div>
         </>
       )}
 
+      {/* Original System Prompts */}
       <div style={sectionStyle}>
         <div style={titleStyle}>
-          Original System Prompts (from Copilot SDK)
+          Original System Prompts (from Copilot SDK){" "}
+          <a
+            href="#"
+            onClick={(e) => { e.preventDefault(); setPromptsExpanded((v) => !v); }}
+            style={{ fontWeight: "normal", textTransform: "none", cursor: "pointer" }}
+          >
+            {promptsExpanded ? "Hide \u25BE" : "View \u25B8"}
+          </a>
         </div>
-        {originalPrompts.length === 0 ? (
-          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
-            No prompts captured yet. Prompts are captured when a physical session starts.
-          </div>
-        ) : (
-          originalPrompts.map((p) => (
-            <div
-              key={`${p.model}-${p.capturedAt}`}
-              style={{ marginTop: "0.5rem" }}
-            >
-              <div
-                style={{
-                  fontSize: "0.8rem",
-                  color: "#8b949e",
-                  marginBottom: "0.3rem",
-                }}
-              >
-                Model: {p.model} -- Captured: {p.capturedAt}
-              </div>
-              <pre style={preStyle}>{p.prompt}</pre>
+        {promptsExpanded && (
+          originalPrompts.length === 0 ? (
+            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
+              No prompts captured yet. Prompts are captured when a physical session starts.
             </div>
-          ))
+          ) : (
+            <div style={{ maxHeight: 400, overflowY: "auto" }}>
+              {originalPrompts.map((p) => (
+                <div
+                  key={`${p.model}-${p.capturedAt}`}
+                  style={{ marginTop: "0.5rem" }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.8rem",
+                      color: "#8b949e",
+                      marginBottom: "0.3rem",
+                    }}
+                  >
+                    Model: {p.model} -- Captured: {p.capturedAt}
+                  </div>
+                  <pre style={preStyle}>{p.prompt}</pre>
+                </div>
+              ))}
+            </div>
+          )
         )}
       </div>
 
@@ -647,7 +423,7 @@ export function StatusPage() {
                       <td style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>{computeIndex(p.data, modelMultipliers).toLocaleString()}</td>
                       <td style={{ padding: "0.2rem 0.5rem", textAlign: "right" }}>{totalTokens.toLocaleString()}</td>
                       <td style={{ padding: "0.2rem 0.5rem", color: "#8b949e" }}>
-                        {p.data.map((u) => `${u.model}: ${(u.inputTokens + u.outputTokens).toLocaleString()}`).join(", ") || "—"}
+                        {p.data.map((u) => `${u.model}: ${(u.inputTokens + u.outputTokens).toLocaleString()}`).join(", ") || "\u2014"}
                       </td>
                     </tr>
                   );
@@ -656,6 +432,326 @@ export function StatusPage() {
             </table>
           </div>
       </div>
+
+      {/* Sessions (LAST) */}
+      {status?.agent && (
+        <div style={sectionStyle}>
+          <div style={titleStyle}>
+            Sessions{" "}
+            <a
+              href="/sessions"
+              style={{
+                fontWeight: "normal",
+                textTransform: "none",
+              }}
+            >
+              All sessions &rarr;
+            </a>
+          </div>
+          {Object.entries(status.agent.sessions).length === 0 && (
+            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
+              No active sessions.
+            </div>
+          )}
+          {Object.entries(status.agent.sessions).map(
+            ([id, sess]) => (
+              <div key={id} style={{ marginBottom: "0.5rem" }}>
+                <div style={rowStyle}>
+                  <span style={labelStyle}>
+                    {id.slice(0, SESSION_ID_SHORT)}
+                    {sess.boundChannelId
+                      ? ` \u2192 ch:${sess.boundChannelId.slice(0, SESSION_ID_SHORT)}`
+                      : ""}
+                  </span>
+                  <span>
+                    {sess.status}{" "}
+                    <a
+                      href="#"
+                      onClick={(e) => { e.preventDefault(); toggleSession(id); }}
+                      style={{ cursor: "pointer", marginLeft: "0.5rem" }}
+                    >
+                      {expandedSessions.has(id) ? "Hide \u25BE" : "View \u25B8"}
+                    </a>
+                  </span>
+                </div>
+                {expandedSessions.has(id) && (
+                  <>
+                    {sess.startedAt && (
+                      <div
+                        style={{
+                          marginLeft: "1rem",
+                          fontSize: "0.8rem",
+                          color: "#8b949e",
+                        }}
+                      >
+                        <div style={rowStyle}>
+                          <span style={labelStyle}>
+                            Session started
+                          </span>
+                          <span>
+                            {sess.startedAt} (
+                            {elapsed(sess.startedAt)})
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {sess.physicalSession && (
+                      <div
+                        style={{
+                          marginLeft: "1rem",
+                          fontSize: "0.8rem",
+                          color: "#8b949e",
+                        }}
+                      >
+                        <div style={rowStyle}>
+                          <span style={labelStyle}>
+                            SDK Session
+                          </span>
+                          <span>
+                            {sess.physicalSession.sessionId.slice(
+                              0,
+                              SDK_SESSION_ID_SHORT,
+                            )}
+                          </span>
+                        </div>
+                        <div style={rowStyle}>
+                          <span style={labelStyle}>Model</span>
+                          <span>
+                            {sess.physicalSession.model}
+                          </span>
+                        </div>
+                        <div style={rowStyle}>
+                          <span style={labelStyle}>State</span>
+                          <span>
+                            {sess.physicalSession.currentState}
+                          </span>
+                        </div>
+                        {sess.physicalSession.currentTokens !=
+                          null &&
+                          sess.physicalSession.tokenLimit !=
+                            null && (
+                            <div style={rowStyle}>
+                              <span style={labelStyle}>
+                                Context
+                              </span>
+                              <span>
+                                {
+                                  sess.physicalSession
+                                    .currentTokens
+                                }{" "}
+                                /{" "}
+                                {
+                                  sess.physicalSession.tokenLimit
+                                }{" "}
+                                (
+                                {Math.round(
+                                  (sess.physicalSession
+                                    .currentTokens /
+                                    sess.physicalSession
+                                      .tokenLimit) *
+                                    100,
+                                )}
+                                %)
+                              </span>
+                            </div>
+                          )}
+                        {(sess.physicalSession
+                          .totalInputTokens != null ||
+                          sess.physicalSession
+                            .totalOutputTokens != null) && (
+                          <div style={rowStyle}>
+                            <span style={labelStyle}>
+                              Tokens used
+                            </span>
+                            <span>
+                              in:{" "}
+                              {sess.physicalSession
+                                .totalInputTokens ?? 0}{" "}
+                              / out:{" "}
+                              {sess.physicalSession
+                                .totalOutputTokens ?? 0}{" "}
+                              / total:{" "}
+                              {(sess.physicalSession
+                                .totalInputTokens ?? 0) +
+                                (sess.physicalSession
+                                  .totalOutputTokens ?? 0)}
+                            </span>
+                          </div>
+                        )}
+                        <div style={rowStyle}>
+                          <span style={labelStyle}>Started</span>
+                          <span>
+                            {sess.physicalSession.startedAt} (
+                            {elapsed(
+                              sess.physicalSession.startedAt,
+                            )}
+                            )
+                          </span>
+                        </div>
+                        <div style={rowStyle}>
+                          <span style={labelStyle}>Events</span>
+                          <span>
+                            <a
+                              href={`/sessions/${encodeURIComponent(sess.physicalSession.sessionId)}/events`}
+                            >
+                              View events &rarr;
+                            </a>
+                          </span>
+                        </div>
+                        <div style={rowStyle}>
+                          <span style={labelStyle}>
+                            Effective Prompt
+                          </span>
+                          <span>
+                            {(() => {
+                              const loaded = effectivePrompts.find((sp) => sp.sessionId === sess.physicalSession!.sessionId);
+                              if (loaded === undefined) {
+                                return <a href="#" onClick={(e) => { e.preventDefault(); loadEffectivePrompt(sess.physicalSession!.sessionId); }}>View &rarr;</a>;
+                              }
+                              if (loaded.data === null) {
+                                return <span style={{ color: "#8b949e" }}>Not available</span>;
+                              }
+                              return <a href="#" onClick={(e) => { e.preventDefault(); setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== sess.physicalSession!.sessionId)); }}>Hide</a>;
+                            })()}
+                          </span>
+                        </div>
+                        {effectivePrompts
+                          .filter((sp) => sp.sessionId === sess.physicalSession!.sessionId && sp.data !== null)
+                          .map((sp) => (
+                            <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
+                              <pre style={preStyle}>{sp.data!.prompt}</pre>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                    <CumulativeTokens sess={sess} />
+                    {sess.physicalSessionHistory &&
+                      sess.physicalSessionHistory.length > 0 && (
+                        <div
+                          style={{
+                            marginLeft: "1rem",
+                            fontSize: "0.8rem",
+                            marginTop: "0.3rem",
+                          }}
+                        >
+                          <div
+                            style={{
+                              color: "#8b949e",
+                              marginBottom: "0.3rem",
+                            }}
+                          >
+                            Physical sessions (
+                            {sess.physicalSessionHistory.length})
+                          </div>
+                          {sess.physicalSessionHistory.map(
+                            (hps) => (
+                              <div
+                                key={hps.sessionId}
+                                style={{
+                                  margin: "0.3rem 0",
+                                  padding: "0.3rem",
+                                  border: "1px solid #21262d",
+                                  borderRadius: "0.3rem",
+                                  color: "#8b949e",
+                                }}
+                              >
+                                <div style={rowStyle}>
+                                  <span style={labelStyle}>
+                                    SDK Session
+                                  </span>
+                                  <span>
+                                    {hps.sessionId.slice(
+                                      0,
+                                      SDK_SESSION_ID_SHORT,
+                                    )}
+                                  </span>
+                                </div>
+                                <div style={rowStyle}>
+                                  <span style={labelStyle}>
+                                    Model
+                                  </span>
+                                  <span>{hps.model}</span>
+                                </div>
+                                <div style={rowStyle}>
+                                  <span style={labelStyle}>
+                                    State
+                                  </span>
+                                  <span>
+                                    {hps.currentState ||
+                                      "stopped"}
+                                  </span>
+                                </div>
+                                {(hps.totalInputTokens != null ||
+                                  hps.totalOutputTokens !=
+                                    null) && (
+                                  <div style={rowStyle}>
+                                    <span style={labelStyle}>
+                                      Tokens
+                                    </span>
+                                    <span>
+                                      in:{" "}
+                                      {hps.totalInputTokens ??
+                                        0}{" "}
+                                      / out:{" "}
+                                      {hps.totalOutputTokens ??
+                                        0}
+                                    </span>
+                                  </div>
+                                )}
+                                <div style={rowStyle}>
+                                  <span style={labelStyle}>
+                                    Started
+                                  </span>
+                                  <span>{hps.startedAt}</span>
+                                </div>
+                                <div style={rowStyle}>
+                                  <span style={labelStyle}>
+                                    Events
+                                  </span>
+                                  <span>
+                                    <a
+                                      href={`/sessions/${encodeURIComponent(hps.sessionId)}/events`}
+                                    >
+                                      View events &rarr;
+                                    </a>
+                                  </span>
+                                </div>
+                                <div style={rowStyle}>
+                                  <span style={labelStyle}>
+                                    Effective Prompt
+                                  </span>
+                                  <span>
+                                    {(() => {
+                                      const loaded = effectivePrompts.find((sp) => sp.sessionId === hps.sessionId);
+                                      if (loaded === undefined) {
+                                        return <a href="#" onClick={(e) => { e.preventDefault(); loadEffectivePrompt(hps.sessionId); }}>View &rarr;</a>;
+                                      }
+                                      if (loaded.data === null) {
+                                        return <span style={{ color: "#8b949e" }}>Not available</span>;
+                                      }
+                                      return <a href="#" onClick={(e) => { e.preventDefault(); setEffectivePrompts((prev) => prev.filter((sp) => sp.sessionId !== hps.sessionId)); }}>Hide</a>;
+                                    })()}
+                                  </span>
+                                </div>
+                                {effectivePrompts
+                                  .filter((sp) => sp.sessionId === hps.sessionId && sp.data !== null)
+                                  .map((sp) => (
+                                    <div key={sp.sessionId} style={{ marginTop: "0.5rem" }}>
+                                      <pre style={preStyle}>{sp.data!.prompt}</pre>
+                                    </div>
+                                  ))}
+                              </div>
+                            ),
+                          )}
+                        </div>
+                      )}
+                  </>
+                )}
+              </div>
+            ),
+          )}
+        </div>
+      )}
 
     </div>
   );

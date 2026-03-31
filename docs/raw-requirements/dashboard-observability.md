@@ -134,3 +134,24 @@
 - 入力内容に応じて input の高さを広げる。ただし画面の高さに合わせて割合で広げる上限は設定する
 - 入力した内容は下書きとして記録しておく。変更がある度に保存する。
   - 下書き保存でキー連打しても画面が重くなったり通信が重くなったりしないようにしてください。
+
+<!-- 2026-03-31 -->
+## end turn run の動作修正
+
+- end turn run ボタンを押しても Physical Session は Archive しないでください。
+  - 単に turn run を強制停止させるだけです。
+  - 次回メッセージからは、その物理セッションで再開します。
+  - ※ Archive Physical Session は、物理セッションを Archive します。
+
+## System Status UI 改善
+
+- Original System Prompts の表示も、 Effective Prompt と同様に、 view/hide で折り畳む方式（というか普通にアコーディオンで OK）にしてください。（内部的にスクロールできる仕様はそのまま）
+  - デフォルトで折り畳まれている。
+- chat 画面の System status モーダルの `System Status Open in new tab →` は、普通にクリックしても open in new tab になるようにしてください。
+- chat 画面の System status モーダルの abstract session は、基本的に id だけ置いて、あとは view/hide で折り畳む方式（アコーディオン）にしてください。
+  - デフォルトで折り畳まれている。
+- chat 画面の System status モーダルは Sessions を最後に持ってきてください。
+- chat 画面の System status モーダルと `/status` はそれぞれ、同様の内容を表示するようにしてください。
+  - どちらか一方にしかない情報があってはいけません。
+  - UI の違いはあってもいいですが、順序や表示内容は同じにしてください。
+  - いまは、まばらになっているので、両方を足し合わせた内容を両方に表示するようにしてください。
