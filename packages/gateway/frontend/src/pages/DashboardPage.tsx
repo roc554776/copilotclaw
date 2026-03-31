@@ -69,7 +69,7 @@ export function DashboardPage() {
       if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
       draftTimerRef.current = setTimeout(() => {
         draftTimerRef.current = null;
-        saveDraft(channelId, text || null).catch(() => {});
+        saveDraft(channelId, text || null).catch((e) => console.warn("[draft] save failed:", e));
       }, 1000);
     };
   }, []);
@@ -141,11 +141,19 @@ export function DashboardPage() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
-      if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+      if (draftTimerRef.current !== null) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+        if (activeChannelIdRef.current) {
+          saveDraft(activeChannelIdRef.current, inputTextRef.current || null).catch((e) => console.warn("[draft] save failed:", e));
+        }
+      }
     };
   }, []);
 
-  // Restore draft on initial load (channels data arrives async after mount)
+  // Restore draft on initial load: channels data arrives async after mount, so the channel-switch
+  // effect below may fire before channels is populated (finding no draft to restore). This effect
+  // catches that case by watching for channels data arrival. Not redundant with channel-switch.
   const initialDraftRestoredRef = useRef(false);
   useEffect(() => {
     if (!initialDraftRestoredRef.current && activeChannelId && channels.length > 0) {
@@ -161,11 +169,20 @@ export function DashboardPage() {
     }
   }, [activeChannelId, channels]);
 
-  // Reset messages and restore draft when channel changes
+  // Reset messages and restore draft when channel changes.
+  // Deps include `channels` because draft restore (line below) reads from it; the
+  // `activeChannelRef` guard ensures the flush/reset block runs only on real channel switches,
+  // not on channel-list polling refreshes.
   useEffect(() => {
     if (activeChannelRef.current !== activeChannelId) {
       // Flush any pending draft save for the previous channel immediately
-      if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+      if (draftTimerRef.current !== null) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+        if (activeChannelRef.current) {
+          saveDraft(activeChannelRef.current, inputTextRef.current || null).catch((e) => console.warn("[draft] flush failed:", e));
+        }
+      }
       setMessages([]);
       setHasOlderMessages(true);
       activeChannelRef.current = activeChannelId;
@@ -371,7 +388,7 @@ export function DashboardPage() {
     if (inputRef.current) inputRef.current.style.height = "auto";
     // Clear draft immediately on send (cancel any pending debounce)
     if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
-    saveDraft(activeChannelId, null).catch(() => {});
+    saveDraft(activeChannelId, null).catch((e) => console.warn("[draft] clear failed:", e));
     try {
       await sendMessage(activeChannelId, text);
       await refreshMessages();

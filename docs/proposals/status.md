@@ -169,6 +169,7 @@
 - end turn run ボタンの警戒色（archive physical session と同じ赤色。プレミアムリクエストを消費した run を捨てる操作のため）（v0.58.0）
 
 - chat 入力の UX 改善（Alt/Cmd+Enter のみ送信、textarea 高さ自動調整 40vh 上限、下書き保存 debounce 1s + チャンネル切替復元）（v0.59.0）
+- 下書き保存のゾンビ復活バグ修正（チャンネル切替時・unmount 時に pending の draft save を flush するように修正。テキストを空にして 1 秒以内にチャンネルを切り替えた場合、空の状態が保存されず古い下書きが復活する問題を修正）（v0.61.1）
 
 - end turn run の物理セッション非 archive（SDK セッション停止 + copilotSessionId 保持 + resumeSession で再開。idleSession で physicalSession を visible に維持）（v0.60.0）
 

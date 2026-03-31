@@ -79,6 +79,9 @@ describe("DashboardPage", () => {
       if (urlStr.includes("/api/models")) {
         return { ok: false, json: () => Promise.resolve({}) } as Response;
       }
+      if (urlStr.includes("/draft")) {
+        return { ok: true, json: () => Promise.resolve({ status: "saved" }) } as Response;
+      }
       return { ok: false, json: () => Promise.resolve({}) } as Response;
     });
   });
@@ -136,7 +139,7 @@ describe("DashboardPage", () => {
     expect(screen.getAllByText("Send").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("sends a message on Enter", async () => {
+  it("sends a message on Alt+Enter", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const fetchMock = vi.mocked(fetch);
 
@@ -150,9 +153,10 @@ describe("DashboardPage", () => {
       expect(screen.getAllByText("Hello agent").length).toBeGreaterThanOrEqual(1);
     });
 
-    const textareas = screen.getAllByPlaceholderText("Type a message...");
+    const textareas = screen.getAllByPlaceholderText(/Type a message/);
     const textarea = textareas[0]!;
-    await user.type(textarea, "Test message{Enter}");
+    await user.type(textarea, "Test message");
+    await user.keyboard("{Alt>}{Enter}{/Alt}");
 
     await waitFor(() => {
       const postCalls = fetchMock.mock.calls.filter((c) => {
@@ -179,7 +183,7 @@ describe("DashboardPage", () => {
 
     const callCountBefore = fetchMock.mock.calls.length;
 
-    const textareas = screen.getAllByPlaceholderText("Type a message...");
+    const textareas = screen.getAllByPlaceholderText(/Type a message/);
     const textarea = textareas[0]!;
     await user.type(textarea, "{Enter}");
 
@@ -191,6 +195,99 @@ describe("DashboardPage", () => {
         return init?.method === "POST";
       });
     expect(postCallsAfter.length).toBe(0);
+  });
+
+  it("flushes pending draft save when switching channels", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const fetchMock = vi.mocked(fetch);
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    // Wait for channels to render
+    await waitFor(() => {
+      expect(screen.getAllByText("ch-001-f").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Type some text to trigger a draft save timer
+    const textareas = screen.getAllByPlaceholderText(/Type a message/);
+    const textarea = textareas[0]!;
+    await user.type(textarea, "draft text");
+
+    // Clear the text (simulating user deleting all input)
+    await user.clear(textarea);
+
+    // Switch channels before the 1-second debounce fires
+    const tab2 = screen.getAllByText("ch-002-f")[0]!;
+    await user.click(tab2);
+
+    // The flush should have sent a PUT with null draft for the previous channel
+    const draftPuts = fetchMock.mock.calls.filter((c) => {
+      const urlStr = typeof c[0] === "string" ? c[0] : (c[0] as Request).url;
+      const init = c[1] as RequestInit | undefined;
+      return urlStr.includes("/draft") && init?.method === "PUT";
+    });
+    expect(draftPuts.length).toBeGreaterThanOrEqual(1);
+    // The last draft PUT should be for ch-001 with null (cleared draft)
+    const lastDraftPut = draftPuts[draftPuts.length - 1]!;
+    const lastUrl = typeof lastDraftPut[0] === "string" ? lastDraftPut[0] : (lastDraftPut[0] as Request).url;
+    expect(lastUrl).toContain("ch-001");
+    const body = JSON.parse((lastDraftPut[1] as RequestInit).body as string);
+    expect(body.draft).toBeNull();
+  });
+
+  it("does not clear existing draft on page load", async () => {
+    const fetchMock = vi.mocked(fetch);
+
+    // Override channels mock to include a draft
+    const channelsWithDraft = [
+      { id: "ch-001-full-uuid", createdAt: "2026-03-28T09:00:00Z", draft: "saved draft" },
+      { id: "ch-002-full-uuid", createdAt: "2026-03-28T09:01:00Z" },
+    ];
+    fetchMock.mockImplementation(async (url) => {
+      const urlStr = typeof url === "string" ? url : (url as Request).url;
+      if (urlStr.includes("/api/channels") && !urlStr.includes("/messages")) {
+        return { ok: true, json: () => Promise.resolve(channelsWithDraft) } as Response;
+      }
+      if (urlStr.includes("/messages")) {
+        return { ok: true, json: () => Promise.resolve(mockMessages) } as Response;
+      }
+      if (urlStr.includes("/api/status")) {
+        return { ok: true, json: () => Promise.resolve(mockStatus) } as Response;
+      }
+      if (urlStr.includes("/api/logs")) {
+        return { ok: true, json: () => Promise.resolve([]) } as Response;
+      }
+      if (urlStr.includes("/draft")) {
+        return { ok: true, json: () => Promise.resolve({ status: "saved" }) } as Response;
+      }
+      return { ok: false, json: () => Promise.resolve({}) } as Response;
+    });
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    // Wait for initial render and draft restore
+    await waitFor(() => {
+      expect(screen.getAllByText("ch-001-f").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Advance time well past the debounce period to catch any accidental save
+    vi.advanceTimersByTime(3000);
+
+    // Verify no draft PUT was made (empty initial state should not overwrite saved draft)
+    const draftPuts = fetchMock.mock.calls.filter((c) => {
+      const urlStr = typeof c[0] === "string" ? c[0] : (c[0] as Request).url;
+      const init = c[1] as RequestInit | undefined;
+      return urlStr.includes("/draft") && init?.method === "PUT";
+    });
+    expect(draftPuts.length).toBe(0);
   });
 
   it("shows status bar with version info", async () => {
