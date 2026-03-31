@@ -13,7 +13,7 @@ Agent と human が gateway を介して対話する仕組み（channel）を提
 - Gateway 起動時にデフォルト channel を 1 つ作成する
 - Dashboard は複数タブで複数 channel を扱えるインターフェースとする
 
-### Req: Messages API の sender フィールド必須化（未実現）
+### Req: Messages API の sender フィールド必須化（v0.62.1 で実現済み）
 
 `POST /api/channels/:channelId/messages` の `sender` フィールドを必須とする。省略された場合は 400 エラーを返す。
 
