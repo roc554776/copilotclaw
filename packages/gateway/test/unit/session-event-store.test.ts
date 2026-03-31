@@ -262,5 +262,120 @@ describe("SessionEventStore", () => {
       expect(usage).toHaveLength(1);
       expect(usage[0]?.model).toBe("gpt-5-mini");
     });
+
+    it("includes multiplier in getTokenUsage results", () => {
+      store.appendEvent("sess-mult", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 10, multiplier: 1 },
+      });
+      store.appendEvent("sess-mult", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:01:00Z",
+        data: { model: "gpt-5-mini", inputTokens: 200, outputTokens: 20, multiplier: 0.25 },
+      });
+
+      const usage = store.getTokenUsage("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z");
+      const gpt4 = usage.find((u) => u.model === "gpt-4.1");
+      expect(gpt4?.multiplier).toBe(1);
+      const mini = usage.find((u) => u.model === "gpt-5-mini");
+      expect(mini?.multiplier).toBe(0.25);
+    });
+
+    it("defaults multiplier to 0 when not stored", () => {
+      store.appendEvent("sess-no-mult", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "old-model", inputTokens: 100, outputTokens: 10 },
+      });
+
+      const usage = store.getTokenUsage("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z");
+      expect(usage[0]?.multiplier).toBe(0);
+    });
+  });
+
+  describe("getTokenUsageTimeseries", () => {
+    it("splits time range into buckets with per-model usage", () => {
+      store.appendEvent("sess-ts", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 10, multiplier: 1 },
+      });
+      store.appendEvent("sess-ts", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:30:00Z",
+        data: { model: "gpt-4.1", inputTokens: 200, outputTokens: 20, multiplier: 1 },
+      });
+      store.appendEvent("sess-ts", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T11:30:00Z",
+        data: { model: "gpt-5-mini", inputTokens: 300, outputTokens: 30, multiplier: 0.25 },
+      });
+
+      const ts = store.getTokenUsageTimeseries("2026-03-30T10:00:00Z", "2026-03-30T12:00:00Z", 2);
+      expect(ts).toHaveLength(2);
+      // First bucket: 10:00-11:00 — gpt-4.1 events
+      expect(ts[0]!.models).toHaveLength(1);
+      expect(ts[0]!.models[0]!.model).toBe("gpt-4.1");
+      expect(ts[0]!.models[0]!.inputTokens).toBe(300);
+      expect(ts[0]!.index).toBeGreaterThan(0);
+      // Second bucket: 11:00-12:00 — gpt-5-mini event
+      expect(ts[1]!.models).toHaveLength(1);
+      expect(ts[1]!.models[0]!.model).toBe("gpt-5-mini");
+    });
+
+    it("computes index as SUM(MAX(multiplier, 0.1) * totalTokens)", () => {
+      store.appendEvent("sess-idx", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-4.1", inputTokens: 1000, outputTokens: 0, multiplier: 2 },
+      });
+
+      const ts = store.getTokenUsageTimeseries("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z", 1);
+      expect(ts[0]!.index).toBe(2000); // MAX(2, 0.1) * 1000
+    });
+
+    it("computes moving average when window is specified", () => {
+      for (let i = 0; i < 4; i++) {
+        store.appendEvent("sess-ma", {
+          type: "assistant.usage",
+          timestamp: `2026-03-30T1${i}:00:00Z`,
+          data: { model: "gpt-4.1", inputTokens: (i + 1) * 100, outputTokens: 0, multiplier: 1 },
+        });
+      }
+
+      const ts = store.getTokenUsageTimeseries("2026-03-30T10:00:00Z", "2026-03-30T14:00:00Z", 4, 7200);
+      // Each bucket is 1h, MA window is 2h = 2 buckets
+      expect(ts[0]!.movingAverage).toBeDefined();
+      // First point: MA = index[0] (only 1 point in window)
+      expect(ts[0]!.movingAverage).toBe(ts[0]!.index);
+      // Second point: MA = (index[0] + index[1]) / 2
+      expect(ts[1]!.movingAverage).toBe((ts[0]!.index + ts[1]!.index) / 2);
+    });
+
+    it("returns empty models array for buckets with no events", () => {
+      store.appendEvent("sess-sparse", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 10, multiplier: 1 },
+      });
+
+      const ts = store.getTokenUsageTimeseries("2026-03-30T10:00:00Z", "2026-03-30T12:00:00Z", 4);
+      // Only the first bucket has data
+      expect(ts[0]!.models.length).toBeGreaterThan(0);
+      expect(ts[2]!.models).toHaveLength(0);
+      expect(ts[2]!.index).toBe(0);
+    });
+
+    it("does not include movingAverage when window is not specified", () => {
+      store.appendEvent("sess-no-ma", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 10, multiplier: 1 },
+      });
+
+      const ts = store.getTokenUsageTimeseries("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z", 1);
+      expect(ts[0]!.movingAverage).toBeUndefined();
+    });
   });
 });

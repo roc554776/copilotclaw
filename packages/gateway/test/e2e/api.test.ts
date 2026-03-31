@@ -672,6 +672,26 @@ describe("GET /api/token-usage", () => {
   });
 });
 
+describe("GET /api/token-usage/timeseries", () => {
+  it("returns 200 with timeseries array", async () => {
+    const res = await fetch(`${baseUrl}/api/token-usage/timeseries?hours=1&points=4`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as Array<{ timestamp: string; models: unknown[]; index: number }>;
+    expect(Array.isArray(data)).toBe(true);
+    expect(data).toHaveLength(4);
+    expect(data[0]).toHaveProperty("timestamp");
+    expect(data[0]).toHaveProperty("models");
+    expect(data[0]).toHaveProperty("index");
+  });
+
+  it("includes movingAverage when window is specified", async () => {
+    const res = await fetch(`${baseUrl}/api/token-usage/timeseries?hours=1&points=4&movingAverageWindow=1800`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as Array<{ movingAverage?: number }>;
+    expect(data[0]).toHaveProperty("movingAverage");
+  });
+});
+
 describe("PATCH /api/channels/:id (model setting)", () => {
   it("sets channel model", async () => {
     const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}`, {

@@ -199,25 +199,112 @@ export class SessionEventStore {
   }
 
   /** Aggregate token usage from assistant.usage events within a time range, grouped by model. */
-  getTokenUsage(from: string, to: string): Array<{ model: string; inputTokens: number; outputTokens: number }> {
+  getTokenUsage(from: string, to: string): Array<{ model: string; inputTokens: number; outputTokens: number; multiplier: number }> {
     const rows = this.db.prepare(
       "SELECT data FROM session_events WHERE type = 'assistant.usage' AND timestamp >= ? AND timestamp <= ? ORDER BY id ASC",
     ).all(from, to) as Array<{ data: string }>;
 
-    const byModel = new Map<string, { inputTokens: number; outputTokens: number }>();
+    const byModel = new Map<string, { inputTokens: number; outputTokens: number; multiplier: number }>();
     for (const row of rows) {
       try {
-        const d = JSON.parse(row.data) as { model?: string; inputTokens?: number; outputTokens?: number };
+        const d = JSON.parse(row.data) as { model?: string; inputTokens?: number; outputTokens?: number; multiplier?: number };
         const model = d.model ?? "unknown";
-        const entry = byModel.get(model) ?? { inputTokens: 0, outputTokens: 0 };
+        const entry = byModel.get(model) ?? { inputTokens: 0, outputTokens: 0, multiplier: d.multiplier ?? 0 };
         entry.inputTokens += d.inputTokens ?? 0;
         entry.outputTokens += d.outputTokens ?? 0;
+        if (d.multiplier !== undefined) entry.multiplier = d.multiplier;
         byModel.set(model, entry);
       } catch {
         // skip malformed
       }
     }
     return Array.from(byModel.entries()).map(([model, usage]) => ({ model, ...usage }));
+  }
+
+  /** Aggregate token usage as a timeseries: split the time range into `points` buckets, each with per-model usage. */
+  getTokenUsageTimeseries(
+    from: string,
+    to: string,
+    points: number,
+    movingAverageWindowSec?: number,
+  ): Array<{
+    timestamp: string;
+    models: Array<{ model: string; inputTokens: number; outputTokens: number; multiplier: number }>;
+    index: number;
+    movingAverage?: number;
+  }> {
+    const fromMs = new Date(from).getTime();
+    const toMs = new Date(to).getTime();
+    const safePoints = Math.max(1, Math.min(points, 1000));
+    const bucketMs = (toMs - fromMs) / safePoints;
+
+    const rows = this.db.prepare(
+      "SELECT timestamp, data FROM session_events WHERE type = 'assistant.usage' AND timestamp >= ? AND timestamp <= ? ORDER BY id ASC",
+    ).all(from, to) as Array<{ timestamp: string; data: string }>;
+
+    // Initialize buckets
+    const buckets: Array<{
+      timestamp: string;
+      byModel: Map<string, { inputTokens: number; outputTokens: number; multiplier: number }>;
+    }> = [];
+    for (let i = 0; i < safePoints; i++) {
+      buckets.push({
+        timestamp: new Date(fromMs + i * bucketMs).toISOString(),
+        byModel: new Map(),
+      });
+    }
+
+    // Distribute events into buckets
+    for (const row of rows) {
+      try {
+        const ts = new Date(row.timestamp).getTime();
+        const bucketIdx = Math.min(Math.floor((ts - fromMs) / bucketMs), safePoints - 1);
+        if (bucketIdx < 0) continue;
+        const d = JSON.parse(row.data) as { model?: string; inputTokens?: number; outputTokens?: number; multiplier?: number };
+        const model = d.model ?? "unknown";
+        const bucket = buckets[bucketIdx]!;
+        const entry = bucket.byModel.get(model) ?? { inputTokens: 0, outputTokens: 0, multiplier: d.multiplier ?? 0 };
+        entry.inputTokens += d.inputTokens ?? 0;
+        entry.outputTokens += d.outputTokens ?? 0;
+        if (d.multiplier !== undefined) entry.multiplier = d.multiplier;
+        bucket.byModel.set(model, entry);
+      } catch { /* skip malformed */ }
+    }
+
+    // Compute index per bucket
+    const computeIndex = (byModel: Map<string, { inputTokens: number; outputTokens: number; multiplier: number }>): number => {
+      let idx = 0;
+      for (const [, v] of byModel) {
+        idx += Math.max(v.multiplier, 0.1) * (v.inputTokens + v.outputTokens);
+      }
+      return idx;
+    };
+
+    const result = buckets.map((b) => ({
+      timestamp: b.timestamp,
+      models: Array.from(b.byModel.entries()).map(([model, v]) => ({ model, ...v })),
+      index: computeIndex(b.byModel),
+    }));
+
+    // Compute moving average if requested
+    if (movingAverageWindowSec !== undefined && movingAverageWindowSec > 0) {
+      const windowBuckets = Math.max(1, Math.round((movingAverageWindowSec * 1000) / bucketMs));
+      for (let i = 0; i < result.length; i++) {
+        const start = Math.max(0, i - windowBuckets + 1);
+        let sum = 0;
+        for (let j = start; j <= i; j++) {
+          sum += result[j]!.index;
+        }
+        (result[i] as { movingAverage?: number }).movingAverage = sum / (i - start + 1);
+      }
+    }
+
+    return result as Array<{
+      timestamp: string;
+      models: Array<{ model: string; inputTokens: number; outputTokens: number; multiplier: number }>;
+      index: number;
+      movingAverage?: number;
+    }>;
   }
 
   /** Get the latest quotaSnapshots from the most recent assistant.usage event. */

@@ -1,6 +1,6 @@
 {
   "name": "@copilotclaw/gateway",
-  "version": "0.62.1",
+  "version": "0.63.0",
   "description": "Central gateway server for copilotclaw",
   "type": "module",
   "main": "dist/index.js",
@@ -43,6 +43,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.2",
+    "recharts": "^3.8.1",
     "typescript": "^6.0.2",
     "vite": "^6.3.5",
     "vitest": "^4.1.1"

@@ -152,6 +152,45 @@ token_consumption_index(period) = SUM over models { MAX(model.billing.multiplier
 - gateway API に期間指定のトークン消費集計エンドポイントを追加
 - `/status` ページにトークン消費セクションを追加
 
+### トークン消費データへの乗数保存（未実現）
+
+現状は `assistant.usage` イベントにトークン数（inputTokens, outputTokens）とモデル名のみを保存しており、プレミアムリクエスト乗数を保存していない。乗数は `/api/models`（SDK の `models.list()` や GitHub Models Catalog）からその場で取得しているだけで永続化されていないため、モデルの廃止や乗数変更があると過去のトークン消費に対する正確な指数が計算不可能になる。
+
+**対応方針:**
+- `assistant.usage` イベントを session event store に保存する際、使用時点のモデル乗数も data に含めて保存する
+- 乗数の取得元: gateway の `onSessionEvent` で `assistant.usage` を受け取る時点で、orchestrator または models cache から当該モデルの乗数を参照して付加する
+- 既存のイベントには乗数がないため、`getTokenUsage` 等の集計メソッドでは乗数が未保存のイベントに対してフォールバック値（現在の `/api/models` から取得、またはデフォルト 0）を使用する
+
+### トークン消費時系列 API（未実現）
+
+期間とタイムインスタンス数を指定して、トークン消費の時系列データを返す API を追加する。
+
+**エンドポイント:** `GET /api/token-usage/timeseries`
+
+**パラメータ:**
+- `from`, `to` — 期間（ISO 8601）
+- `points` — タイムインスタンス数（期間を均等分割して各区間の集計値を返す）
+- `movingAverageWindow` — 移動平均の時間幅（秒）。指定時は各ポイントに移動平均値も付加する
+
+**レスポンス:**
+各ポイントごとに:
+- タイムスタンプ（区間の開始時刻）
+- モデル別の消費トークン（inputTokens, outputTokens, multiplier）
+- トークン消費指数（SUM{MAX(multiplier, 0.1) * totalTokens}）
+- 移動平均値（指定時のみ）
+
+### トークン消費グラフ UI（未実現）
+
+時系列データをグラフで表示する新規ページを追加する。
+
+**表示内容:**
+- モデル別のトークン消費量の時系列グラフ
+- トークン消費指数の時系列グラフ
+- 移動平均の重畳表示
+
+**開発 hint:**
+- グラフライブラリとして recharts（https://github.com/recharts/recharts）等を検討
+
 ### Dashboard のモバイル対応（v0.45.0 で実現済み）
 
 Dashboard の web app をモバイル端末で快適に操作できるようにレスポンシブ対応する。
