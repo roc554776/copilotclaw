@@ -160,6 +160,7 @@
 
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
+- session.idle での subagent 停止と親 agent idle の区別（subagent 停止による session.idle で物理セッション全体が停止する問題。backgroundTasks フィールドと copilotclaw_wait 実行状態で判定すべき）（v0.57.0 で実現済み）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）

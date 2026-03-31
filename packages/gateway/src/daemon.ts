@@ -84,6 +84,9 @@ async function main(): Promise<void> {
   // copilotclaw_send_message was called since. If so, the agent swallowed
   // the message (processed it but never replied to the user).
   const pendingReplyExpected = new Map<string, boolean>();
+  // Tracks whether the most recent session.idle event for a session had backgroundTasks.
+  // Used by onLifecycle to distinguish subagent stop from true parent-agent idle.
+  const lastIdleHasBackgroundTasks = new Map<string, boolean>();
 
   const SWALLOWED_MESSAGE_INSTRUCTION =
     `[SYSTEM] CRITICAL: You received user message(s) but called copilotclaw_wait ` +
@@ -164,7 +167,24 @@ async function main(): Promise<void> {
         // Error: stop the session and clear copilotSessionId (don't try to resume a broken session)
         return { action: "stop", clearCopilotSessionId: true };
       }
-      // Idle exit: stop the session (LLM finished without calling copilotclaw_wait)
+
+      // Idle exit: distinguish subagent stop from true parent-agent idle.
+      // If the most recent session.idle had backgroundTasks, a subagent just stopped
+      // and the parent agent is likely still running copilotclaw_wait.
+      if (lastIdleHasBackgroundTasks.get(request.sessionId) === true) {
+        console.error(`[gateway] session ${request.sessionId.slice(0, 8)} idle with backgroundTasks — waiting (subagent stop)`);
+        lastIdleHasBackgroundTasks.delete(request.sessionId);
+        return { action: "wait" };
+      }
+
+      // If copilotclaw_wait is still executing, the parent agent is active.
+      const sessionState = orchestrator.getSessionStatuses()[request.sessionId];
+      if (sessionState?.physicalSession?.currentState === "tool:copilotclaw_wait") {
+        console.error(`[gateway] session ${request.sessionId.slice(0, 8)} idle but copilotclaw_wait active — waiting`);
+        return { action: "wait" };
+      }
+
+      // True idle: LLM finished without calling copilotclaw_wait — stop the session
       return { action: "stop" };
     },
     onHook: (request) => {
@@ -234,9 +254,14 @@ async function main(): Promise<void> {
             orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${data["toolName"] as string ?? "unknown"}`);
             break;
           case "tool.execution_complete":
-          case "session.idle":
             orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
             break;
+          case "session.idle": {
+            const bgTasks = data["backgroundTasks"];
+            lastIdleHasBackgroundTasks.set(orchSessionId, bgTasks != null);
+            orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
+            break;
+          }
           case "session.usage_info": {
             const currentTokens = data["currentTokens"] as number ?? 0;
             const tokenLimit = data["tokenLimit"] as number ?? 0;
@@ -352,6 +377,7 @@ async function main(): Promise<void> {
       // inherit stale state (e.g., swallowed-message flag from the previous session).
       pendingReplyExpected.delete(sessionId);
       reminderStates.delete(sessionId);
+      lastIdleHasBackgroundTasks.delete(sessionId);
 
       // Check for rapid failure and record backoff
       const session = orchestrator.getSessionStatuses()[sessionId];

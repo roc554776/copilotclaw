@@ -35,3 +35,11 @@
   - SDK の `SessionConfig.workingDirectory` で指定できる
   - 現状は未指定で、agent process の cwd がそのまま使われている（意図しない動作）
   - profile ごとに workspace が分離される設計に合わせて、session の作業ディレクトリも profile workspace に揃える
+
+<!-- 2026-03-31 -->
+## session.idle での subagent 停止時の処理分離
+
+- session.idle について、 subagent が完全に停止したときにくる session.idle で、処理が壊れないようにしてください。
+  - session.idle が、 abstract session に直接紐づく agent のものなのか、 subagent のものなのかで、処理を分けるようにしてください。
+    - backgroundTasks が null でないときは、それは subagent が停止しただけのようです。
+    - また wait_tool がまだ complete していない、ということもヒントになるかもしれません。

@@ -202,7 +202,7 @@ Agent session はコストが高い（プレミアムリクエスト消費）。
 - **起動条件**: channel に agent にまだ読まれていない user message（pending message）がある場合にのみ新規起動する。channel が存在するだけでは起動しない
 - **維持**: 起動した session はできるだけ長く使い続ける。pending message がない状態が続いていることは session 終了の理由にならない
 - **終了条件**: session を終了するのは以下の場合のみ:
-  - session が意図せず idle になった場合（LLM が tool を呼ばなかった）
+  - session が意図せず idle になった場合（LLM が tool を呼ばなかった）。ただし subagent 停止による session.idle は除外する（後述）
   - session 寿命制限に到達した場合（デフォルト 2 日）
   - stale session タイムアウト（processing 状態が 10 分超過）
   - 明示的な停止要求（`copilotclaw agent stop` 等）
@@ -238,6 +238,28 @@ Agent session 起動（session.send を 1 回だけ使用）
 - セッションは tool 実行中として生かし続けられる
 - `copilotclaw_send_message` は即時 return なので、作業を中断せずに状況報告できる
 - 新着 user message は `onPostToolUse` hook の `additionalContext` で LLM に通知される
+
+### session.idle での subagent 停止と親 agent idle の区別（未実現）
+
+session.idle イベントには、subagent が停止しただけで親 agent はまだ `copilotclaw_wait` で待機中というケースと、親 agent 自身が idle になったケースの 2 種類がある。現状は区別なく `action: "stop"` を返しており、subagent 停止時に物理セッション全体が停止してしまう。
+
+**判定ロジック:**
+
+session.idle が「親 agent の真の idle」か「subagent 停止による idle」かを以下の条件で判定する:
+
+- **subagent 停止による idle**: `session.idle` イベントの `data.backgroundTasks` が null でない（subagent が停止しただけである）
+- **copilotclaw_wait 実行中**: gateway 側で各物理セッションの `currentState` を追跡しており、`tool:copilotclaw_wait` の状態にあるならば、親 agent はまだアクティブ（tool 実行中）
+- 上記いずれかに該当する場合、lifecycle handler は `action: "stop"` ではなく `action: "wait"` を返す
+
+**変更箇所:**
+
+- **gateway daemon.ts `onSessionEvent`**: `session.idle` イベント受信時に `data.backgroundTasks` を抽出し、物理セッションの状態と組み合わせて判定に使う
+- **gateway daemon.ts `onLifecycle`**: idle イベントの判定で、上記条件に該当する場合は `action: "wait"` を返す。agent 側の `queryLifecycleAction` は変更不要（gateway の判断に従う既存の仕組み）
+- **agent の変更は不要**: lifecycle RPC で gateway に判断を委ねる既存の設計を維持する
+
+**agent 側で idle イベントの data を lifecycle RPC に含めるかどうか:**
+
+現状、agent の `queryLifecycleAction` は `event: "idle"` のみを送信し、`backgroundTasks` 情報を含めていない。gateway 側で session_event の `session.idle` データから `backgroundTasks` を取得できるため、agent 側の変更は不要。ただし、session_event と lifecycle RPC のタイミングにずれがある可能性があるため、agent 側から `backgroundTasks` を lifecycle RPC に含める方式も検討する。
 
 ### 物理セッションの意図しない停止とリカバリ
 
