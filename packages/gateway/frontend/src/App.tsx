@@ -3,6 +3,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { SessionEventsPage } from "./pages/SessionEventsPage";
 import { SessionsListPage } from "./pages/SessionsListPage";
 import { StatusPage } from "./pages/StatusPage";
+import { TokenUsagePage } from "./pages/TokenUsagePage";
 
 export function App() {
   return (
@@ -10,6 +11,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/status" element={<StatusPage />} />
+        <Route path="/token-usage" element={<TokenUsagePage />} />
         <Route path="/sessions" element={<SessionsListPage />} />
         <Route path="/sessions/:sessionId/events" element={<SessionEventsPage />} />
       </Routes>

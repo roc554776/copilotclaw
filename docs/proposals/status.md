@@ -179,6 +179,10 @@
 
 - Messages API の sender フィールド必須化（`POST /api/channels/:channelId/messages` で `sender` 省略時に 400 エラーを返す）（v0.62.1）
 
+- トークン消費データへの乗数保存（`assistant.usage` イベント保存時に `modelMultiplierCache` から乗数を付加）（v0.63.0）
+- トークン消費時系列 API（`GET /api/token-usage/timeseries`、期間・ポイント数・移動平均窓を指定、モデル別消費量・指数・移動平均を返却）（v0.63.0）
+- トークン消費グラフ UI（`/token-usage` ページ、recharts による指数折れ線グラフ + モデル別積み上げ面グラフ、期間・MA 窓の切り替え）（v0.63.0）
+
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 

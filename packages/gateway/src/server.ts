@@ -67,7 +67,7 @@ function serveFrontend(pathname: string, res: ServerResponse): boolean {
   }
 
   // SPA HTML routes — serve index.html for known page routes
-  const spaRoutes = ["/", "/status", "/sessions"];
+  const spaRoutes = ["/", "/status", "/token-usage", "/sessions"];
   const isSessionEventsRoute = /^\/sessions\/[^/]+\/events$/.test(pathname);
   if (spaRoutes.includes(pathname) || isSessionEventsRoute) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -623,6 +623,23 @@ function createRequestHandler(
         const to = toParam ?? now.toISOString();
         const from = fromParam ?? new Date(now.getTime() - (Number(hoursParam) || 5) * 3600_000).toISOString();
         json(res, 200, sessionEventStore.getTokenUsage(from, to));
+        return;
+      }
+
+      // GET /api/token-usage/timeseries — token usage timeseries data
+      if (fullPathname === "/api/token-usage/timeseries" && method === "GET") {
+        const hoursParam = params.get("hours");
+        const fromParam = params.get("from");
+        const toParam = params.get("to");
+        const pointsParam = params.get("points");
+        const maWindowParam = params.get("movingAverageWindow");
+        const now = new Date();
+        const to = toParam ?? now.toISOString();
+        const from = fromParam ?? new Date(now.getTime() - (Number(hoursParam) || 24) * 3600_000).toISOString();
+        const points = Number(pointsParam) || 48;
+        const maWindowRaw = maWindowParam !== null ? Number(maWindowParam) : undefined;
+        const maWindow = maWindowRaw !== undefined && Number.isFinite(maWindowRaw) && maWindowRaw > 0 ? maWindowRaw : undefined;
+        json(res, 200, sessionEventStore.getTokenUsageTimeseries(from, to, points, maWindow));
         return;
       }
 

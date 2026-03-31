@@ -79,6 +79,11 @@ async function main(): Promise<void> {
     return state;
   };
 
+  // Model multiplier cache: model ID → billing multiplier.
+  // Updated from SDK models list when sessions start. Used to annotate assistant.usage events
+  // so that the multiplier at time of use is permanently recorded alongside token counts.
+  const modelMultiplierCache = new Map<string, number>();
+
   // Swallowed-message detection state per session.
   // Tracks whether the previous wait returned user messages AND no
   // copilotclaw_send_message was called since. If so, the agent swallowed
@@ -239,6 +244,16 @@ async function main(): Promise<void> {
         data,
       };
       if (parentId !== undefined) event.parentId = parentId;
+      // Annotate assistant.usage events with billing multiplier from cache
+      if (eventType === "assistant.usage" && data["multiplier"] === undefined) {
+        const model = data["model"] as string | undefined;
+        if (model !== undefined) {
+          const mult = modelMultiplierCache.get(model);
+          if (mult !== undefined) {
+            event.data = { ...data, multiplier: mult };
+          }
+        }
+      }
       if (copilotSessionId !== undefined) {
         sessionEventStore.appendEvent(copilotSessionId, event);
       }
@@ -495,6 +510,15 @@ async function main(): Promise<void> {
     let resolvedModelName: string | undefined;
     try {
       const modelsResponse = await agentManager.getModels();
+      // Update multiplier cache from models list (best-effort, non-blocking)
+      const models = modelsResponse?.["models"] as Array<{ id: string; billing?: { multiplier?: number } }> | undefined;
+      if (Array.isArray(models)) {
+        for (const m of models) {
+          if (m.billing?.multiplier !== undefined) {
+            modelMultiplierCache.set(m.id, m.billing.multiplier);
+          }
+        }
+      }
       const channel = store.getChannel(channelId);
       const configModel = channel?.model ?? config.model ?? null;
       resolvedModelName = resolveModel(modelsResponse, configModel, config.zeroPremium ?? false);

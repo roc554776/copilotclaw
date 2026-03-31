@@ -558,25 +558,47 @@ export function DashboardPage() {
           gateway: v{gatewayVersion} | agent: v{agentVersion}
           {compatLabel} | session: {sessionStatus}
         </span>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setLogsVisible((v) => !v);
-          }}
-          aria-label="Toggle logs"
-          aria-pressed={logsVisible}
-          style={{
-            background: "none",
-            border: "1px solid #30363d",
-            borderRadius: "0.3rem",
-            color: "#8b949e",
-            cursor: "pointer",
-            fontSize: "0.7rem",
-            padding: "0.1rem 0.4rem",
-          }}
-        >
-          Logs
-        </button>
+        <div style={{ display: "flex", gap: "0.4rem" }}>
+          <a
+            href="/token-usage"
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "none",
+              border: "1px solid #30363d",
+              borderRadius: "0.3rem",
+              color: "#8b949e",
+              cursor: "pointer",
+              fontSize: "0.7rem",
+              padding: "0.1rem 0.4rem",
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
+            Token Usage
+          </a>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setLogsVisible((v) => !v);
+            }}
+            aria-label="Toggle logs"
+            aria-pressed={logsVisible}
+            style={{
+              background: "none",
+              border: "1px solid #30363d",
+              borderRadius: "0.3rem",
+              color: "#8b949e",
+              cursor: "pointer",
+              fontSize: "0.7rem",
+              padding: "0.1rem 0.4rem",
+            }}
+          >
+            Logs
+          </button>
+        </div>
       </div>
 
       {/* Logs Panel */}

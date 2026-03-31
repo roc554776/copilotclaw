@@ -238,6 +238,7 @@ export interface TokenUsageEntry {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  multiplier: number;
 }
 
 export async function fetchTokenUsage(hours?: number, from?: string, to?: string): Promise<TokenUsageEntry[]> {
@@ -248,6 +249,31 @@ export async function fetchTokenUsage(hours?: number, from?: string, to?: string
   const res = await fetch(`/api/token-usage?${params.toString()}`);
   if (!res.ok) return [];
   return res.json() as Promise<TokenUsageEntry[]>;
+}
+
+export interface TimeseriesPoint {
+  timestamp: string;
+  models: Array<{ model: string; inputTokens: number; outputTokens: number; multiplier: number }>;
+  index: number;
+  movingAverage?: number;
+}
+
+export async function fetchTokenUsageTimeseries(options: {
+  hours?: number;
+  from?: string;
+  to?: string;
+  points?: number;
+  movingAverageWindow?: number;
+}): Promise<TimeseriesPoint[]> {
+  const params = new URLSearchParams();
+  if (options.hours !== undefined) params.set("hours", String(options.hours));
+  if (options.from !== undefined) params.set("from", options.from);
+  if (options.to !== undefined) params.set("to", options.to);
+  if (options.points !== undefined) params.set("points", String(options.points));
+  if (options.movingAverageWindow !== undefined) params.set("movingAverageWindow", String(options.movingAverageWindow));
+  const res = await fetch(`/api/token-usage/timeseries?${params.toString()}`);
+  if (!res.ok) return [];
+  return res.json() as Promise<TimeseriesPoint[]>;
 }
 
 export async function updateChannelModel(channelId: string, model: string | null): Promise<Channel> {
