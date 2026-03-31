@@ -131,6 +131,39 @@ describe("SessionController — swallowed message detection", () => {
   });
 });
 
+describe("SessionController — onSessionIdle", () => {
+  it("updates physical state to idle on true idle (no backgroundTasks)", () => {
+    const { controller, orchestrator, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "waiting");
+    orchestrator.updatePhysicalSession(sessionId, {
+      sessionId: "copilot-123",
+      model: "gpt-4.1",
+      startedAt: new Date().toISOString(),
+      currentState: "tool:copilotclaw_wait",
+    });
+
+    controller.onSessionIdle(sessionId, false);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("idle");
+  });
+
+  it("does NOT update physical state on backgroundTasks idle", () => {
+    const { controller, orchestrator, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "waiting");
+    orchestrator.updatePhysicalSession(sessionId, {
+      sessionId: "copilot-123",
+      model: "gpt-4.1",
+      startedAt: new Date().toISOString(),
+      currentState: "tool:copilotclaw_wait",
+    });
+
+    controller.onSessionIdle(sessionId, true);
+    // Physical state should NOT change — session is still running
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+  });
+});
+
 describe("SessionController — lifecycle decisions", () => {
   it("returns stop on error", () => {
     const { controller } = makeController();

@@ -420,6 +420,51 @@ describe("PhysicalSessionManager — assistant.message forwarding (gateway handl
   });
 });
 
+describe("PhysicalSessionManager — session.idle with backgroundTasks", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not end session on idle with backgroundTasks (subagent stop)", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    // Suppress automatic idle so we control it manually
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+    const sid = nextSessionId();
+    manager.startPhysicalSession({ sessionId: sid });
+    await waitForSessionReady(manager);
+
+    // Emit idle with backgroundTasks — session should NOT end
+    mockSession.emit("session.idle", { data: { backgroundTasks: { agents: [{ agentId: "worker-1", agentType: "worker" }], shells: [] } } });
+    await wait(50);
+
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    // physical_session_ended should NOT have been sent
+    const endedCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "physical_session_ended",
+    );
+    expect(endedCalls).toHaveLength(0);
+
+    // The session.idle event should still be forwarded as session_event
+    const idleEvents = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "session_event" && msg.eventType === "session.idle",
+    );
+    expect(idleEvents.length).toBeGreaterThanOrEqual(1);
+
+    // Now emit true idle to end the session
+    mockSession.emit("session.idle", { data: {} });
+    await wait(50);
+
+    const endedCallsAfter = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "physical_session_ended",
+    );
+    expect(endedCallsAfter.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("PhysicalSessionManager — assistant.usage token accumulation", () => {
   afterEach(() => {
     vi.clearAllMocks();
