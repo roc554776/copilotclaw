@@ -10,10 +10,12 @@ export interface SessionLike {
   disconnect(): Promise<void>;
 }
 
-/** Timeout (ms) after a backgroundTasks idle before terminating anyway.
- * This is a safety net — normally the SDK fires a true idle or error after
- * subagent completion. The timeout should be longer than copilotclaw_wait's
- * keepalive timeout (default 25min) to avoid premature termination. */
+/** Safety-net timeout (ms) after a backgroundTasks idle.
+ * backgroundTasks idle means a subagent stopped but the overall session is still
+ * running (copilotclaw_wait continues to block). Normally the session continues
+ * indefinitely via the keepalive cycle. This timeout exists only as a last-resort
+ * guard against unforeseen SDK-level hangs where no further events arrive.
+ * Must be longer than copilotclaw_wait's keepalive timeout (default 25min). */
 const BACKGROUND_TASKS_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 export interface SessionLoopOptions {
@@ -55,10 +57,10 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<void>
         onIdle: (hasBackgroundTasks) => {
           if (settled) return;
           if (hasBackgroundTasks) {
-            // Subagent stopped but parent agent's copilotclaw_wait may still be running.
-            // Wait for a follow-up true idle or error. If neither comes within the
-            // timeout, terminate anyway to prevent infinite hang.
-            log("session idle with backgroundTasks — waiting for follow-up");
+            // A subagent stopped but the overall session is still running —
+            // copilotclaw_wait continues to block and the keepalive cycle proceeds
+            // normally. Do NOT terminate the session loop.
+            log("session idle with backgroundTasks — subagent stopped, session continues");
             if (bgTasksTimer === null) {
               bgTasksTimer = setTimeout(() => {
                 bgTasksTimer = null;
