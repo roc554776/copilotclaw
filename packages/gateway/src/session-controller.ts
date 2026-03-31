@@ -165,6 +165,12 @@ export class SessionController {
     const sessionId = this.orchestrator.startSession(channelId);
     const session = this.orchestrator.getSessionStatuses()[sessionId];
 
+    // Ensure we're in "starting" state (orchestrator.startSession sets "starting" for revived
+    // sessions but "new" for brand-new ones)
+    if (session?.status === "new") {
+      this.transition(sessionId, "starting");
+    }
+
     let resolvedModel: string | undefined;
     try {
       resolvedModel = await this.resolveModelForChannel(channelId);
