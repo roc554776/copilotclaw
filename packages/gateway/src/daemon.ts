@@ -337,6 +337,12 @@ async function main(): Promise<void> {
     onPhysicalSessionEnded: (sessionId, reason, _copilotSessionId, elapsedMs, error) => {
       console.error(`[gateway] physical session ended: session=${sessionId.slice(0, 8)}, reason=${reason}, elapsed=${Math.round(elapsedMs / 1000)}s`);
 
+      // Clear per-session state on physical session boundary.
+      // Without this, a new physical session on the same abstract session would
+      // inherit stale state (e.g., swallowed-message flag from the previous session).
+      pendingReplyExpected.delete(sessionId);
+      reminderStates.delete(sessionId);
+
       // Check for rapid failure and record backoff
       const session = orchestrator.getSessionStatuses()[sessionId];
       const channelId = session?.channelId;
