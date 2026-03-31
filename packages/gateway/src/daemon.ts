@@ -30,6 +30,16 @@ async function main(): Promise<void> {
   initOtel({ endpoints: otelEndpoints, serviceName: "copilotclaw-gateway" });
   initMetrics();
   const store = new Store({ persistPath: getStoreDbPath(getProfileName()), legacyJsonPath: getStoreFilePath(getProfileName()) });
+
+  // Sync channel model settings from config.json to DB on startup
+  const channelConfigs = config.channels ?? {};
+  for (const [channelId, chConfig] of Object.entries(channelConfigs)) {
+    const ch = store.getChannel(channelId);
+    if (ch !== undefined) {
+      store.updateChannelModel(channelId, chConfig.model ?? null);
+    }
+  }
+
   const port = resolvePort(getProfileName());
   const agentManager = new AgentManager();
 
@@ -568,7 +578,27 @@ async function main(): Promise<void> {
     reloadCronScheduler(jobs);
     console.error(`[gateway] cron config saved (${jobs.length} jobs) and scheduler reloaded`);
   };
-  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator, onCronReload, getCronJobStatuses: () => getCronJobStatuses(), saveCronJobs });
+  const saveChannelModel = (channelId: string, model: string | null) => {
+    const fileConfig = loadFileConfig(getProfileName());
+    if (fileConfig.channels === undefined) fileConfig.channels = {};
+    if (model !== null) {
+      fileConfig.channels[channelId] = { ...fileConfig.channels[channelId], model };
+    } else {
+      if (fileConfig.channels[channelId] !== undefined) {
+        delete fileConfig.channels[channelId]!.model;
+        // Remove empty channel config entry
+        if (Object.keys(fileConfig.channels[channelId]!).length === 0) {
+          delete fileConfig.channels[channelId];
+        }
+      }
+      // Remove empty channels section
+      if (Object.keys(fileConfig.channels).length === 0) {
+        delete fileConfig.channels;
+      }
+    }
+    saveConfig(fileConfig, getProfileName());
+  };
+  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator, onCronReload, getCronJobStatuses: () => getCronJobStatuses(), saveCronJobs, saveChannelModel });
 
   // Periodic agent process monitoring
   let consecutiveFailures = 0;

@@ -144,6 +144,7 @@ export interface ServerDeps {
   onCronReload?: () => void;
   getCronJobStatuses?: () => CronJobStatus[];
   saveCronJobs?: (jobs: Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>) => void;
+  saveChannelModel?: (channelId: string, model: string | null) => void;
 }
 
 function createRequestHandler(
@@ -157,6 +158,7 @@ function createRequestHandler(
   onCronReload: (() => void) | null,
   getCronJobStatuses: (() => CronJobStatus[]) | null,
   saveCronJobs: ((jobs: Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>) => void) | null,
+  saveChannelModel: ((channelId: string, model: string | null) => void) | null,
 ) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
@@ -406,6 +408,10 @@ function createRequestHandler(
         if (!ok) {
           json(res, 404, { error: "channel not found" });
           return;
+        }
+        // Write back to config.json
+        if (saveChannelModel !== null) {
+          saveChannelModel(channelId, modelVal as string | null);
         }
       }
 
@@ -678,7 +684,8 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const onCronReload = options?.onCronReload ?? null;
   const getCronJobStatuses = options?.getCronJobStatuses ?? null;
   const saveCronJobs = options?.saveCronJobs ?? null;
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, onCronReload, getCronJobStatuses, saveCronJobs);
+  const saveChannelModel = options?.saveChannelModel ?? null;
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, onCronReload, getCronJobStatuses, saveCronJobs, saveChannelModel);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {

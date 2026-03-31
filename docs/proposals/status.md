@@ -146,7 +146,7 @@
 
 - Gateway-Agent 責務の再配置（v0.54.0）: swallowed-message 検出を gateway に移行、MAX_REINJECT を gateway config 化、reminderState を gateway に移行（session_event 監視で判定）、agent コメントの abstract session 言及修正、初期化シーケンス修正（stream_connected ハンドラを config 受信前に登録）、pooled CopilotClient の start 修正
 
-- チャンネルごとのモデル設定（channels テーブルに model カラム追加、PATCH API 拡張、物理セッション起動時にチャンネル model 優先）（v0.55.0）
+- チャンネルごとのモデル設定（channels テーブルに model カラム追加、PATCH API 拡張、物理セッション起動時にチャンネル model 優先、config.json の `channels` セクションで永続化・API 変更時の書き戻し）（v0.55.0-v0.57.0）
 
 - Cron の `enabled` → `disabled` フラグ変更（デフォルト `false` の否定形フラグに変更、config migration v4→v5）（v0.55.0）
 

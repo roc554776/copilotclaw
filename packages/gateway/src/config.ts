@@ -46,6 +46,11 @@ export interface CronJobConfig {
   disabled?: boolean;
 }
 
+export interface ChannelConfig {
+  /** Channel-specific model override. Overrides global model when set. */
+  model?: string;
+}
+
 export interface CopilotclawConfig {
   /** Schema version for config migration. Absent in legacy configs (treated as 0). */
   configVersion?: number;
@@ -58,6 +63,8 @@ export interface CopilotclawConfig {
   otel?: OtelConfig;
   debug?: DebugConfig;
   cron?: CronJobConfig[];
+  /** Per-channel configuration. Key is channel ID. */
+  channels?: Record<string, ChannelConfig>;
 }
 
 /** Current schema version. Increment when a breaking config change is introduced. */
@@ -221,6 +228,9 @@ export function loadConfig(profile?: string): CopilotclawConfig {
 
   // Cron config is file-only
   if (fileConfig.cron !== undefined) result.cron = fileConfig.cron;
+
+  // Channels config is file-only
+  if (fileConfig.channels !== undefined) result.channels = fileConfig.channels;
 
   // Preserve configVersion from migrated file config
   if (fileConfig.configVersion !== undefined) result.configVersion = fileConfig.configVersion;
