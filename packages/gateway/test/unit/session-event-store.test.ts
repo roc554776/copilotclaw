@@ -365,9 +365,10 @@ describe("SessionEventStore", () => {
 
       const ts = store.getTokenUsageTimeseries("2026-03-30T10:00:00Z", "2026-03-30T14:00:00Z", 4, 7200);
       // Each bucket is 1h, MA window is 2h = 2 buckets
+      // Always divide by full window size (2), treating pre-range as 0
       expect(ts[0]!.movingAverage).toBeDefined();
-      // First point: MA = index[0] (only 1 point in window)
-      expect(ts[0]!.movingAverage).toBe(ts[0]!.index);
+      // First point: MA = index[0] / 2 (window=2, only 1 bucket exists)
+      expect(ts[0]!.movingAverage).toBe(ts[0]!.index / 2);
       // Second point: MA = (index[0] + index[1]) / 2
       expect(ts[1]!.movingAverage).toBe((ts[0]!.index + ts[1]!.index) / 2);
     });

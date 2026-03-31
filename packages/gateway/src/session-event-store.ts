@@ -298,7 +298,8 @@ export class SessionEventStore {
         for (let j = start; j <= i; j++) {
           sum += result[j]!.index;
         }
-        (result[i] as { movingAverage?: number }).movingAverage = sum / (i - start + 1);
+        // Always divide by full window size — treat missing (pre-range) buckets as 0
+        (result[i] as { movingAverage?: number }).movingAverage = sum / windowBuckets;
       }
     }
 
