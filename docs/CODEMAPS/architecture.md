@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.54.0 | Token estimate: ~2400 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.55.0 | Token estimate: ~2500 -->
 
 # Architecture
 
@@ -38,6 +38,8 @@ copilotclaw restart                          → stop + start gateway
 copilotclaw update                           → fetch upstream to ~/.copilotclaw/source/, pnpm (via npx) build, rewrite workspace:* deps to file: paths, npm install -g from packages/cli/
 copilotclaw config get <key>                 → show resolved config value (env var override noted)
 copilotclaw config set <key> <v>             → set config value in file (env var precedence warning)
+copilotclaw cron reload                      → reload cron scheduler from config
+copilotclaw cron list                        → list cron jobs and their status
 copilotclaw doctor [--fix]                   → diagnose environment (workspace, config, gateway, agent); --fix auto-repairs fixable issues
 copilotclaw agent stop                       → stop agent process only
 
@@ -77,7 +79,7 @@ Environment variables:
 - **Channel-operator**: parent agent exclusively bound to the channel (infer:false, cannot be used as subagent); receives full system prompts including deadlock prevention warnings; subscribes to `copilotclaw_wait` (WAIT_TOOL_NAME) tool to manage session lifecycle
 - **Worker**: subagent available for task delegation (infer:true); can only access `copilotclaw_send_message` and `copilotclaw_list_messages` (never receives `copilotclaw_wait`); started by parent agent via subagent dispatch
 - Session begins with `agent: "channel-operator"` configuration; custom agent definitions passed to SDK createSession/resumeSession
-- Custom agent definitions (customAgents[] with primaryAgentName) and session timing config (staleTimeoutMs, maxSessionAgeMs, rapidFailureThresholdMs, backoffDurationMs, keepaliveTimeoutMs, reminderThresholdPercent, initialPrompt) defined in gateway's `agent-config.ts` as AgentPromptConfig and CustomAgentDef interfaces; AgentPromptConfig also includes knownSections (configurable KNOWN_SECTIONS for system prompt), maxQueueSize (agent send queue cap), clientOptions (passthrough to CopilotClient constructor), sessionConfigOverrides (merged into SDK session base config), toolDefinitions (ToolDefinition[] for dynamic tool injection — default includes copilotclaw_send_message and copilotclaw_list_messages); resolveModel function for gateway-side model selection (v0.50.0); sent to agent via IPC config push
+- Custom agent definitions (customAgents[] with primaryAgentName) and session timing config (staleTimeoutMs, maxSessionAgeMs, rapidFailureThresholdMs, backoffDurationMs, keepaliveTimeoutMs, reminderThresholdPercent, initialPrompt) defined in gateway's `agent-config.ts` as AgentPromptConfig and CustomAgentDef interfaces; AgentPromptConfig also includes knownSections (configurable KNOWN_SECTIONS for system prompt), maxQueueSize (agent send queue cap), clientOptions (passthrough to CopilotClient constructor), sessionConfigOverrides (merged into SDK session base config), toolDefinitions (ToolDefinition[] for dynamic tool injection — default includes copilotclaw_send_message and copilotclaw_list_messages); resolveModel(modelsResponse, configModel, zeroPremium) function for gateway-side model selection (v0.50.0; v0.55.0: configModel resolved per-channel via channel.model ?? config.model); sent to agent via IPC config push
 
 ## System Prompt (v0.19.0+)
 
@@ -100,7 +102,7 @@ Environment variables:
 - **Session Status**: "starting" → "waiting" → "processing" → "suspended" or "stopped"
   - "suspended": physical session stopped unexpectedly or max age reached; abstract session preserved for revival
   - "stopped": explicit stopSession() — fully removes abstract session and channel binding
-- **Gateway-Driven Session Commands (v0.49.0)**: Gateway sends start_physical_session (with sessionId, channelId, optional copilotSessionId, optional model) and stop_physical_session (with sessionId) to agent via IPC stream; agent sends physical_session_started (sessionId, copilotSessionId, model) and physical_session_ended (sessionId, reason, copilotSessionId, elapsedMs, tokens, error) back to gateway
+- **Gateway-Driven Session Commands (v0.49.0)**: Gateway sends start_physical_session (with sessionId, optional copilotSessionId, optional model; channelId removed v0.55.0) and stop_physical_session (with sessionId) to agent via IPC stream; agent sends physical_session_started (sessionId, copilotSessionId, model) and physical_session_ended (sessionId, reason, copilotSessionId, elapsedMs, tokens, error) back to gateway
 - **Suspension via daemon periodic check**: gateway daemon checks all sessions periodically (30s); maxAge check suspends sessions exceeding 2 days (default, configurable) by sending stop_physical_session to agent then calling orchestrator.suspendSession()
 - **Revival via orchestrator.startSession**: when a message arrives for a channel with a suspended session, orchestrator revives (sets status to "starting") and gateway sends start_physical_session with preserved copilotSessionId; agent-side resumeSession wrapped in try/catch — on failure, clears copilotSessionId and falls back to createSession (v0.38.0)
 - **Stream disconnect handling**: onStreamDisconnected calls orchestrator.suspendAllActive() to suspend all non-suspended sessions (agent restart scenario); onStreamConnected waits for agent's running_sessions report to reconcile orchestrator state before starting new sessions; agent flushes send queue (buffered messages from disconnected period) before sending running_sessions report on stream connect
