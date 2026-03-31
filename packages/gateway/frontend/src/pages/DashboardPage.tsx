@@ -116,9 +116,18 @@ export function DashboardPage() {
   messagesRef.current = messages;
   const activeChannelRef = useRef(activeChannelId);
 
+  // Clean up draft debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    };
+  }, []);
+
   // Reset messages and restore draft when channel changes
   useEffect(() => {
     if (activeChannelRef.current !== activeChannelId) {
+      // Flush any pending draft save for the previous channel immediately
+      if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
       setMessages([]);
       setHasOlderMessages(true);
       activeChannelRef.current = activeChannelId;
