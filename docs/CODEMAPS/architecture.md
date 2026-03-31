@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.63.0 | Token estimate: ~2500 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.64.0 | Token estimate: ~2500 -->
 
 # Architecture
 
@@ -8,11 +8,16 @@
 ┌─────────────┐  HTTP   ┌─────────────────────────────┐  IPC (.sock)  ┌──────────────────────┐
 │   Browser    │◄──────►│          Gateway             │◄────────────►│        Agent         │
 │  (dashboard) │        │  ┌───────────────────────┐  │  (stream +    │  ┌────────────────┐  │
-└─────────────┘        │  │ SessionOrchestrator   │  │   short-lived) │  │ Physical       │  │
-                        │  │  sessions: sessId→…   │  │               │  │ Session        │  │
-                        │  │  bindings: chId→sessId│  │               │  │ Manager        │  │
-                        │  │  backoff: chId→expiry │  │               │  └────────────────┘  │
-                        │  └───────────────────────┘  │               └──────────────────────┘
+└─────────────┘        │  │ SessionController     │  │   short-lived) │  │ Physical       │  │
+                        │  │  deliverMessage()     │  │               │  │ Session        │  │
+                        │  │  lifecycle decisions  │  │               │  │ Manager        │  │
+                        │  │  per-session context  │  │               │  └────────────────┘  │
+                        │  │  ┌─────────────────┐  │  │               └──────────────────────┘
+                        │  │  │SessionOrchestrator│ │  │                          │
+                        │  │  │ sessions/bindings │ │  │
+                        │  │  │ backoff/persist   │ │  │
+                        │  │  └─────────────────┘  │  │
+                        │  └───────────────────────┘  │
                         └─────────────────────────────┘                          │
                                                                           Copilot SDK
                                                                           (mocked in tests)
@@ -65,7 +70,7 @@ Environment variables:
 - Agent ↔ Gateway: IPC stream (v0.35.0) — persistent bidirectional connection; gateway pushes config and agent_notify; agent pushes channel messages, session events, system prompts; agent sends request-response for drain/peek/flush/list_messages, hook RPCs (SDK hooks forwarded to gateway for centralized processing), and lifecycle RPCs (agent queries gateway for session lifecycle action)
 - Gateway SessionOrchestrator manages abstract sessions (channel bindings, suspend/revive, backoff, max age); sends start_physical_session/stop_physical_session commands to agent via IPC stream
 - Agent listens for start_physical_session/stop_physical_session from gateway; sends physical_session_started/physical_session_ended back to gateway
-- User message POST triggers gateway to check orchestrator and start physical session via agent (push-based, no polling)
+- User message POST triggers SessionController.deliverMessage() which checks orchestrator and starts physical session via agent (push-based, no polling)
 
 ## Session Keepalive
 
@@ -95,15 +100,16 @@ Environment variables:
 - Agent receives system messages via normal pending drain in `copilotclaw_wait`; combineMessages joins messages as-is (no sender-type interpretation); message formatting (e.g., `[CRON TASK]`, `[SYSTEM EVENT]` prefixes) is gateway's responsibility (daemon.ts onToolCall handler)
 - Agent-side status tracking retained (subagent session status updated on events) for dashboard display only
 
-## Session Lifecycle (v0.18.0: Persistent Channel Bindings, v0.49.0: Gateway-Side Orchestration)
+## Session Lifecycle (v0.18.0: Persistent Channel Bindings, v0.49.0: Gateway-Side Orchestration, v0.64.0: SessionController)
 
-- **Responsibility Split (v0.49.0)**: Abstract session lifecycle (channel bindings, suspend/revive, backoff, max age, persistence) managed by gateway's SessionOrchestrator; agent only executes physical sessions (Copilot SDK sessions) on gateway command
+- **SessionController (v0.64.0)**: Centralizes all session lifecycle transitions and message delivery in a single class (session-controller.ts). All session status changes MUST go through SessionController — direct calls to orchestrator.updateSessionStatus() from outside are prohibited. Enforces a state machine with valid transitions (VALID_TRANSITIONS map). Maintains per-session ephemeral context (pendingReplyExpected, reminderState, lastIdleHasBackgroundTasks) that was previously scattered across daemon.ts Maps. Single entry point deliverMessage() for all incoming messages (replaces startSessionForChannel + notifyAgent pattern). Delegates persistence and binding management to SessionOrchestrator internally.
+- **Responsibility Split (v0.49.0, v0.64.0)**: SessionController owns lifecycle transitions and message delivery; SessionOrchestrator owns abstract session persistence (channel bindings, suspend/revive, backoff, max age, SQLite); agent only executes physical sessions (Copilot SDK sessions) on gateway command
 - **Abstract vs. Physical Sessions**: Abstract session (sessionId, bound to channel) is separate from physical session (Copilot SDK session). When physical session ends unexpectedly, abstract session transitions to "suspended" (not deleted), preserving channel binding.
 - **Session Status**: "new" → "starting" → "waiting" → "notified" → "processing" → "idle" → "suspended" or "stopped"
   - "new": initial status on startSession creation (before physical session starts)
   - "starting": physical session initializing
   - "waiting": idle, awaiting user input (keepalive tool polling gateway)
-  - "notified": message arrived on a waiting session (set by cron scheduler, server.ts on message arrival)
+  - "notified": message arrived on a waiting session (set by SessionController on deliverMessage for waiting sessions)
   - "processing": handling LLM requests or non-wait tool calls
   - "idle": physical session ended normally (idleSession); abstract session preserved but not active; excluded from hasActiveSessionForChannel, idleAllActive, reconcileWithAgent
   - "suspended": physical session stopped unexpectedly or max age reached; abstract session preserved for revival (copilotSessionId retained)
@@ -117,7 +123,7 @@ Environment variables:
 - **Cumulative Token Tracking (v0.27.0)**: SessionOrchestrator tracks cumulativeInputTokens and cumulativeOutputTokens per abstract session; suspendSession() accumulates tokens from physical session before clearing; gateway updates physical session via onPhysicalSessionEnded handler; dashboard shows cumulative tokens
 - **Stopped Session History (v0.30.0)**: SessionOrchestrator maintains physicalSessionHistory (PhysicalSessionSummary[]) per abstract session; suspendSession() pushes physical session to history before clearing; capped at 10 entries (oldest removed); persisted in SQLite
 - **Channel backoff**: SessionOrchestrator tracks channelBackoff map (ephemeral, not persisted); daemon records backoff on rapid failure (onPhysicalSessionEnded checks elapsedMs < rapidFailureThresholdMs); isChannelInBackoff() checked before starting sessions
-- **Lifecycle RPC (v0.52.0)**: Agent queries gateway via lifecycle request-response RPC (queryLifecycleAction) when session reaches idle or error state; gateway returns action: "stop" (agent calls client.stop()), "reinject" (agent re-enters session loop), or "wait" (keep session alive); default when gateway is offline = "wait" (keep session alive); gateway daemon's onLifecycle handler returns "stop" + clearCopilotSessionId on error; on idle checks lastIdleHasBackgroundTasks (true → "wait", subagent stop scenario) then copilotclaw_wait active state (→ "wait"), otherwise "stop"
+- **Lifecycle RPC (v0.52.0, v0.64.0: SessionController)**: Agent queries gateway via lifecycle request-response RPC (queryLifecycleAction) when session reaches idle or error state; gateway returns action: "stop" (agent calls client.stop()), "reinject" (agent re-enters session loop), or "wait" (keep session alive); default when gateway is offline = "wait" (keep session alive); gateway daemon delegates to SessionController.decideLifecycleAction() which returns "stop" + clearCopilotSessionId on error; on idle checks per-session context lastIdleHasBackgroundTasks (true → "wait", subagent stop scenario) then copilotclaw_wait active state (→ "wait"), otherwise "stop"
 - **Channel notifications**: gateway daemon inserts system messages on unexpected physical session stop (with error detail) and flushes pending messages for the channel
 
 ## Observability (v0.28.0, SQLite v0.29.0)
