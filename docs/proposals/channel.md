@@ -34,6 +34,12 @@ agent → [LLM 処理] → copilotclaw_send_message で途中報告（即時 ret
 agent → copilotclaw_send_message で最終回答 → copilotclaw_wait で次の入力を待機
 ```
 
+### Messages API の sender フィールド必須化（未実現）
+
+`POST /api/channels/:channelId/messages` で `sender` フィールドが省略された場合、現状は `"agent"` にフォールバックする。全ての正規の呼び出し元は `sender` を明示しているため、省略時のフォールバックに依存しているコードは存在しない。`sender` が省略された場合は 400 エラーを返すように修正する。
+
+変更箇所: `packages/gateway/src/server.ts` の POST messages ハンドラで、`body["sender"]` が `"user"` / `"agent"` / `"cron"` / `"system"` のいずれでもない場合に `400 { error: "missing or invalid 'sender' field" }` を返す。
+
 ### チャンネルのアーカイブ（v0.37.0 で実現済み）
 
 不要になったチャンネルを dashboard の通常表示から除外する機能。

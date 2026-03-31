@@ -178,6 +178,7 @@
 - premium request クォータの正確な取得（GitHub API 使用量取得 + SDK fallback。モデル一覧も GitHub Models Catalog から取得し SDK 由来と区別して表示。gateway 側の github-api.ts で実装）（v0.61.0）
 
 **未実現:**
+- Messages API の sender フィールド必須化 — `POST /api/channels/:channelId/messages` で `sender` 省略時に `"agent"` にフォールバックする現状を修正し、400 エラーを返すようにする
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
 **今後の課題:**
