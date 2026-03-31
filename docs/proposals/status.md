@@ -158,7 +158,7 @@
 
 - 物理セッション停止 API（`POST /api/sessions/{{sessionId}}/stop`、チャンネル設定モーダルからの物理セッションアーカイブに使用）（v0.55.0）
 
-- session.idle での subagent 停止と親 agent idle の区別（backgroundTasks フィールドと copilotclaw_wait 実行状態で判定。subagent 停止時は action: "wait"、真の idle は action: "stop"。backgroundTasks 存在時は currentState を idle に上書きしない）（v0.57.0）
+- session.idle での subagent 停止と親 agent idle の区別 — v0.65.0 で agent 側セッションループを修正。backgroundTasks 付き session.idle ではセッションループを終了せず、真の idle またはエラーを待つ（30分タイムアウト付き安全弁）
 
 - physical session の常時保持（idle 停止時に physicalSession をクリアせず currentState: "stopped" で保持。suspendSession は明示的 archive のみ）（v0.58.0）
 

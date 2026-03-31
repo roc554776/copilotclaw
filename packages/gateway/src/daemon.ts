@@ -308,6 +308,20 @@ async function main(): Promise<void> {
         }
       }
 
+      // session.idle with backgroundTasks: a subagent stopped but the overall session
+      // is still running (copilotclaw_wait is active). Notify the agent so copilotclaw_wait
+      // can unblock and the parent agent can process the subagent's result.
+      if (eventChannelId !== undefined && eventType === "session.idle") {
+        const bgTasks = data["backgroundTasks"] as { agents?: Array<{ agentId: string; agentType: string }> } | undefined;
+        if (bgTasks?.agents !== undefined && bgTasks.agents.length > 0) {
+          for (const agent of bgTasks.agents) {
+            const msg = `[SUBAGENT IDLE] ${agent.agentId} (${agent.agentType}) stopped`;
+            store.addMessage(eventChannelId, "system", msg);
+          }
+          agentManager.notifyAgent(sessionId);
+        }
+      }
+
       // Subagent completion/failure: insert system message and notify agent
       if (eventChannelId !== undefined && (eventType === "subagent.completed" || eventType === "subagent.failed")) {
         // Only notify for direct subagent calls (no parentToolCallId in the event data)

@@ -239,27 +239,28 @@ Agent session 起動（session.send を 1 回だけ使用）
 - `copilotclaw_send_message` は即時 return なので、作業を中断せずに状況報告できる
 - 新着 user message は `onPostToolUse` hook の `additionalContext` で LLM に通知される
 
-### session.idle での subagent 停止と親 agent idle の区別
+### session.idle での subagent 停止と親 agent idle の区別（v0.57.0 で gateway 側のみ実装、agent 側未修正で未実現）
 
-session.idle イベントには、subagent が停止しただけで親 agent はまだ `copilotclaw_wait` で待機中というケースと、親 agent 自身が idle になったケースの 2 種類がある。以下の判定ロジックで区別し、subagent 停止時は `action: "wait"` を返す。
+session.idle イベントには、subagent が停止しただけで親 agent はまだ `copilotclaw_wait` で待機中というケースと、親 agent 自身が idle になったケースの 2 種類がある。
 
-**判定ロジック:**
+**現状の問題:**
 
-session.idle が「親 agent の真の idle」か「subagent 停止による idle」かを以下の条件で判定する:
+v0.57.0 で gateway 側の `onLifecycle` 判定のみ実装した（backgroundTasks 付き session.idle に対して `action: "wait"` を返す）。しかし、agent 側のセッションループ（`session-loop.ts`）は `session.idle` イベントで無条件にセッションループを終了する。gateway が `"wait"` を返しても、セッションループは既に終了しており、`copilotclaw_wait` のツールハンドラは宙に浮く。結果、セッションはゾンビ化する（gateway は active と認識、agent は何も動いていない）。
 
-- **subagent 停止による idle**: `session.idle` イベントの `data.backgroundTasks` が null でない（subagent が停止しただけである）
-- **copilotclaw_wait 実行中**: gateway 側で各物理セッションの `currentState` を追跡しており、`tool:copilotclaw_wait` の状態にあるならば、親 agent はまだアクティブ（tool 実行中）
-- 上記いずれかに該当する場合、lifecycle handler は `action: "stop"` ではなく `action: "wait"` を返す
+**修正方針:**
 
-**変更箇所:**
+agent 側のセッションループ（`session-loop.ts` / `copilot-session-adapter.ts`）で、`session.idle` イベントに `backgroundTasks` が含まれる場合はセッションループを終了させず、subagent の完了を待つ。
 
-- **gateway daemon.ts `onSessionEvent`**: `session.idle` イベント受信時に `data.backgroundTasks` を抽出し、物理セッションの状態と組み合わせて判定に使う
-- **gateway daemon.ts `onLifecycle`**: idle イベントの判定で、上記条件に該当する場合は `action: "wait"` を返す。agent 側の `queryLifecycleAction` は変更不要（gateway の判断に従う既存の仕組み）
-- **agent の変更は不要**: lifecycle RPC で gateway に判断を委ねる既存の設計を維持する
+```
+session.on("session.idle", (event) => {
+  if event.data.backgroundTasks が存在する:
+    → セッションループを終了しない（subagent がまだ実行中）
+  else:
+    → セッションループを終了（親 agent の真の idle）
+})
+```
 
-**agent 側で idle イベントの data を lifecycle RPC に含めるかどうか:**
-
-現状、agent の `queryLifecycleAction` は `event: "idle"` のみを送信し、`backgroundTasks` 情報を含めていない。gateway 側で session_event の `session.idle` データから `backgroundTasks` を取得できるため、agent 側の変更は不要。ただし、session_event と lifecycle RPC のタイミングにずれがある可能性があるため、agent 側から `backgroundTasks` を lifecycle RPC に含める方式も検討する。
+gateway 側の `onLifecycle` 判定（v0.57.0 実装済み）はフォールバックとして残す。agent 側でセッションループが正しく継続すれば、`onLifecycle` は親 agent の真の idle でのみ呼ばれるようになる。
 
 ### physical session の常時保持（v0.58.0 で実現済み）
 

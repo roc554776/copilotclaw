@@ -73,7 +73,7 @@ function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<ty
 
   const send = vi.fn().mockImplementation(async () => {
     queueMicrotask(() => {
-      if (behavior === "idle") emit("session.idle");
+      if (behavior === "idle") emit("session.idle", { data: {} });
       else emit("session.error", { data: { message: "session error" } });
     });
     return "msg-id";
@@ -199,7 +199,7 @@ describe("PhysicalSessionManager — physical session lifecycle", () => {
     // Fully removed — not just suspended
     expect(manager.getPhysicalSessionStatuses()[sessionId]).toBeUndefined();
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 
@@ -415,7 +415,7 @@ describe("PhysicalSessionManager — assistant.message forwarding (gateway handl
     );
     expect(eventCalls.length).toBeGreaterThanOrEqual(1);
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 });
@@ -444,7 +444,7 @@ describe("PhysicalSessionManager — assistant.usage token accumulation", () => 
     );
     expect(eventCalls.length).toBeGreaterThan(0);
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 
@@ -464,7 +464,7 @@ describe("PhysicalSessionManager — assistant.usage token accumulation", () => 
     mockSession.emit("assistant.usage", { data: { model: "gpt-4.1", inputTokens: 200, outputTokens: 75 } });
 
     // End session → suspended
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
 
     const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
@@ -509,7 +509,7 @@ describe("PhysicalSessionManager — catch-all SDK event forwarding", () => {
       data: { removedMessages: 5, reason: "context_limit" },
     });
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 
@@ -534,7 +534,7 @@ describe("PhysicalSessionManager — catch-all SDK event forwarding", () => {
     );
     expect(eventCalls.length).toBeGreaterThan(0);
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 });
@@ -579,7 +579,7 @@ describe("PhysicalSessionManager — system prompt reinforcement via onPostToolU
     const result = await hook({ toolName: "copilotclaw_wait" });
     expect(result?.additionalContext ?? "").not.toContain("<system>");
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 
@@ -594,7 +594,7 @@ describe("PhysicalSessionManager — system prompt reinforcement via onPostToolU
     const result = await hook({ toolName: "copilotclaw_wait" });
     expect(result?.additionalContext ?? "").not.toContain("CRITICAL REMINDER");
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 
@@ -610,7 +610,7 @@ describe("PhysicalSessionManager — system prompt reinforcement via onPostToolU
     const result = await hook({ toolName: "copilotclaw_wait" });
     expect(result?.additionalContext ?? "").not.toContain("<system>");
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 
@@ -621,7 +621,7 @@ describe("PhysicalSessionManager — system prompt reinforcement via onPostToolU
     const sendArg = mockSession.send.mock.calls[0]?.[0] as { prompt?: string } | undefined;
     expect(sendArg?.prompt).toContain("copilotclaw_wait");
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 });
@@ -667,7 +667,7 @@ describe("PhysicalSessionManager — custom agents configuration", () => {
     // Session starts with channel-operator active
     expect(config.agent).toBe("channel-operator");
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 });
@@ -703,7 +703,7 @@ describe("PhysicalSessionManager — gateway passthrough config (clientOptions, 
     // githubToken wins over anything in clientOptions
     expect(ctorArg["githubToken"]).toBe("tok-test");
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 
@@ -730,7 +730,7 @@ describe("PhysicalSessionManager — gateway passthrough config (clientOptions, 
     // sessionConfigOverrides.agent overwrites the base agent field
     expect(config["agent"]).toBe("custom-primary");
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 });
@@ -752,7 +752,7 @@ describe("PhysicalSessionManager — suspend clears physical session (history is
     await waitForSessionReady(manager);
 
     // End session → suspended
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
 
     const statuses = manager.getPhysicalSessionStatuses();
@@ -785,7 +785,7 @@ describe("PhysicalSessionManager — suspend clears physical session (history is
     expect(running[0]!.status).toBeTruthy();
 
     // After suspend, no longer in running list
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
 
     const runningAfter = manager.getRunningPhysicalSessionsSummary();
@@ -807,7 +807,7 @@ describe("PhysicalSessionManager — suspend clears physical session (history is
     const statuses = manager.getPhysicalSessionStatuses();
     expect(statuses[gatewaySessionId]).toBeDefined();
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 
@@ -827,7 +827,7 @@ describe("PhysicalSessionManager — suspend clears physical session (history is
       expect.objectContaining({ model: "gpt-4.1-mini" }),
     );
 
-    mockSession.emit("session.idle");
+    mockSession.emit("session.idle", { data: {} });
     await wait(30);
   });
 });

@@ -34,8 +34,6 @@ interface SessionContext {
     lastReminderPercent: number;
     currentUsagePercent: number;
   };
-  /** True if the most recent session.idle event had backgroundTasks (subagent stop). */
-  lastIdleHasBackgroundTasks: boolean;
 }
 
 /** Valid state transitions. Any transition not listed here is rejected. */
@@ -110,7 +108,6 @@ export class SessionController {
       ctx = {
         pendingReplyExpected: false,
         reminderState: { needsReminder: false, lastReminderPercent: 0, currentUsagePercent: 0 },
-        lastIdleHasBackgroundTasks: false,
       };
       this.contexts.set(sessionId, ctx);
     }
@@ -285,9 +282,9 @@ export class SessionController {
 
   /** Called from onSessionEvent on session.idle. */
   onSessionIdle(sessionId: string, hasBackgroundTasks: boolean): void {
-    const ctx = this.getContext(sessionId);
-    ctx.lastIdleHasBackgroundTasks = hasBackgroundTasks;
     if (!hasBackgroundTasks) {
+      // True idle — update physical state. backgroundTasks idle means a subagent
+      // stopped but the session is still running, so physical state stays as-is.
       this.orchestrator.updatePhysicalSessionState(sessionId, "idle");
     }
   }
@@ -295,24 +292,15 @@ export class SessionController {
   // --- Lifecycle decision ---
 
   /** Decide what the agent should do when the session goes idle. */
-  decideLifecycleAction(sessionId: string, event: string): { action: "stop" | "reinject" | "wait"; clearCopilotSessionId?: boolean } {
+  decideLifecycleAction(_sessionId: string, event: string): { action: "stop" | "reinject" | "wait"; clearCopilotSessionId?: boolean } {
     if (event === "error") {
       return { action: "stop", clearCopilotSessionId: true };
     }
 
-    const ctx = this.getContext(sessionId);
-    if (ctx.lastIdleHasBackgroundTasks) {
-      console.error(`[session-controller] session ${sessionId.slice(0, 8)} idle with backgroundTasks — waiting (subagent stop)`);
-      ctx.lastIdleHasBackgroundTasks = false;
-      return { action: "wait" };
-    }
-
-    const session = this.orchestrator.getSessionStatuses()[sessionId];
-    if (session?.physicalSession?.currentState === "tool:copilotclaw_wait") {
-      console.error(`[session-controller] session ${sessionId.slice(0, 8)} idle but copilotclaw_wait active — waiting`);
-      return { action: "wait" };
-    }
-
+    // Agent-side session loop now handles backgroundTasks idle (v0.65.0):
+    // it skips termination when backgroundTasks is present, so the session
+    // continues running. If decideLifecycleAction is called, the session loop
+    // has truly ended (either true idle or safety-net timeout). Always stop.
     return { action: "stop" };
   }
 

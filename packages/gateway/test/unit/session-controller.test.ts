@@ -33,14 +33,11 @@ describe("SessionController — state transitions", () => {
   it("rejects invalid transition and logs", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    // Put session in "waiting" state
-    orchestrator.updateSessionStatus(sessionId, "waiting");
+    // Put session in "idle" state
+    orchestrator.updateSessionStatus(sessionId, "idle");
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    // Try to transition waiting → waiting via onPhysicalSessionStarted (which does starting → waiting)
-    // But since we're already in "waiting", the transition from waiting → waiting is not in VALID_TRANSITIONS
+    // idle → waiting is not valid (must go through starting first)
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
-    // The transition should succeed because waiting → waiting... actually waiting is not in VALID_TRANSITIONS from waiting.
-    // Let's check: onPhysicalSessionStarted does transition(sessionId, "waiting") which is waiting → waiting — not valid
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("rejected transition"));
     consoleSpy.mockRestore();
   });
@@ -142,24 +139,12 @@ describe("SessionController — lifecycle decisions", () => {
     expect(result.clearCopilotSessionId).toBe(true);
   });
 
-  it("returns wait when backgroundTasks present", () => {
+  it("always returns stop on idle (agent-side handles backgroundTasks)", () => {
     const { controller } = makeController();
+    // Even after backgroundTasks idle, decideLifecycleAction returns stop
+    // because agent-side session loop handles backgroundTasks continuation
     controller.onSessionIdle("sess-1", true);
     const result = controller.decideLifecycleAction("sess-1", "idle");
-    expect(result.action).toBe("wait");
-  });
-
-  it("returns stop on true idle (no backgroundTasks, no copilotclaw_wait)", () => {
-    const { controller, orchestrator, channelId } = makeController();
-    const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updatePhysicalSession(sessionId, {
-      sessionId: "copilot-123",
-      model: "gpt-4.1",
-      startedAt: new Date().toISOString(),
-      currentState: "idle",
-    });
-    controller.onSessionIdle(sessionId, false);
-    const result = controller.decideLifecycleAction(sessionId, "idle");
     expect(result.action).toBe("stop");
   });
 });

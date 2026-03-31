@@ -56,7 +56,9 @@
       "Bash(pnpm --filter gateway exec tsc --noEmit)",
       "Bash(pnpm --filter agent exec tsc --noEmit)",
       "Bash(pnpm --filter @copilotclaw/gateway run typecheck)",
-      "Bash(pnpm --filter @copilotclaw/gateway run test)",
+      "Bash(pnpm --filter @copilotclaw/gateway run test *)",
+      "Bash(pnpm --filter agent run test *)",
+      "Bash(pnpm --filter gateway run test *)",
       "Bash(pnpm vitest:*)",
       "Bash(pnpm test:*)",
       "Bash(curl -s http://localhost:19743/api/status)"
