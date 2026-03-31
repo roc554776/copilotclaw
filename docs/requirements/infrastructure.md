@@ -164,3 +164,56 @@ config ファイルでログレベルを指定し、通常は出力されない 
 copilotclaw の CLI は non-interactive とする。カラーコード、raw mode は使用しない。
 
 - 理由: agent が CLI を操作することを前提とした設計。interactive UI や色付き出力は agent にとって雑音
+
+### Req: chat 入力の送信キー変更（v0.59.0 で実現済み）
+
+Enter キーでの送信をやめ、Alt+Enter または Cmd+Enter のみで送信する。
+
+### Req: chat 入力欄の高さ自動調整（v0.59.0 で実現済み）
+
+入力内容に応じて input の高さを広げる。画面の高さに対する割合で上限を設定する。
+
+### Req: 下書き保存（v0.59.0 で実現済み）
+
+入力した内容を下書きとして記録し、変更がある度に保存する。
+
+- キー連打しても画面が重くなったり通信が重くなったりしないようにする
+
+### Req: Original System Prompts のアコーディオン表示（v0.60.0 で実現済み）
+
+Original System Prompts の表示を Effective Prompt と同様に view/hide で折り畳む方式にする。
+
+- デフォルトで折り畳まれている
+- 内部的にスクロールできる仕様はそのまま
+
+### Req: System Status モーダルの Open in new tab リンク修正（v0.60.0 で実現済み）
+
+System Status モーダルの「Open in new tab →」リンクを、普通にクリックしても新しいタブで開くようにする。
+
+### Req: System Status モーダルのセッションのアコーディオン表示（v0.60.0 で実現済み）
+
+System Status モーダルの abstract session は、id だけ表示し、詳細は view/hide で折り畳む方式にする。
+
+- デフォルトで折り畳まれている
+
+### Req: System Status モーダルのセクション順序変更（v0.60.0 で実現済み）
+
+System Status モーダルの Sessions セクションを最後に配置する。
+
+### Req: System Status モーダルと /status ページの内容統一（v0.60.0 で実現済み）
+
+System Status モーダルと `/status` ページで同様の内容を表示する。
+
+- どちらか一方にしかない情報があってはいけない
+- UI の違いはあってもよいが、順序や表示内容は同じにする
+- 現在はまばらになっているので、両方を足し合わせた内容を両方に表示する
+
+### Req: premium request クォータの正確な取得（v0.61.0 で実現済み）
+
+GitHub API を直接叩いて premium request のクォータ残量を正確に取得する。
+
+- GitHub の認証情報が直接使えるケース（gh 等）では、GitHub API でクォータ残量を取得する
+- 取得できないケースでは従来のやり方に fallback する
+- 理由: 従来のやり方だと恐らく正確な残量が取得できていないと思われるため
+- モデル一覧とプレミアムリクエスト乗数も同様に GitHub API から取得する
+  - API から取得したものと従来のやり方で取得したものを区別して両方表示する

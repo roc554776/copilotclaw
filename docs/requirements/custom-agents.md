@@ -34,3 +34,10 @@ subagent の完了・失敗を親 agent にリアルタイムに通知する。
 - wait 中のイベント処理をアドホックに行わない。統一的な通知の仕組みを使う
 - 理由: agent process をミニマルに保ち、gateway の更新だけで最新機能を享受できるコンセプトを維持するため
 - 現状の問題: subagent completion は agent 側の queue に積まれるが wait のブロックを解除する仕組みがない。フィルタリングも agent 側にある
+
+### Req: ネスト subagent 完了通知の抑制（実現済み — v0.43.0 の parentToolCallId フィルタで対応）
+
+subagent が呼び出した subagent（孫 subagent）の完了を、main agent に伝えない。
+
+- wait tool で待っている main agent には、直接呼び出した subagent の停止だけを伝える
+- parent tool call の id で直接呼び出しかどうかを判定する

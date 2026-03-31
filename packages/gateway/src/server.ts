@@ -6,6 +6,7 @@ import { AgentManager } from "./agent-manager.js";
 import { BuiltinChatChannel } from "./builtin-chat-channel.js";
 import type { ChannelProvider } from "./channel-provider.js";
 import { DEFAULT_PORT, getProfileName, getStateDir, loadConfig } from "./config.js";
+import { fetchGitHubModels, fetchPremiumRequestUsage } from "./github-api.js";
 import { getWorkspaceRoot } from "./workspace.js";
 import { LogBuffer } from "./log-buffer.js";
 import { renderEventsPage, renderSessionsListPage, renderStatusPage } from "./observability-pages.js";
@@ -240,29 +241,24 @@ function createRequestHandler(
     }
 
     if (fullPathname === "/api/quota" && method === "GET") {
-      // Try live IPC first, fall back to session event store
-      const quota = agentManager !== null ? await agentManager.getQuota() : null;
-      if (quota !== null) {
-        json(res, 200, quota);
-      } else if (sessionEventStore !== null) {
-        const cached = sessionEventStore.getLatestQuota();
-        json(res, 200, cached ?? { quotaSnapshots: {} });
-      } else {
-        json(res, 200, { quotaSnapshots: {} });
-      }
+      const config = loadConfig(getProfileName());
+      // SDK quota (legacy)
+      const sdkQuota = agentManager !== null ? await agentManager.getQuota() : null;
+      const quotaData = sdkQuota ?? (sessionEventStore !== null ? sessionEventStore.getLatestQuota() : null) ?? { quotaSnapshots: {} };
+      // GitHub API usage (direct)
+      const githubUsage = await fetchPremiumRequestUsage(config.auth?.github);
+      json(res, 200, { ...quotaData as Record<string, unknown>, githubUsage });
       return;
     }
 
     if (fullPathname === "/api/models" && method === "GET") {
-      // Try live IPC first, fall back to session event store
-      const models = agentManager !== null ? await agentManager.getModels() : null;
-      if (models !== null) {
-        json(res, 200, models);
-      } else if (sessionEventStore !== null) {
-        json(res, 200, { models: sessionEventStore.getKnownModels() });
-      } else {
-        json(res, 200, { models: [] });
-      }
+      const config = loadConfig(getProfileName());
+      // SDK models (legacy — includes billing multipliers)
+      const sdkModels = agentManager !== null ? await agentManager.getModels() : null;
+      const sdkData = sdkModels ?? (sessionEventStore !== null ? { models: sessionEventStore.getKnownModels() } : { models: [] });
+      // GitHub API models catalog (direct — no multipliers but broader catalog)
+      const githubModels = await fetchGitHubModels(config.auth?.github);
+      json(res, 200, { ...sdkData as Record<string, unknown>, githubModels });
       return;
     }
 
@@ -512,6 +508,28 @@ function createRequestHandler(
       if (action === "messages/pending/flush" && method === "POST") {
         const count = store.flushPending(channelId);
         json(res, 200, { flushed: count });
+        return;
+      }
+
+      if (action === "draft" && method === "GET") {
+        const ch = store.getChannel(channelId);
+        json(res, 200, { draft: ch?.draft ?? null });
+        return;
+      }
+
+      if (action === "draft" && (method === "PUT" || method === "POST")) {
+        const body = parseJson(await readBody(req));
+        if (!isRecord(body)) {
+          json(res, 400, { error: "invalid request body" });
+          return;
+        }
+        const draft = body["draft"];
+        if (draft !== null && typeof draft !== "string") {
+          json(res, 400, { error: "'draft' must be a string or null" });
+          return;
+        }
+        store.saveDraft(channelId, draft as string | null);
+        json(res, 200, { status: "saved" });
         return;
       }
 

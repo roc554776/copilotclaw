@@ -166,6 +166,16 @@
 
 - セッション status の細分化（new/starting/waiting/notified/processing/idle/suspended の 7 状態。tool.execution_start で processing/waiting を自動設定。message 到着時に waiting → notified 遷移）（v0.58.0）
 
+- end turn run ボタンの警戒色（archive physical session と同じ赤色。プレミアムリクエストを消費した run を捨てる操作のため）（v0.58.0）
+
+- chat 入力の UX 改善（Alt/Cmd+Enter のみ送信、textarea 高さ自動調整 40vh 上限、下書き保存 debounce 1s + チャンネル切替復元）（v0.59.0）
+
+- end turn run の物理セッション非 archive（SDK セッション停止 + copilotSessionId 保持 + resumeSession で再開。idleSession で physicalSession を visible に維持）（v0.60.0）
+
+- System Status UI 改善（モーダルと /status の内容統一: Gateway→Agent→Config→Quota→Models→Original Prompts→Token Consumption→Sessions。セッション/Original Prompts のアコーディオン折り畳み。Open in new tab リンク修正）（v0.60.0）
+
+- premium request クォータの正確な取得（GitHub API 使用量取得 + SDK fallback。モデル一覧も GitHub Models Catalog から取得し SDK 由来と区別して表示。gateway 側の github-api.ts で実装）（v0.61.0）
+
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 

@@ -5,6 +5,7 @@ export interface Channel {
   createdAt: string;
   archivedAt?: string | null;
   model?: string | null;
+  draft?: string | null;
 }
 
 export interface Message {
@@ -62,8 +63,23 @@ export interface QuotaSnapshot {
   overage?: number;
 }
 
+export interface GitHubUsageItem {
+  product: string;
+  model: string;
+  grossQuantity: number;
+  netQuantity: number;
+  pricePerUnit: number;
+}
+
+export interface GitHubUsageResponse {
+  timePeriod: { year: number; month: number };
+  user: string;
+  usageItems: GitHubUsageItem[];
+}
+
 export interface QuotaResponse {
   quotaSnapshots?: Record<string, QuotaSnapshot>;
+  githubUsage?: GitHubUsageResponse | null;
 }
 
 export interface ModelEntry {
@@ -71,8 +87,16 @@ export interface ModelEntry {
   billing?: { multiplier?: number };
 }
 
+export interface GitHubModelEntry {
+  id: string;
+  name: string;
+  publisher?: string;
+  summary?: string;
+}
+
 export interface ModelsResponse {
   models: ModelEntry[];
+  githubModels?: GitHubModelEntry[] | null;
 }
 
 export interface LogEntry {
@@ -287,3 +311,11 @@ export async function saveCronJobs(jobs: CronJobInput[]): Promise<void> {
   if (!res.ok) throw new Error(`save cron ${res.status}`);
 }
 
+export async function saveDraft(channelId: string, draft: string | null): Promise<void> {
+  const res = await fetch(`/api/channels/${encodeURIComponent(channelId)}/draft`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft }),
+  });
+  if (!res.ok) throw new Error(`save draft ${res.status}`);
+}

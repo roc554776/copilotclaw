@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   archiveChannel,
@@ -8,11 +8,14 @@ import {
   fetchLogs,
   fetchMessages,
   fetchModels,
+  fetchOriginalPrompts,
   fetchQuota,
   fetchStatus,
+  fetchTokenUsage,
   endTurnRun,
   reloadCron,
   saveCronJobs,
+  saveDraft,
   sendMessage,
   stopSession,
   unarchiveChannel,
@@ -24,8 +27,10 @@ import {
   type Message,
   type ModelEntry,
   type ModelsResponse,
+  type OriginalPrompt,
   type QuotaResponse,
   type StatusResponse,
+  type TokenUsageEntry,
 } from "../api";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import { usePolling } from "../hooks/usePolling";
@@ -56,6 +61,18 @@ export function DashboardPage() {
   const loadingOlderRef = useRef(false);
   const [inputText, setInputText] = useState("");
   const [sending, setSending] = useState(false);
+
+  // Debounced draft save: aggregate changes over 1 second, send only the final value
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedSaveDraft = useMemo(() => {
+    return (channelId: string, text: string) => {
+      if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = setTimeout(() => {
+        draftTimerRef.current = null;
+        saveDraft(channelId, text || null).catch(() => {});
+      }, 1000);
+    };
+  }, []);
   const [sseConnected, setSseConnected] = useState(false);
   const [sessionStatus, setSessionStatus] = useState("--");
   const [gatewayVersion, setGatewayVersion] = useState("--");
@@ -65,6 +82,8 @@ export function DashboardPage() {
   const [modalStatus, setModalStatus] = useState<StatusResponse | null>(null);
   const [modalQuota, setModalQuota] = useState<QuotaResponse | null>(null);
   const [modalModels, setModalModels] = useState<ModelsResponse | null>(null);
+  const [modalOriginalPrompts, setModalOriginalPrompts] = useState<OriginalPrompt[]>([]);
+  const [modalTokenUsage5h, setModalTokenUsage5h] = useState<TokenUsageEntry[]>([]);
   const [logsVisible, setLogsVisible] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,14 +122,62 @@ export function DashboardPage() {
   messagesRef.current = messages;
   const activeChannelRef = useRef(activeChannelId);
 
-  // Reset messages when channel changes
+  // Flush pending draft save on beforeunload (page reload/close) and clean up on unmount
+  const inputTextRef = useRef(inputText);
+  inputTextRef.current = inputText;
+  const activeChannelIdRef = useRef(activeChannelId);
+  activeChannelIdRef.current = activeChannelId;
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (draftTimerRef.current !== null && activeChannelIdRef.current) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+        // Use sendBeacon for reliable delivery during page unload
+        const url = `/api/channels/${encodeURIComponent(activeChannelIdRef.current)}/draft`;
+        const blob = new Blob([JSON.stringify({ draft: inputTextRef.current || null })], { type: "application/json" });
+        navigator.sendBeacon(url, blob);
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    };
+  }, []);
+
+  // Restore draft on initial load (channels data arrives async after mount)
+  const initialDraftRestoredRef = useRef(false);
+  useEffect(() => {
+    if (!initialDraftRestoredRef.current && activeChannelId && channels.length > 0) {
+      initialDraftRestoredRef.current = true;
+      const ch = channels.find((c) => c.id === activeChannelId);
+      if (ch?.draft) {
+        setInputText(ch.draft);
+        requestAnimationFrame(() => {
+          const el = inputRef.current;
+          if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.4) + "px"; }
+        });
+      }
+    }
+  }, [activeChannelId, channels]);
+
+  // Reset messages and restore draft when channel changes
   useEffect(() => {
     if (activeChannelRef.current !== activeChannelId) {
+      // Flush any pending draft save for the previous channel immediately
+      if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
       setMessages([]);
       setHasOlderMessages(true);
       activeChannelRef.current = activeChannelId;
+      // Restore draft from channel data
+      const ch = channels.find((c) => c.id === activeChannelId);
+      setInputText(ch?.draft ?? "");
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.4) + "px"; }
+      });
     }
-  }, [activeChannelId]);
+  }, [activeChannelId, channels]);
 
   // H-1: capture activeChannelId in closure
   const refreshMessages = useCallback(async () => {
@@ -301,6 +368,10 @@ export function DashboardPage() {
     if (!text || !activeChannelId) return;
     setSending(true);
     setInputText("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    // Clear draft immediately on send (cancel any pending debounce)
+    if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    saveDraft(activeChannelId, null).catch(() => {});
     try {
       await sendMessage(activeChannelId, text);
       await refreshMessages();
@@ -320,17 +391,23 @@ export function DashboardPage() {
     setModalStatus(null);
     setModalQuota(null);
     setModalModels(null);
+    setModalOriginalPrompts([]);
+    setModalTokenUsage5h([]);
     try {
       const { signal } = controller;
-      const [status, quota, models] = await Promise.all([
+      const [status, quota, models, originalPrompts, tokenUsage] = await Promise.all([
         fetchStatus(signal),
         fetchQuota(signal),
         fetchModels(signal),
+        fetchOriginalPrompts().catch(() => [] as OriginalPrompt[]),
+        fetchTokenUsage(5).catch(() => [] as TokenUsageEntry[]),
       ]);
       if (controller.signal.aborted) return;
       setModalStatus(status);
       setModalQuota(quota);
       setModalModels(models);
+      setModalOriginalPrompts(originalPrompts);
+      setModalTokenUsage5h(tokenUsage);
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       if (!controller.signal.aborted) {
@@ -582,6 +659,8 @@ export function DashboardPage() {
               System Status{" "}
               <a
                 href="/status"
+                target="_blank"
+                rel="noreferrer"
                 style={{
                   fontSize: "0.8rem",
                   fontWeight: "normal",
@@ -596,6 +675,8 @@ export function DashboardPage() {
                 status={modalStatus}
                 quota={modalQuota}
                 models={modalModels}
+                originalPrompts={modalOriginalPrompts}
+                tokenUsage5h={modalTokenUsage5h}
               />
             ) : (
               <div>Loading...</div>
@@ -890,14 +971,22 @@ export function DashboardPage() {
         <textarea
           ref={inputRef}
           value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value;
+            setInputText(val);
+            if (activeChannelId) debouncedSaveDraft(activeChannelId, val);
+            // Auto-resize textarea height
+            const el = e.target;
+            el.style.height = "auto";
+            el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.4) + "px";
+          }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (e.key === "Enter" && (e.altKey || e.metaKey)) {
               e.preventDefault();
               handleSend();
             }
           }}
-          placeholder="Type a message..."
+          placeholder="Type a message... (Alt+Enter or Cmd+Enter to send)"
           rows={1}
           style={{
             flex: 1,
@@ -910,6 +999,8 @@ export function DashboardPage() {
             fontSize: "0.9rem",
             resize: "none",
             outline: "none",
+            overflow: "auto",
+            maxHeight: "40vh",
           }}
         />
         <button
@@ -994,11 +1085,16 @@ function QuotaSection({
   rowStyle: React.CSSProperties;
   labelStyle: React.CSSProperties;
 }) {
+  const [githubExpanded, setGithubExpanded] = useState(false);
   const snapshots = quota?.quotaSnapshots ?? {};
   const keys = Object.keys(snapshots);
+  const githubUsage = quota?.githubUsage;
   return (
     <div style={sectionStyle}>
       <div style={titleStyle}>Premium Requests</div>
+
+      {/* SDK (Copilot) */}
+      <div style={{ fontSize: "0.75rem", color: "#58a6ff", marginBottom: "0.3rem" }}>SDK (Copilot)</div>
       {keys.length === 0 && (
         <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
       )}
@@ -1023,6 +1119,115 @@ function QuotaSection({
           </div>
         );
       })}
+
+      {/* GitHub API Usage */}
+      <div style={{ marginTop: "0.5rem" }}>
+        <div style={{ fontSize: "0.75rem", color: "#58a6ff", marginBottom: "0.3rem" }}>GitHub API</div>
+        {githubUsage === null || githubUsage === undefined ? (
+          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>unavailable</div>
+        ) : (() => {
+          const totalUsed = Math.round(githubUsage.usageItems.reduce((sum, item) => sum + item.grossQuantity, 0) * 100) / 100;
+          const premiumSnap = snapshots["premium_interactions"];
+          const totalAllowance = premiumSnap?.entitlementRequests ?? 0;
+          return (
+            <>
+              <div style={rowStyle}>
+                <span style={labelStyle}>Premium requests used</span>
+                <span>{totalUsed}{totalAllowance > 0 ? ` / ${totalAllowance}` : ""}</span>
+              </div>
+              <div style={{ marginTop: "0.3rem" }}>
+                <a
+                  href="#"
+                  onClick={(e) => { e.preventDefault(); setGithubExpanded((p) => !p); }}
+                  style={{ fontSize: "0.75rem", color: "#8b949e", cursor: "pointer" }}
+                >
+                  Per-model breakdown {githubExpanded ? "\u25BE" : "\u25B8"}
+                </a>
+                {githubExpanded && (
+                  <div style={{ marginTop: "0.3rem" }}>
+                    <div style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                      <span style={labelStyle}>Billing period</span>
+                      <span>{githubUsage.timePeriod.year}-{String(githubUsage.timePeriod.month).padStart(2, "0")}</span>
+                    </div>
+                    {githubUsage.usageItems.map((item, idx) => (
+                      <div key={idx} style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                        <span style={labelStyle}>{item.model}</span>
+                        <span>{item.grossQuantity} reqs</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+function ModelsSection({
+  models,
+  sectionStyle,
+  titleStyle,
+  rowStyle,
+  labelStyle,
+}: {
+  models: ModelsResponse | null;
+  sectionStyle: React.CSSProperties;
+  titleStyle: React.CSSProperties;
+  rowStyle: React.CSSProperties;
+  labelStyle: React.CSSProperties;
+}) {
+  const [githubExpanded, setGithubExpanded] = useState(false);
+  const githubModels = models?.githubModels;
+  return (
+    <div style={sectionStyle}>
+      <div style={titleStyle}>Available Models</div>
+
+      {/* SDK (Copilot) */}
+      <div style={{ fontSize: "0.75rem", color: "#58a6ff", marginBottom: "0.3rem" }}>SDK (Copilot)</div>
+      {models && models.models.length > 0 ? (
+        models.models.map((m) => (
+          <div key={m.id} style={rowStyle}>
+            <span style={labelStyle}>{m.id}</span>
+            <span>x{m.billing?.multiplier ?? "?"}</span>
+          </div>
+        ))
+      ) : (
+        <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
+      )}
+
+      {/* GitHub Models Catalog */}
+      <div style={{ marginTop: "0.5rem" }}>
+        <div
+          style={{ fontSize: "0.75rem", color: "#58a6ff", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem" }}
+          onClick={() => setGithubExpanded((p) => !p)}
+        >
+          GitHub Models Catalog {githubExpanded ? "\u25BE" : "\u25B8"}
+        </div>
+        {githubExpanded && (
+          githubModels === null || githubModels === undefined ? (
+            <div style={{ color: "#8b949e", fontSize: "0.85rem", marginTop: "0.3rem" }}>GitHub API: unavailable</div>
+          ) : (
+            <div style={{ marginTop: "0.3rem" }}>
+              <div style={{ color: "#8b949e", fontSize: "0.75rem", marginBottom: "0.3rem" }}>
+                Multipliers not available from this source.
+              </div>
+              {githubModels.length === 0 ? (
+                <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>No models.</div>
+              ) : (
+                githubModels.map((m) => (
+                  <div key={m.id} style={{ ...rowStyle, fontSize: "0.8rem" }}>
+                    <span style={labelStyle}>{m.name}{m.publisher ? ` (${m.publisher})` : ""}</span>
+                    <span style={{ color: "#8b949e", fontSize: "0.75rem" }}>{m.id}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )
+        )}
+      </div>
     </div>
   );
 }
@@ -1031,11 +1236,34 @@ function StatusModalContent({
   status,
   quota,
   models,
+  originalPrompts,
+  tokenUsage5h,
 }: {
   status: StatusResponse;
   quota: QuotaResponse | null;
   models: ModelsResponse | null;
+  originalPrompts: OriginalPrompt[];
+  tokenUsage5h: TokenUsageEntry[];
 }) {
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
+  const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
+
+  const toggleSession = (id: string) => {
+    setExpandedSessions((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const modelMultipliers: Record<string, number> = {};
+  if (models) {
+    for (const m of models.models) {
+      modelMultipliers[m.id] = m.billing?.multiplier ?? 0;
+    }
+  }
+
   return (
     <>
       {/* Gateway */}
@@ -1053,52 +1281,172 @@ function StatusModalContent({
 
       {/* Agent */}
       {status.agent ? (
-        <>
-          <div style={modalSectionStyle}>
-            <div style={modalTitleStyle}>Agent</div>
-            <div style={modalRowStyle}>
-              <span style={modalLabelStyle}>Version</span>
-              <span>{status.agent.version ?? "--"}</span>
-            </div>
-            <div style={modalRowStyle}>
-              <span style={modalLabelStyle}>Started</span>
-              <span>{status.agent.startedAt ?? "--"}</span>
-            </div>
-            <div style={modalRowStyle}>
-              <span style={modalLabelStyle}>Compatibility</span>
-              <span>{status.agentCompatibility}</span>
-            </div>
+        <div style={modalSectionStyle}>
+          <div style={modalTitleStyle}>Agent</div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Version</span>
+            <span>{status.agent.version ?? "--"}</span>
           </div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Started</span>
+            <span>{status.agent.startedAt ?? "--"}</span>
+          </div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Compatibility</span>
+            <span>{status.agentCompatibility}</span>
+          </div>
+        </div>
+      ) : (
+        <div style={modalSectionStyle}>
+          <div style={modalTitleStyle}>Agent</div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Not running</span>
+          </div>
+        </div>
+      )}
 
-          {/* Sessions */}
-          <div style={modalSectionStyle}>
-              <div style={modalTitleStyle}>
-                Sessions ({Object.keys(status.agent.sessions).length}){" "}
-                <a
-                  href="/sessions"
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ fontWeight: "normal" }}
-                >
-                  All sessions &rarr;
-                </a>
-              </div>
-              {Object.entries(status.agent.sessions).length === 0 && (
-                <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
-                  No active sessions.
+      {/* Config */}
+      {status.config && (
+        <div style={modalSectionStyle}>
+          <div style={modalTitleStyle}>Config</div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Model</span>
+            <span>{status.config.model ?? "(auto)"}</span>
+          </div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Zero Premium</span>
+            <span>{String(status.config.zeroPremium)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Quota */}
+      <QuotaSection
+        quota={quota}
+        sectionStyle={modalSectionStyle}
+        titleStyle={modalTitleStyle}
+        rowStyle={modalRowStyle}
+        labelStyle={modalLabelStyle}
+      />
+
+      {/* Models */}
+      <ModelsSection
+        models={models}
+        sectionStyle={modalSectionStyle}
+        titleStyle={modalTitleStyle}
+        rowStyle={modalRowStyle}
+        labelStyle={modalLabelStyle}
+      />
+
+      {/* Original System Prompts */}
+      <div style={modalSectionStyle}>
+        <div style={modalTitleStyle}>Original System Prompts</div>
+        {originalPrompts.length === 0 ? (
+          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No prompts captured yet.</div>
+        ) : (
+          originalPrompts.map((p) => {
+            const key = `${p.model}-${p.capturedAt}`;
+            const isExpanded = expandedPrompts.has(key);
+            return (
+              <div key={key} style={{ marginTop: "0.3rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "0.8rem", color: "#8b949e" }}>{p.model}</span>
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setExpandedPrompts((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(key)) next.delete(key); else next.add(key);
+                        return next;
+                      });
+                    }}
+                    style={{ fontSize: "0.75rem", cursor: "pointer" }}
+                  >
+                    {isExpanded ? "Hide \u25BE" : "View \u25B8"}
+                  </a>
                 </div>
-              )}
-              {Object.entries(status.agent.sessions).map(([id, sess]) => (
-                <div key={id} style={{ marginBottom: "0.5rem" }}>
-                  <div style={modalRowStyle}>
-                    <span style={modalLabelStyle}>
-                      {id.slice(0, SESSION_ID_SHORT)}
-                      {sess.boundChannelId
-                        ? ` → ch:${sess.boundChannelId.slice(0, SESSION_ID_SHORT)}`
-                        : ""}
-                    </span>
-                    <span>{sess.status}</span>
-                  </div>
+                {isExpanded && (
+                  <pre style={{
+                    background: "#161b22",
+                    padding: "0.75rem",
+                    borderRadius: "0.5rem",
+                    overflowX: "auto",
+                    fontSize: "0.8rem",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                    maxHeight: 300,
+                    overflowY: "auto",
+                    marginTop: "0.3rem",
+                  }}>{p.prompt}</pre>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Token Consumption */}
+      <div style={modalSectionStyle}>
+        <div style={modalTitleStyle}>Token Consumption</div>
+        <div style={modalRowStyle}>
+          <span style={modalLabelStyle}>Last 5h Index</span>
+          <span>{modalComputeIndex(tokenUsage5h, modelMultipliers).toLocaleString()}</span>
+        </div>
+        {tokenUsage5h.length > 0 && tokenUsage5h.map((u) => (
+          <div key={u.model} style={{ ...modalRowStyle, fontSize: "0.8rem" }}>
+            <span style={modalLabelStyle}>{u.model}</span>
+            <span>
+              {(u.inputTokens + u.outputTokens).toLocaleString()} (x{Math.max(modelMultipliers[u.model] ?? 0, 0.1)})
+            </span>
+          </div>
+        ))}
+        {tokenUsage5h.length === 0 && (
+          <div style={{ color: "#8b949e", fontSize: "0.8rem" }}>No token usage data in the last 5 hours.</div>
+        )}
+      </div>
+
+      {/* Sessions (LAST) */}
+      {status.agent && (
+        <div style={modalSectionStyle}>
+          <div style={modalTitleStyle}>
+            Sessions ({Object.keys(status.agent.sessions).length}){" "}
+            <a
+              href="/sessions"
+              target="_blank"
+              rel="noreferrer"
+              style={{ fontWeight: "normal" }}
+            >
+              All sessions &rarr;
+            </a>
+          </div>
+          {Object.entries(status.agent.sessions).length === 0 && (
+            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
+              No active sessions.
+            </div>
+          )}
+          {Object.entries(status.agent.sessions).map(([id, sess]) => (
+            <div key={id} style={{ marginBottom: "0.5rem" }}>
+              <div style={modalRowStyle}>
+                <span style={modalLabelStyle}>
+                  {id.slice(0, SESSION_ID_SHORT)}
+                  {sess.boundChannelId
+                    ? ` \u2192 ch:${sess.boundChannelId.slice(0, SESSION_ID_SHORT)}`
+                    : ""}
+                </span>
+                <span>
+                  {sess.status}{" "}
+                  <a
+                    href="#"
+                    onClick={(e) => { e.preventDefault(); toggleSession(id); }}
+                    style={{ cursor: "pointer", marginLeft: "0.5rem" }}
+                  >
+                    {expandedSessions.has(id) ? "Hide \u25BE" : "View \u25B8"}
+                  </a>
+                </span>
+              </div>
+              {expandedSessions.has(id) && (
+                <>
                   {sess.startedAt && (
                     <div
                       style={{
@@ -1263,43 +1611,23 @@ function StatusModalContent({
                         ))}
                       </div>
                     )}
-                </div>
-              ))}
+                </>
+              )}
             </div>
-        </>
-      ) : (
-        <div style={modalSectionStyle}>
-          <div style={modalTitleStyle}>Agent</div>
-          <div style={modalRowStyle}>
-            <span style={modalLabelStyle}>Not running</span>
-          </div>
+          ))}
         </div>
       )}
-
-      <QuotaSection
-        quota={quota}
-        sectionStyle={modalSectionStyle}
-        titleStyle={modalTitleStyle}
-        rowStyle={modalRowStyle}
-        labelStyle={modalLabelStyle}
-      />
-
-      {/* Models */}
-      <div style={modalSectionStyle}>
-        <div style={modalTitleStyle}>Available Models</div>
-        {models && models.models.length > 0 ? (
-          models.models.map((m) => (
-            <div key={m.id} style={modalRowStyle}>
-              <span style={modalLabelStyle}>{m.id}</span>
-              <span>x{m.billing?.multiplier ?? "?"}</span>
-            </div>
-          ))
-        ) : (
-          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No data available.</div>
-        )}
-      </div>
     </>
   );
+}
+
+function modalComputeIndex(usage: TokenUsageEntry[], multipliers: Record<string, number>): number {
+  let index = 0;
+  for (const u of usage) {
+    const mult = Math.max(multipliers[u.model] ?? 0, 0.1);
+    index += mult * (u.inputTokens + u.outputTokens);
+  }
+  return Math.round(index);
 }
 
 function ChannelSettingsModal({
@@ -1502,10 +1830,10 @@ function ChannelSettingsModal({
                   onClick={handleEndTurnRunBtn}
                   style={{
                     padding: "0.3rem 0.8rem",
-                    background: "#21262d",
-                    border: "1px solid #30363d",
+                    background: "#da3633",
+                    border: "none",
                     borderRadius: "0.3rem",
-                    color: "#c9d1d9",
+                    color: "#fff",
                     cursor: "pointer",
                     fontSize: "0.85rem",
                   }}
@@ -1528,7 +1856,7 @@ function ChannelSettingsModal({
                 </button>
               </div>
               <div style={{ fontSize: "0.75rem", color: "#8b949e", marginTop: "0.3rem" }}>
-                End turn run: stops current turn, next message applies model setting.
+                End turn run: stops current turn run. Next message resumes the same physical session.
                 Archive: fully removes the physical session.
               </div>
             </div>
