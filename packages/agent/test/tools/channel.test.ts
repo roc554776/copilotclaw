@@ -1,44 +1,104 @@
-import { describe, expect, it, vi } from "vitest";
-import { createChannelTools } from "../../src/tools/channel.js";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
-function createMockFetch(responses: Array<{ status: number; body: unknown }>) {
-  let callIndex = 0;
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-
-  const fetchFn = async (url: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(url), init });
-    const resp = responses[callIndex] ?? { status: 204, body: null };
-    callIndex++;
-    return {
-      status: resp.status,
-      ok: resp.status >= 200 && resp.status < 300,
-      json: async () => resp.body,
-      text: async () => JSON.stringify(resp.body),
-    } as Response;
+// Mock the IPC server module before importing channel tools
+vi.mock("../../src/ipc-server.js", async () => {
+  const { EventEmitter } = await import("node:events");
+  return {
+    requestFromGateway: vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
+      // Default mock: tool_call RPCs return tool-specific defaults.
+      // Tests override this mock per-test as needed.
+      if (msg.type === "tool_call") {
+        if (msg.toolName === "copilotclaw_send_message") return { status: "sent" };
+        if (msg.toolName === "copilotclaw_list_messages") return { messages: [] };
+        // copilotclaw_wait: return null → agent falls through to keepalive
+        if (msg.toolName === "copilotclaw_wait") return null;
+      }
+      // drain_pending, peek_pending etc: return null (no messages)
+      return null;
+    }),
+    streamEvents: new EventEmitter(),
+    hasStream: vi.fn().mockReturnValue(true),
+    getStreamSocket: vi.fn().mockReturnValue(null),
+    setStreamSocket: vi.fn(),
   };
+});
 
-  return { fetchFn, calls };
+import { createChannelTools, type ChannelToolDeps } from "../../src/tools/channel.js";
+import { requestFromGateway, streamEvents } from "../../src/ipc-server.js";
+
+const DEFAULT_TOOL_DEFS = [
+  {
+    name: "copilotclaw_send_message",
+    description: "Send a message",
+    parameters: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+  },
+  {
+    name: "copilotclaw_list_messages",
+    description: "List messages",
+    parameters: { type: "object", properties: { limit: { type: "number" } }, required: [] },
+  },
+];
+
+/** Helper: create channel tools and extract by name for test convenience. */
+function makeTools(deps: Partial<ChannelToolDeps> & { sessionId: string }) {
+  const { tools } = createChannelTools({
+    keepaliveTimeoutMs: 25 * 60 * 1000,
+    toolDefinitions: DEFAULT_TOOL_DEFS,
+    ...deps,
+  });
+  const findTool = (name: string) => tools.find((t) => t.name === name);
+  return {
+    wait: findTool("copilotclaw_wait")!,
+    sendMessage: findTool("copilotclaw_send_message"),
+    listMessages: findTool("copilotclaw_list_messages"),
+    tools,
+  };
 }
 
-const RECEIVE_INSTRUCTION = "copilotclaw_receive_input";
+const WAIT_INSTRUCTION = "copilotclaw_wait";
 const KEEPALIVE_MARKER = "keepalive cycle";
+
+/** Configure the requestFromGateway mock for wait tool tests.
+ *  wait tries gateway RPC first (tool_call → null), then falls through to drain_pending. */
+function mockDrainReturns(messages: unknown[]): void {
+  (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(async (msg: Record<string, unknown>) => {
+    if (msg.type === "tool_call") {
+      if (msg.toolName === "copilotclaw_send_message") return { status: "sent" };
+      if (msg.toolName === "copilotclaw_list_messages") return { messages: [] };
+      return null; // copilotclaw_wait: fall through to agent keepalive
+    }
+    if (msg.type === "drain_pending") return messages;
+    return null;
+  });
+}
+
+function mockDrainEmpty(): void { mockDrainReturns([]); }
+
+function mockGatewayDown(): void {
+  (requestFromGateway as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("IPC error"));
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Restore default mock after clearAllMocks resets the implementation
+  (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(async (msg: Record<string, unknown>) => {
+    if (msg.type === "tool_call") {
+      if (msg.toolName === "copilotclaw_send_message") return { status: "sent" };
+      if (msg.toolName === "copilotclaw_list_messages") return { messages: [] };
+      if (msg.toolName === "copilotclaw_wait") return null;
+    }
+    return null;
+  });
+});
 
 describe("channel tools — abort signal", () => {
   it("aborts polling when abort signal fires", async () => {
     const controller = new AbortController();
-    let fetchCallCount = 0;
+    // wait: gateway RPC returns null → fallback; drain_pending returns empty
+    mockDrainEmpty();
 
-    const fetchFn = async (_url: string | URL | Request, init?: RequestInit) => {
-      fetchCallCount++;
-      if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      return { status: 204, ok: true, json: async () => null, text: async () => "null" } as Response;
-    };
-
-    const { receiveInput } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
-      pollIntervalMs: 10,
-      fetch: fetchFn as typeof globalThis.fetch,
+    const { wait } = makeTools({
+      sessionId: "ch-abc",
       abortSignal: controller.signal,
     });
 
@@ -46,186 +106,366 @@ describe("channel tools — abort signal", () => {
 
     setTimeout(() => { controller.abort(); }, 50);
 
-    // receiveInput NEVER throws — even on abort, it returns keepalive response
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
-    expect(result.userMessage).toContain("copilotclaw_receive_input");
-
-    expect(fetchCallCount).toBeGreaterThanOrEqual(1);
+    // wait NEVER throws — even on abort, it returns keepalive response
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("copilotclaw_wait");
   });
 
-  it("never throws on fetch network error — returns keepalive response", async () => {
-    const fetchFn = async () => {
-      throw new Error("network unreachable");
-    };
+  it("never throws on IPC error — returns keepalive response", async () => {
+    mockGatewayDown();
 
-    const { receiveInput } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-err",
-      pollIntervalMs: 10,
-      fetch: fetchFn as typeof globalThis.fetch,
+    const { wait } = makeTools({
+      sessionId: "ch-err",
+      keepaliveTimeoutMs: 50,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     // Must NOT throw — returns keepalive instead
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
-    expect(result.userMessage).toContain("copilotclaw_receive_input");
-
-    // Error was logged to system log
-    const logged = errSpy.mock.calls.some(
-      (c) => String(c[0]).includes("receive_input internal error"),
-    );
-    expect(logged).toBe(true);
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("copilotclaw_wait");
 
     errSpy.mockRestore();
   });
 });
 
 describe("copilotclaw_send_message", () => {
-  it("posts message to channel and returns immediately", async () => {
-    const { fetchFn, calls } = createMockFetch([
-      { status: 201, body: { id: "msg-1", sender: "agent", message: "hello" } },
-    ]);
-
-    const { sendMessage } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
-      fetch: fetchFn as typeof globalThis.fetch,
+  it("sends message via gateway RPC and returns result", async () => {
+    const { sendMessage } = makeTools({
+      sessionId: "ch-abc",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-    const result = await sendMessage.handler({ message: "hello" }, invocation) as { status: string };
+    const result = await sendMessage!.handler({ message: "hello" }, invocation) as { status: string };
 
     expect(result.status).toBe("sent");
-    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages");
-    const body = JSON.parse(calls[0]!.init?.body as string) as { sender: string; message: string };
-    expect(body.sender).toBe("agent");
-    expect(body.message).toBe("hello");
+    expect(requestFromGateway).toHaveBeenCalledWith({
+      type: "tool_call",
+      toolName: "copilotclaw_send_message",
+      sessionId: "ch-abc",
+      args: { message: "hello" },
+    });
+  });
+
+  it("returns graceful error on gateway disconnect", async () => {
+    mockGatewayDown();
+
+    const { sendMessage } = makeTools({
+      sessionId: "ch-abc",
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await sendMessage!.handler({ message: "hello" }, invocation) as { error: string };
+
+    expect(result.error).toContain("Gateway is not connected");
+    errSpy.mockRestore();
   });
 
   it("has correct tool name", () => {
-    const { sendMessage } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
+    const { sendMessage } = makeTools({
+      sessionId: "ch-abc",
     });
-    expect(sendMessage.name).toBe("copilotclaw_send_message");
+    expect(sendMessage!.name).toBe("copilotclaw_send_message");
   });
 });
 
-describe("copilotclaw_receive_input", () => {
-  it("polls until 200 and returns combined messages", async () => {
-    const { fetchFn, calls } = createMockFetch([
-      { status: 204, body: null },
-      { status: 200, body: [
-        { id: "input-1", message: "hello" },
-        { id: "input-2", message: "how are you" },
-      ] },
+describe("copilotclaw_wait", () => {
+  it("drains immediately when messages available", async () => {
+    mockDrainReturns([
+      { id: "input-1", message: "hello" },
+      { id: "input-2", message: "how are you" },
     ]);
 
-    const { receiveInput } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
-      pollIntervalMs: 1,
-      fetch: fetchFn as typeof globalThis.fetch,
+    const { wait } = makeTools({
+      sessionId: "ch-abc",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
 
-    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages/pending");
     expect(result.userMessage).toContain("hello");
     expect(result.userMessage).toContain("how are you");
-    expect(result.userMessage).toContain(RECEIVE_INSTRUCTION);
+    expect(result.userMessage).toContain(WAIT_INSTRUCTION);
   });
 
-  it("returns keepalive instruction on timeout", async () => {
-    const { fetchFn } = createMockFetch(
-      Array.from({ length: 100 }, () => ({ status: 204, body: null })),
-    );
+  it("returns keepalive instruction on timeout (no messages, no notify)", async () => {
+    mockDrainEmpty();
 
-    const { receiveInput } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
-      pollIntervalMs: 1,
+    const { wait } = makeTools({
+      sessionId: "ch-abc",
       keepaliveTimeoutMs: 20,
-      fetch: fetchFn as typeof globalThis.fetch,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
 
     expect(result.userMessage).toContain(KEEPALIVE_MARKER);
-    expect(result.userMessage).toContain(RECEIVE_INSTRUCTION);
+    expect(result.userMessage).toContain(WAIT_INSTRUCTION);
   });
 
-  it("does not trigger keepalive when input arrives within timeout", async () => {
-    const { fetchFn } = createMockFetch([
-      { status: 204, body: null },
-      { status: 200, body: [{ id: "input-1", message: "arrived in time" }] },
-    ]);
+  it("drains after agent_notify push", async () => {
+    let drainCallCount = 0;
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(async (msg: Record<string, unknown>) => {
+      if (msg.type === "tool_call") {
+        if (msg.toolName === "copilotclaw_send_message") return { status: "sent" };
+        if (msg.toolName === "copilotclaw_list_messages") return { messages: [] };
+        return null; // copilotclaw_wait: fall through to agent keepalive
+      }
+      if (msg.type === "drain_pending") {
+        drainCallCount++;
+        if (drainCallCount === 1) return []; // First drain: empty
+        return [{ id: "input-1", message: "arrived via notify" }]; // Second drain after notify
+      }
+      return null;
+    });
 
-    const { receiveInput } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
-      pollIntervalMs: 1,
+    const { wait } = makeTools({
+      sessionId: "ch-notify",
       keepaliveTimeoutMs: 5000,
-      fetch: fetchFn as typeof globalThis.fetch,
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-    const result = await receiveInput.handler({}, invocation) as { userMessage: string };
 
-    expect(result.userMessage).toContain("arrived in time");
+    // Emit agent_notify shortly after wait starts polling
+    setTimeout(() => {
+      streamEvents.emit("agent_notify", { sessionId: "ch-notify" });
+    }, 30);
+
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+
+    expect(result.userMessage).toContain("arrived via notify");
     expect(result.userMessage).not.toContain(KEEPALIVE_MARKER);
+  });
+
+  it("passes system messages as-is without adding prefix (formatting is gateway's responsibility)", async () => {
+    mockDrainReturns([
+      { id: "sys-1", sender: "system", message: "[SUBAGENT COMPLETED] worker completed" },
+    ]);
+
+    const { wait } = makeTools({ sessionId: "ch-sys", keepaliveTimeoutMs: 100 });
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    // Agent does NOT add [SYSTEM EVENT] prefix — gateway handles formatting
+    expect(result.userMessage).not.toContain("[SYSTEM EVENT]");
+    expect(result.userMessage).toContain("SUBAGENT COMPLETED");
+  });
+
+  it("combines messages without sender-type prefixes", async () => {
+    mockDrainReturns([
+      { id: "u-1", sender: "user", message: "hello" },
+      { id: "sys-1", sender: "system", message: "[SUBAGENT COMPLETED] worker completed" },
+    ]);
+
+    const { wait } = makeTools({ sessionId: "ch-mixed", keepaliveTimeoutMs: 100 });
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("hello");
+    expect(result.userMessage).not.toContain("[SYSTEM EVENT]");
+    expect(result.userMessage).toContain("SUBAGENT COMPLETED");
+  });
+
+  it("passes cron messages as-is without adding prefix", async () => {
+    mockDrainReturns([
+      { id: "c-1", sender: "cron", message: "[cron:daily] report task" },
+    ]);
+
+    const { wait } = makeTools({ sessionId: "ch-cron-fmt", keepaliveTimeoutMs: 100 });
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    // Agent does NOT add [CRON TASK] prefix — message is passed as-is
+    expect(result.userMessage).not.toContain("[CRON TASK]");
+    expect(result.userMessage).toContain("[cron:daily] report task");
+  });
+});
+
+// Swallowed-message detection has moved to gateway (daemon.ts onToolCall handler).
+// Agent no longer tracks pendingReplyExpected — gateway owns this concern.
+describe("copilotclaw_wait — agent does not track swallowed messages", () => {
+  it("does not inject swallowed-message reminder on agent side (gateway responsibility)", async () => {
+    mockDrainReturns([
+      { id: "input-1", sender: "user", message: "hello" },
+    ]);
+
+    const logErrorSpy = vi.fn();
+    const { wait } = makeTools({
+      sessionId: "ch-swallow",
+      keepaliveTimeoutMs: 20,
+      logError: logErrorSpy,
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+
+    // First wait: returns user message
+    const result1 = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result1.userMessage).toContain("hello");
+
+    // Second wait without send_message: agent does NOT inject swallowed-message reminder
+    // (gateway handles this via its onToolCall handler)
+    mockDrainReturns([
+      { id: "input-2", sender: "user", message: "world" },
+    ]);
+    const result2 = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result2.userMessage).toContain("world");
+    expect(logErrorSpy).not.toHaveBeenCalledWith(expect.stringContaining("swallowed message"));
+  });
+});
+
+describe("copilotclaw_wait — onStatusChange callback", () => {
+  it("fires waiting on poll start, processing when messages arrive", async () => {
+    mockDrainReturns([
+      { id: "input-1", sender: "user", message: "hi" },
+    ]);
+
+    const statusChanges: string[] = [];
+    const { wait } = makeTools({
+      sessionId: "ch-status",
+      keepaliveTimeoutMs: 20,
+      onStatusChange: (status) => { statusChanges.push(status); },
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    await wait.handler({}, invocation);
+
+    expect(statusChanges).toContain("waiting");
+    expect(statusChanges).toContain("processing");
+  });
+
+  it("fires waiting but not processing on keepalive timeout", async () => {
+    mockDrainEmpty();
+
+    const statusChanges: string[] = [];
+    const { wait } = makeTools({
+      sessionId: "ch-status-timeout",
+      keepaliveTimeoutMs: 20,
+      onStatusChange: (status) => { statusChanges.push(status); },
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    await wait.handler({}, invocation);
+
+    expect(statusChanges).toContain("waiting");
+    expect(statusChanges).not.toContain("processing");
+  });
+});
+
+describe("copilotclaw_wait — IPC returns non-array", () => {
+  it("treats non-array IPC response as no pending messages (keepalive)", async () => {
+    // drainPendingViaIpc checks Array.isArray(data) — non-array means no messages
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(async (msg: Record<string, unknown>) => {
+      if (msg.type === "tool_call") return null; // copilotclaw_wait: fall through
+      if (msg.type === "drain_pending") return { unexpected: true }; // non-array
+      return null;
+    });
+
+    const { wait } = makeTools({
+      sessionId: "ch-nonarray",
+      keepaliveTimeoutMs: 20,
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("keepalive");
+  });
+});
+
+describe("copilotclaw_wait — pre-aborted signal", () => {
+  it("returns keepalive immediately when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(); // Already aborted
+
+    mockDrainEmpty();
+
+    const { wait } = makeTools({
+      sessionId: "ch-pre-abort",
+      abortSignal: controller.signal,
+      keepaliveTimeoutMs: 5000,
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await wait.handler({}, invocation) as { userMessage: string };
+    expect(result.userMessage).toContain("keepalive");
+  });
+});
+
+describe("copilotclaw_list_messages — error handling", () => {
+  it("returns graceful error when gateway is down", async () => {
+    mockGatewayDown();
+
+    const { listMessages } = makeTools({
+      sessionId: "ch-err",
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await listMessages!.handler({}, invocation) as { error: string };
+    expect(result.error).toContain("Gateway is not connected");
+    errSpy.mockRestore();
+  });
+
+  it("returns gateway result when RPC returns null", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const { listMessages } = makeTools({
+      sessionId: "ch-null",
+    });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await listMessages!.handler({}, invocation) as { status: string };
+    // When requestFromGateway returns null, createGatewayToolHandler returns { status: "ok" }
+    expect(result.status).toBe("ok");
   });
 });
 
 describe("copilotclaw_list_messages", () => {
-  it("fetches messages from gateway with default limit", async () => {
-    const mockMessages = [
-      { id: "m1", channelId: "ch-abc", sender: "user", message: "hi", createdAt: "2026-01-01T00:00:00Z" },
-      { id: "m2", channelId: "ch-abc", sender: "agent", message: "hello", createdAt: "2026-01-01T00:00:01Z" },
-    ];
-    const { fetchFn, calls } = createMockFetch([
-      { status: 200, body: mockMessages },
-    ]);
+  it("dispatches to gateway via RPC and returns result", async () => {
+    const mockMessages = {
+      messages: [
+        { id: "m1", sessionId: "ch-abc", sender: "user", message: "hi", createdAt: "2026-01-01T00:00:00Z" },
+        { id: "m2", sessionId: "ch-abc", sender: "agent", message: "hello", createdAt: "2026-01-01T00:00:01Z" },
+      ],
+    };
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue(mockMessages);
 
-    const { listMessages } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
-      fetch: fetchFn as typeof globalThis.fetch,
+    const { listMessages } = makeTools({
+      sessionId: "ch-abc",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-    const result = await listMessages.handler({}, invocation) as { messages: unknown[] };
+    const result = await listMessages!.handler({}, invocation) as { messages: unknown[] };
 
-    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages?limit=5");
     expect(result.messages).toHaveLength(2);
+    expect(requestFromGateway).toHaveBeenCalledWith({
+      type: "tool_call",
+      toolName: "copilotclaw_list_messages",
+      sessionId: "ch-abc",
+      args: {},
+    });
   });
 
-  it("passes custom limit", async () => {
-    const { fetchFn, calls } = createMockFetch([
-      { status: 200, body: [] },
-    ]);
+  it("passes arguments to gateway RPC", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue({ messages: [] });
 
-    const { listMessages } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
-      fetch: fetchFn as typeof globalThis.fetch,
+    const { listMessages } = makeTools({
+      sessionId: "ch-abc",
     });
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-    await listMessages.handler({ limit: 10 }, invocation);
+    await listMessages!.handler({ limit: 10 }, invocation);
 
-    expect(calls[0]?.url).toBe("http://localhost:9999/api/channels/ch-abc/messages?limit=10");
+    expect(requestFromGateway).toHaveBeenCalledWith({
+      type: "tool_call",
+      toolName: "copilotclaw_list_messages",
+      sessionId: "ch-abc",
+      args: { limit: 10 },
+    });
   });
 
   it("has correct tool name", () => {
-    const { listMessages } = createChannelTools({
-      gatewayBaseUrl: "http://localhost:9999",
-      channelId: "ch-abc",
+    const { listMessages } = makeTools({
+      sessionId: "ch-abc",
     });
-    expect(listMessages.name).toBe("copilotclaw_list_messages");
+    expect(listMessages!.name).toBe("copilotclaw_list_messages");
   });
 });

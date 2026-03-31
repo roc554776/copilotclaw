@@ -161,6 +161,55 @@ describe("Store", () => {
     it("returns empty for non-existent channel", () => {
       expect(store.listMessages("nonexistent")).toEqual([]);
     });
+
+    it("uses default limit of 5 when not specified", () => {
+      for (let i = 0; i < 10; i++) {
+        store.addMessage(channelId, "user", `msg-${i}`);
+      }
+      const msgs = store.listMessages(channelId);
+      expect(msgs).toHaveLength(5);
+    });
+
+    it("falls back to 5 for invalid limit values", () => {
+      for (let i = 0; i < 10; i++) {
+        store.addMessage(channelId, "user", `msg-${i}`);
+      }
+      expect(store.listMessages(channelId, NaN)).toHaveLength(5);
+      expect(store.listMessages(channelId, 0)).toHaveLength(5);
+      expect(store.listMessages(channelId, -1)).toHaveLength(5);
+    });
+
+    it("returns messages before a given cursor message ID", () => {
+      store.addMessage(channelId, "user", "msg-1");
+      store.addMessage(channelId, "user", "msg-2");
+      const pivot = store.addMessage(channelId, "user", "msg-3")!;
+      store.addMessage(channelId, "user", "msg-4");
+      store.addMessage(channelId, "user", "msg-5");
+
+      const msgs = store.listMessages(channelId, 10, pivot.id);
+      expect(msgs).toHaveLength(2);
+      expect(msgs[0]?.message).toBe("msg-2");
+      expect(msgs[1]?.message).toBe("msg-1");
+    });
+
+    it("returns empty when before cursor has no older messages", () => {
+      const first = store.addMessage(channelId, "user", "msg-1")!;
+      store.addMessage(channelId, "user", "msg-2");
+
+      const msgs = store.listMessages(channelId, 10, first.id);
+      expect(msgs).toHaveLength(0);
+    });
+
+    it("respects limit with before cursor", () => {
+      for (let i = 0; i < 10; i++) {
+        store.addMessage(channelId, "user", `msg-${i}`);
+      }
+      const allMsgs = store.listMessages(channelId, 10);
+      // allMsgs[4] is the 5th newest — 5 messages are older
+      const pivotId = allMsgs[4]!.id;
+      const msgs = store.listMessages(channelId, 3, pivotId);
+      expect(msgs).toHaveLength(3);
+    });
   });
 
   describe("pendingCounts", () => {
@@ -172,6 +221,118 @@ describe("Store", () => {
       const counts = store.pendingCounts();
       expect(counts[channelId]).toBe(2);
       expect(counts[ch2]).toBe(1);
+    });
+  });
+
+  describe("channel archiving", () => {
+    it("archiveChannel sets archivedAt", () => {
+      const ok = store.archiveChannel(channelId);
+      expect(ok).toBe(true);
+      const ch = store.getChannel(channelId);
+      expect(ch?.archivedAt).toBeTruthy();
+    });
+
+    it("archiveChannel returns false for already archived channel", () => {
+      store.archiveChannel(channelId);
+      const ok = store.archiveChannel(channelId);
+      expect(ok).toBe(false);
+    });
+
+    it("archiveChannel returns false for nonexistent channel", () => {
+      const ok = store.archiveChannel("nonexistent");
+      expect(ok).toBe(false);
+    });
+
+    it("unarchiveChannel clears archivedAt", () => {
+      store.archiveChannel(channelId);
+      const ok = store.unarchiveChannel(channelId);
+      expect(ok).toBe(true);
+      const ch = store.getChannel(channelId);
+      expect(ch?.archivedAt).toBeNull();
+    });
+
+    it("unarchiveChannel returns false for non-archived channel", () => {
+      const ok = store.unarchiveChannel(channelId);
+      expect(ok).toBe(false);
+    });
+
+    it("listChannels excludes archived by default", () => {
+      const ch2 = store.createChannel().id;
+      store.archiveChannel(channelId);
+      const list = store.listChannels();
+      expect(list.map((c) => c.id)).toEqual([ch2]);
+    });
+
+    it("listChannels with includeArchived returns all", () => {
+      const ch2 = store.createChannel().id;
+      store.archiveChannel(channelId);
+      const list = store.listChannels({ includeArchived: true });
+      expect(list.map((c) => c.id)).toEqual([channelId, ch2]);
+    });
+
+    it("archived channels still accessible via getChannel", () => {
+      store.archiveChannel(channelId);
+      const ch = store.getChannel(channelId);
+      expect(ch).toBeDefined();
+      expect(ch?.id).toBe(channelId);
+    });
+
+    it("system messages added to pending queue", () => {
+      store.addMessage(channelId, "system", "[SUBAGENT COMPLETED] worker completed");
+      const pending = store.drainPending(channelId);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]!.sender).toBe("system");
+      expect(pending[0]!.message).toContain("SUBAGENT COMPLETED");
+    });
+
+    it("messages on archived channels are preserved", () => {
+      store.addMessage(channelId, "user", "hello");
+      store.archiveChannel(channelId);
+      const msgs = store.listMessages(channelId);
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0]!.message).toBe("hello");
+    });
+  });
+
+  describe("cron messages", () => {
+    it("adds cron messages to pending queue", () => {
+      store.addMessage(channelId, "cron", "[cron:test] do something");
+      const pending = store.drainPending(channelId);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]!.sender).toBe("cron");
+      expect(pending[0]!.message).toBe("[cron:test] do something");
+    });
+
+    it("hasPendingCronMessage detects pending cron message by prefix", () => {
+      store.addMessage(channelId, "cron", "[cron:daily] report");
+      expect(store.hasPendingCronMessage(channelId, "[cron:daily]")).toBe(true);
+      expect(store.hasPendingCronMessage(channelId, "[cron:other]")).toBe(false);
+    });
+
+    it("hasPendingCronMessage returns false after drain", () => {
+      store.addMessage(channelId, "cron", "[cron:daily] report");
+      store.drainPending(channelId);
+      expect(store.hasPendingCronMessage(channelId, "[cron:daily]")).toBe(false);
+    });
+
+    it("does not add agent messages to pending queue", () => {
+      store.addMessage(channelId, "agent", "reply");
+      expect(store.hasPending(channelId)).toBe(false);
+    });
+
+    it("hasPendingCronMessage is not confused by system messages coexisting with cron", () => {
+      store.addMessage(channelId, "system", "[SUBAGENT COMPLETED] worker completed");
+      // System message is pending, but cron dedup should NOT match it
+      expect(store.hasPendingCronMessage(channelId, "[cron:daily]")).toBe(false);
+
+      // Now add an actual cron message — dedup should detect it
+      store.addMessage(channelId, "cron", "[cron:daily] report");
+      expect(store.hasPendingCronMessage(channelId, "[cron:daily]")).toBe(true);
+
+      // Drain and verify both were pending
+      const drained = store.drainPending(channelId);
+      expect(drained).toHaveLength(2);
+      expect(drained.map((m) => m.sender).sort()).toEqual(["cron", "system"]);
     });
   });
 });

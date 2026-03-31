@@ -42,10 +42,24 @@
 - gateway が必要な最低バージョンより古い agent process が起動している場合に、gateway の起動オプションで強制的に古いものを停止させて新しいものを起動できるようにしたい
   - 例: `copilotclaw gateway start --force-agent-restart` のようなオプション
 
-## Agent Session の意図しない停止への対応
+## 物理セッションの意図しない停止への対応
 
-- agent session が idle になったとき（LLM が tool を呼ばずに停止した場合）、session.send() による停止阻止はしない
+- 物理セッションが idle になったとき（LLM が tool を呼ばずに停止した場合）、session.send() による停止阻止はしない
   - （実装済み: session-loop.ts は idle 時に resolve するだけ）
-- agent session は停止の status になる
-- もし channel に紐づく agent session だった場合には、channel に意図せず agent session が停止したことを通知する
-- この channel に新たに user がメッセージを送った場合には、channel に紐づくアクティブな agent session がないため、gateway は agent process に agent session の新規起動と channel への紐づけを要求する
+- 物理セッションは停止し、抽象セッションは suspended 状態に遷移する（チャンネルへの紐づけは維持される）
+- もし channel に紐づく抽象セッションだった場合には、channel に物理セッションが意図せず停止したことを通知する
+- この channel に新たに user がメッセージを送った場合には、既存の抽象セッションを revive し、新しい物理セッションを作成する
+  - `copilotSessionId` が保存されていれば `resumeSession` を試みる（前回の会話記憶を保持するため）
+  - `resumeSession` が失敗した場合は `copilotSessionId` をクリアして `createSession` で新しい物理セッションを作成する
+
+<!-- 2026-03-30 -->
+## トークン消費指数と消費量の閲覧
+
+- トークン消費指数とは以下の値です。
+  - SUM {models} (MAX(モデルのプレミアムリクエスト乗数, 0.1) * トークン消費量)
+- トークン消費指数もモデルごとのトークン消費量も、期間を指定すると決まる値なので、それぞれ厳密には期間を引数とする関数です。
+- トークンの消費量をデータとして残し、API で取得できるようにしてあるはずですが、それを閲覧する UI も必要です。
+  - 直近 5h のトークン消費指数
+  - 直近 5h のモデルごとのトークン消費量
+  - 期間ごとのトークン消費指数
+  - モデルごと、期間ごとのトークン消費量

@@ -3,11 +3,11 @@ import { openSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type AgentStatusResponse, getAgentModels, getAgentQuota, getAgentSessionMessages, getAgentStatus, stopAgent } from "./ipc-client.js";
+import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAgentModels, getAgentQuota, getAgentSessionMessages, getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.3.0";
+export const MIN_AGENT_VERSION = "0.54.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -21,18 +21,67 @@ export function semverSatisfies(version: string, minVersion: string): boolean {
 }
 
 export interface AgentManagerOptions {
-  gatewayPort: number;
   agentScript?: string;
 }
 
+export interface RunningSessionReport {
+  sessionId: string;
+  status: string;
+}
+
+export interface LifecycleRequest {
+  event: "idle" | "error";
+  sessionId: string;
+  elapsedMs: number;
+  error?: string | undefined;
+}
+
+export interface LifecycleResponse {
+  action: "stop" | "reinject" | "wait";
+  clearCopilotSessionId?: boolean;
+}
+
+export interface ToolCallRequest {
+  toolName: string;
+  sessionId: string;
+  args: Record<string, unknown>;
+}
+
+export interface HookRequest {
+  hookName: string;
+  sessionId: string;
+  copilotSessionId?: string | undefined;
+  input: Record<string, unknown>;
+}
+
+export interface StreamMessageHandler {
+  onToolCall?: (request: ToolCallRequest) => unknown | Promise<unknown>;
+  onLifecycle?: (request: LifecycleRequest) => LifecycleResponse;
+  onHook?: (request: HookRequest) => Record<string, unknown> | null;
+  onChannelMessage?: (sessionId: string, sender: string, message: string) => void;
+  onSessionEvent?: (sessionId: string, copilotSessionId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
+  onSystemPromptOriginal?: (model: string, prompt: string, capturedAt: string) => void;
+  onSystemPromptSession?: (sessionId: string, model: string, prompt: string) => void;
+  onPhysicalSessionStarted?: (sessionId: string, copilotSessionId: string, model: string) => void;
+  onPhysicalSessionEnded?: (sessionId: string, reason: "idle" | "error" | "aborted", copilotSessionId: string, elapsedMs: number, error?: string) => void;
+  onRunningSessionsReport?: (sessions: RunningSessionReport[]) => void;
+  onDrainPending?: (sessionId: string) => unknown[];
+  onPeekPending?: (sessionId: string) => unknown | null;
+  onFlushPending?: (sessionId: string) => number;
+  onListMessages?: (sessionId: string, limit: number) => unknown[];
+}
+
 export class AgentManager {
-  private readonly gatewayPort: number;
   private readonly agentScript: string;
   private spawning = false;
   private spawningTimer: ReturnType<typeof setTimeout> | undefined;
+  private stream: IpcStream | null = null;
+  private streamMessageHandler: StreamMessageHandler | null = null;
+  private configToSend: Record<string, unknown> | null = null;
+  private streamConnectedCallbacks: Array<() => void> = [];
+  private streamDisconnectedCallbacks: Array<() => void> = [];
 
-  constructor(options: AgentManagerOptions) {
-    this.gatewayPort = options.gatewayPort;
+  constructor(options?: AgentManagerOptions) {
     const require = createRequire(import.meta.url);
     let defaultAgentScript: string;
     try {
@@ -43,7 +92,222 @@ export class AgentManager {
       const thisDir = dirname(fileURLToPath(import.meta.url));
       defaultAgentScript = join(thisDir, "..", "..", "agent", "dist", "index.js");
     }
-    this.agentScript = options.agentScript ?? defaultAgentScript;
+    this.agentScript = options?.agentScript ?? defaultAgentScript;
+  }
+
+  /** Set the handler for stream messages from the agent. */
+  setStreamMessageHandler(handler: StreamMessageHandler): void {
+    this.streamMessageHandler = handler;
+  }
+
+  /** Set the config to send to the agent when the stream connects. */
+  setConfigToSend(config: Record<string, unknown>): void {
+    this.configToSend = config;
+    // If stream is already connected, send immediately
+    if (this.stream !== null && this.stream.isConnected() && this.configToSend !== null) {
+      this.stream.send({ type: "config", config: this.configToSend });
+    }
+  }
+
+  /** Establish a persistent IPC stream connection to the agent. */
+  connectStream(): void {
+    if (this.stream !== null) return;
+    const socketPath = getAgentSocketPath();
+    this.stream = createStreamConnection(socketPath);
+
+    this.stream.on("connected", () => {
+      console.error("[gateway] IPC stream connected to agent");
+      // Push config immediately on connect
+      if (this.configToSend !== null) {
+        this.stream!.send({ type: "config", config: this.configToSend });
+      }
+      // Fire registered connected callbacks
+      for (const cb of this.streamConnectedCallbacks) {
+        try { cb(); } catch { /* ignore callback errors */ }
+      }
+    });
+
+    this.stream.on("disconnected", () => {
+      console.error("[gateway] IPC stream disconnected from agent");
+      // Fire registered disconnected callbacks
+      for (const cb of this.streamDisconnectedCallbacks) {
+        try { cb(); } catch { /* ignore callback errors */ }
+      }
+    });
+
+    this.stream.on("message", (msg: Record<string, unknown>) => {
+      this.handleAgentMessage(msg);
+    });
+  }
+
+  /** Force-reconnect the stream (e.g. after spawning a new agent). */
+  private reconnectStream(): void {
+    if (this.stream !== null) {
+      this.stream.close();
+      this.stream = null;
+    }
+    this.connectStream();
+  }
+
+  /** Handle an incoming message from the agent on the stream. */
+  private handleAgentMessage(msg: Record<string, unknown>): void {
+    const type = msg["type"] as string | undefined;
+    const handler = this.streamMessageHandler;
+    if (type === undefined || handler === null) return;
+
+    switch (type) {
+      case "tool_call": {
+        const id = msg["id"] as string;
+        const toolCallRequest: ToolCallRequest = {
+          toolName: msg["toolName"] as string,
+          sessionId: msg["sessionId"] as string,
+          args: (msg["args"] as Record<string, unknown>) ?? {},
+        };
+        // Await the result to support async tool handlers. Sending the response
+        // synchronously when the handler returns a Promise would serialize the
+        // Promise object itself, not its resolved value, causing the agent to
+        // receive garbage data without any error.
+        Promise.resolve(handler.onToolCall?.(toolCallRequest) ?? null)
+          .then((toolResult) => {
+            this.stream?.send({ type: "response", id, data: toolResult });
+          })
+          .catch(() => {
+            this.stream?.send({ type: "response", id, data: { error: "Tool handler failed" } });
+          });
+        break;
+      }
+      case "lifecycle": {
+        const id = msg["id"] as string;
+        const lifecycleRequest: LifecycleRequest = {
+          event: msg["event"] as "idle" | "error",
+          sessionId: msg["sessionId"] as string,
+          elapsedMs: (msg["elapsedMs"] as number) ?? 0,
+          error: typeof msg["error"] === "string" ? msg["error"] : undefined,
+        };
+        const response = handler.onLifecycle?.(lifecycleRequest) ?? { action: "stop" };
+        this.stream?.send({ type: "response", id, data: response });
+        break;
+      }
+      case "hook": {
+        const id = msg["id"] as string;
+        const hookRequest: HookRequest = {
+          hookName: msg["hookName"] as string,
+          sessionId: msg["sessionId"] as string,
+          copilotSessionId: msg["copilotSessionId"] as string | undefined,
+          input: (msg["input"] as Record<string, unknown>) ?? {},
+        };
+        const result = handler.onHook?.(hookRequest) ?? null;
+        this.stream?.send({ type: "response", id, data: result });
+        break;
+      }
+      case "channel_message": {
+        const sessionId = msg["sessionId"] as string;
+        const sender = msg["sender"] as string;
+        const message = msg["message"] as string;
+        handler.onChannelMessage?.(sessionId, sender, message);
+        break;
+      }
+      case "session_event": {
+        const sessionId = msg["sessionId"] as string;
+        const copilotSessionId = typeof msg["copilotSessionId"] === "string" ? msg["copilotSessionId"] as string : undefined;
+        const eventType = (msg["eventType"] as string) ?? "unknown";
+        const timestamp = (msg["timestamp"] as string) ?? new Date().toISOString();
+        const data = (typeof msg["data"] === "object" && msg["data"] !== null ? msg["data"] : {}) as Record<string, unknown>;
+        const parentId = typeof msg["parentId"] === "string" ? msg["parentId"] as string : undefined;
+        handler.onSessionEvent?.(sessionId, copilotSessionId, eventType, timestamp, data, parentId);
+        break;
+      }
+      case "system_prompt_original": {
+        const model = msg["model"] as string;
+        const prompt = msg["prompt"] as string;
+        const capturedAt = (msg["capturedAt"] as string) ?? new Date().toISOString();
+        handler.onSystemPromptOriginal?.(model, prompt, capturedAt);
+        break;
+      }
+      case "system_prompt_session": { // IPC type retained for compatibility; internally this is the "effective system prompt"
+        const sessionId = msg["sessionId"] as string;
+        const model = msg["model"] as string;
+        const prompt = msg["prompt"] as string;
+        handler.onSystemPromptSession?.(sessionId, model, prompt);
+        break;
+      }
+      case "drain_pending": {
+        const sessionId = msg["sessionId"] as string;
+        const id = msg["id"] as string;
+        const data = handler.onDrainPending?.(sessionId) ?? [];
+        this.stream?.send({ type: "response", id, data });
+        break;
+      }
+      case "peek_pending": {
+        const sessionId = msg["sessionId"] as string;
+        const id = msg["id"] as string;
+        const data = handler.onPeekPending?.(sessionId) ?? null;
+        this.stream?.send({ type: "response", id, data });
+        break;
+      }
+      case "flush_pending": {
+        const sessionId = msg["sessionId"] as string;
+        const id = msg["id"] as string;
+        const flushed = handler.onFlushPending?.(sessionId) ?? 0;
+        this.stream?.send({ type: "response", id, data: { flushed } });
+        break;
+      }
+      case "list_messages": {
+        const sessionId = msg["sessionId"] as string;
+        const id = msg["id"] as string;
+        const limit = typeof msg["limit"] === "number" ? msg["limit"] as number : 5;
+        const data = handler.onListMessages?.(sessionId, limit) ?? [];
+        this.stream?.send({ type: "response", id, data });
+        break;
+      }
+      case "running_sessions": {
+        const sessions = (msg["sessions"] as RunningSessionReport[]) ?? [];
+        handler.onRunningSessionsReport?.(sessions);
+        break;
+      }
+      case "physical_session_started": {
+        const sessionId = msg["sessionId"] as string;
+        const copilotSessionId = msg["copilotSessionId"] as string;
+        const model = msg["model"] as string;
+        handler.onPhysicalSessionStarted?.(sessionId, copilotSessionId, model);
+        break;
+      }
+      case "physical_session_ended": {
+        const sessionId = msg["sessionId"] as string;
+        const reason = msg["reason"] as "idle" | "error" | "aborted";
+        const copilotSessionId = msg["copilotSessionId"] as string;
+        const elapsedMs = msg["elapsedMs"] as number;
+        const error = typeof msg["error"] === "string" ? msg["error"] as string : undefined;
+        handler.onPhysicalSessionEnded?.(sessionId, reason, copilotSessionId, elapsedMs, error);
+        break;
+      }
+      default:
+        // Unknown message type — ignore
+        break;
+    }
+  }
+
+  /** Send a generic agent_notify to the agent via the stream.
+   *  Used for all notification types: pending messages, subagent completion, etc.
+   *  Agent side listens for this single event type and drains pending queue. */
+  notifyAgent(sessionId: string): void {
+    if (this.stream === null || !this.stream.isConnected()) return;
+    this.stream.send({ type: "agent_notify", sessionId });
+  }
+
+  /** Send a start_physical_session command to the agent via the stream. */
+  startPhysicalSession(sessionId: string, copilotSessionId?: string, model?: string): void {
+    if (this.stream === null || !this.stream.isConnected()) return;
+    const msg: Record<string, unknown> = { type: "start_physical_session", sessionId };
+    if (copilotSessionId !== undefined) msg["copilotSessionId"] = copilotSessionId;
+    if (model !== undefined) msg["model"] = model;
+    this.stream.send(msg);
+  }
+
+  /** Send a stop_physical_session command to the agent via the stream. */
+  stopPhysicalSession(sessionId: string): void {
+    if (this.stream === null || !this.stream.isConnected()) return;
+    this.stream.send({ type: "stop_physical_session", sessionId });
   }
 
   /** Ensure agent process is running and compatible.
@@ -64,6 +328,7 @@ export class AgentManager {
             console.error(`[gateway] agent version ${status.version ?? "unknown"} is below minimum ${MIN_AGENT_VERSION}, force-restarting`);
             await stopAgent(socketPath);
             this.spawnAgent();
+            this.reconnectStream();
             return oldBootId;
           }
           throw new Error(
@@ -75,6 +340,7 @@ export class AgentManager {
         return undefined;
       }
       this.spawnAgent();
+      this.reconnectStream();
       return undefined;
     } finally {
       if (this.spawningTimer !== undefined) clearTimeout(this.spawningTimer);
@@ -121,7 +387,7 @@ export class AgentManager {
       stdio: ["ignore", "ignore", stderrFd],
       env: {
         ...process.env,
-        COPILOTCLAW_GATEWAY_URL: `http://localhost:${this.gatewayPort}`,
+        // COPILOTCLAW_GATEWAY_URL is no longer set — agent uses IPC stream for all communication
       },
     });
     child.unref();
@@ -164,5 +430,23 @@ export class AgentManager {
   async stopAgent(): Promise<void> {
     const socketPath = getAgentSocketPath();
     await stopAgent(socketPath);
+  }
+
+  /** Register a callback to be called when the stream connects. */
+  onStreamConnected(callback: () => void): void {
+    this.streamConnectedCallbacks.push(callback);
+  }
+
+  /** Register a callback to be called when the stream disconnects. */
+  onStreamDisconnected(callback: () => void): void {
+    this.streamDisconnectedCallbacks.push(callback);
+  }
+
+  /** Close the stream connection (for shutdown). */
+  closeStream(): void {
+    if (this.stream !== null) {
+      this.stream.close();
+      this.stream = null;
+    }
   }
 }

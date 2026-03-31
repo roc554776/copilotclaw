@@ -1,8 +1,10 @@
 tmp/
 node_modules/
 dist/
+frontend-dist/
 .reports/
 test-results/
 *.tgz
 .serena/
 !/.serena/
+.claude/worktrees/

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { AgentManager } from "./agent-manager.js";
 import type { ChannelProvider } from "./channel-provider.js";
 import { renderDashboard, type DashboardAgentStatus } from "./dashboard.js";
+import { hasFrontendDist } from "./frontend-dist.js";
 import type { Store } from "./store.js";
 import type { SseBroadcaster } from "./sse-broadcaster.js";
 
@@ -40,7 +41,10 @@ export class BuiltinChatChannel implements ChannelProvider {
     const { method, url } = req;
     const pathname = url?.split("?")[0] ?? "/";
 
-    // Dashboard route
+    // Dashboard route — skip if React SPA frontend is available (served by server.ts)
+    if (pathname === "/" && method === "GET" && hasFrontendDist()) {
+      return false;
+    }
     if (pathname === "/" && method === "GET") {
       const channels = this.store.listChannels();
       const selectedChannelId = params.get("channel") ?? channels[0]?.id;
@@ -95,7 +99,7 @@ export class BuiltinChatChannel implements ChannelProvider {
     return false;
   }
 
-  onMessage(channelId: string, sender: "user" | "agent", message: string): void {
+  onMessage(channelId: string, sender: "user" | "agent" | "cron" | "system", message: string): void {
     this.sseBroadcaster.broadcast({
       type: "new_message",
       channelId,

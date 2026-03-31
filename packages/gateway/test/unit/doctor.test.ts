@@ -65,7 +65,7 @@ describe("doctor", () => {
       expect(result.result).toBe("pass");
       // Verify the file was migrated
       const onDisk = JSON.parse(readFileSync(getConfigFilePath(), "utf-8")) as Record<string, unknown>;
-      expect(onDisk["configVersion"]).toBe(2);
+      expect(onDisk["configVersion"]).toBe(4);
     });
 
     it("auto-migrates config with outdated configVersion and returns pass", () => {
@@ -74,7 +74,7 @@ describe("doctor", () => {
       const result = checkConfig();
       expect(result.result).toBe("pass");
       const onDisk = JSON.parse(readFileSync(getConfigFilePath(), "utf-8")) as Record<string, unknown>;
-      expect(onDisk["configVersion"]).toBe(2);
+      expect(onDisk["configVersion"]).toBe(4);
     });
 
     it("returns warn for malformed JSON config", () => {

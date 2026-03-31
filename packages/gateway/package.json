@@ -1,15 +1,16 @@
 {
   "name": "@copilotclaw/gateway",
-  "version": "0.27.0",
+  "version": "0.54.0",
   "description": "Central gateway server for copilotclaw",
   "type": "module",
   "main": "dist/index.js",
   "files": [
     "dist/",
+    "frontend-dist/",
     "package.json"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cd frontend && ../node_modules/.bin/vite build",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "stop": "node dist/stop.js",
@@ -20,15 +21,41 @@
     "test": "vitest run",
     "test:unit": "vitest run test/unit",
     "test:e2e": "vitest run test/e2e",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "build:frontend": "cd frontend && ../node_modules/.bin/vite build",
+    "dev:frontend": "cd frontend && ../node_modules/.bin/vite",
+    "test:frontend": "cd frontend && ../node_modules/.bin/vitest run"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.5.2",
+    "jsdom": "^26.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.6.2",
     "typescript": "^6.0.2",
+    "vite": "^6.3.5",
     "vitest": "^4.1.1"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/api-logs": "^0.57.0",
+    "@opentelemetry/exporter-logs-otlp-http": "^0.57.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.57.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-logs": "^0.57.0",
+    "@opentelemetry/sdk-metrics": "^1.30.0",
+    "@opentelemetry/semantic-conventions": "^1.28.0",
+    "better-sqlite3": "^12.8.0"
   }
 }

@@ -114,4 +114,25 @@ describe("config", () => {
     const config = loadConfig("nonexistent-profile-" + Date.now());
     expect(config.zeroPremium).toBeUndefined();
   });
+
+  it("loadConfig loads otel config from file", async () => {
+    const { ensureConfigFile, getConfigFilePath, loadConfig } = await import("../../src/config.js");
+    const { writeFileSync } = await import("node:fs");
+    const profile = `otel-test-${Date.now()}`;
+    ensureConfigFile(profile);
+    const filePath = getConfigFilePath(profile);
+    writeFileSync(filePath, JSON.stringify({
+      configVersion: 3,
+      otel: { endpoints: ["http://localhost:4318"] },
+    }), "utf-8");
+
+    const config = loadConfig(profile);
+    expect(config.otel).toEqual({ endpoints: ["http://localhost:4318"] });
+  });
+
+  it("loadConfig returns undefined otel when not configured", async () => {
+    const { loadConfig } = await import("../../src/config.js");
+    const config = loadConfig("nonexistent-profile-" + Date.now());
+    expect(config.otel).toBeUndefined();
+  });
 });

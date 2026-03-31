@@ -27,6 +27,24 @@ export interface AuthContainerConfig {
   github?: AuthConfig;
 }
 
+export interface OtelConfig {
+  /** OTLP endpoint URLs for exporting logs and metrics. Empty array disables export. */
+  endpoints?: string[];
+}
+
+export interface DebugConfig {
+  /** Log level: "info" (default) or "debug" (enables verbose hook/internal logging). */
+  logLevel?: "info" | "debug";
+}
+
+export interface CronJobConfig {
+  id: string;
+  channelId: string;
+  intervalMs: number;
+  message: string;
+  enabled?: boolean;
+}
+
 export interface CopilotclawConfig {
   /** Schema version for config migration. Absent in legacy configs (treated as 0). */
   configVersion?: number;
@@ -36,10 +54,13 @@ export interface CopilotclawConfig {
   zeroPremium?: boolean;
   debugMockCopilotUnsafeTools?: boolean;
   auth?: AuthContainerConfig;
+  otel?: OtelConfig;
+  debug?: DebugConfig;
+  cron?: CronJobConfig[];
 }
 
 /** Current schema version. Increment when a breaking config change is introduced. */
-export const LATEST_CONFIG_VERSION = 2;
+export const LATEST_CONFIG_VERSION = 4;
 
 /** Migration function type: transforms a raw config object from version N to N+1. */
 type MigrationFn = (config: Record<string, unknown>) => Record<string, unknown>;
@@ -64,6 +85,10 @@ const MIGRATIONS: Record<number, MigrationFn> = {
     }
     return { ...config, configVersion: 2 };
   },
+  // v2 → v3: Add configVersion bump. No schema changes (otel is optional).
+  2: (config) => ({ ...config, configVersion: 3 }),
+  // v3 → v4: Add debug namespace. No schema changes (debug is optional).
+  3: (config) => ({ ...config, configVersion: 4 }),
 };
 
 /**
@@ -169,6 +194,15 @@ export function loadConfig(profile?: string): CopilotclawConfig {
   // Auth config is file-only (no env var override — secrets are resolved by the agent)
   if (fileConfig.auth !== undefined) result.auth = fileConfig.auth;
   // Note: auth is now { github?: AuthConfig } after v1→v2 migration
+
+  // OTel config is file-only (no env var override)
+  if (fileConfig.otel !== undefined) result.otel = fileConfig.otel;
+
+  // Debug config is file-only (no env var override)
+  if (fileConfig.debug !== undefined) result.debug = fileConfig.debug;
+
+  // Cron config is file-only
+  if (fileConfig.cron !== undefined) result.cron = fileConfig.cron;
 
   // Preserve configVersion from migrated file config
   if (fileConfig.configVersion !== undefined) result.configVersion = fileConfig.configVersion;

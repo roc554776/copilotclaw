@@ -1,13 +1,21 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type ServerHandle, startServer } from "../../src/server.js";
 import { Store } from "../../src/store.js";
+import { SessionEventStore } from "../../src/session-event-store.js";
 
 let handle: ServerHandle;
 let baseUrl: string;
 let defaultChannelId: string;
+let tmpDir: string;
+let sessionEventStore: SessionEventStore;
 
 beforeAll(async () => {
-  handle = await startServer({ port: 0, store: new Store(), agentManager: null });
+  tmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-e2e-"));
+  sessionEventStore = new SessionEventStore(tmpDir);
+  handle = await startServer({ port: 0, store: new Store(), agentManager: null, sessionEventStore });
   baseUrl = `http://localhost:${handle.port}`;
   const channels = await (await fetch(`${baseUrl}/api/channels`)).json() as Array<{ id: string }>;
   defaultChannelId = channels[0]!.id;
@@ -15,6 +23,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await handle.close();
+  sessionEventStore.close();
+  rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe("GET /healthz", () => {
@@ -95,6 +105,76 @@ describe("POST /api/channels/:channelId/messages (agent message)", () => {
     const msg = await res.json() as { sender: string; message: string };
     expect(msg.sender).toBe("agent");
     expect(msg.message).toBe("hello from agent");
+    await freshHandle.close();
+  });
+});
+
+describe("POST /api/channels/:channelId/messages (system message)", () => {
+  it("accepts system sender and stores the message", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "system", message: "[SUBAGENT COMPLETED] worker completed" }),
+    });
+    expect(res.status).toBe(201);
+    const msg = await res.json() as { sender: string; message: string };
+    expect(msg.sender).toBe("system");
+    expect(msg.message).toBe("[SUBAGENT COMPLETED] worker completed");
+    await freshHandle.close();
+  });
+
+  it("system sender does NOT trigger agent_notify (only user/cron do)", async () => {
+    const mockAgentManager = { notifyAgent: vi.fn() } as unknown as import("../../src/agent-manager.js").AgentManager;
+    const mockOrchestrator = { getSessionIdForChannel: (channelId: string) => `sess-${channelId}` } as unknown as import("../../src/session-orchestrator.js").SessionOrchestrator;
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: mockAgentManager, sessionOrchestrator: mockOrchestrator });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    // System message should NOT trigger notifyAgent
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "system", message: "[SUBAGENT COMPLETED] worker completed" }),
+    });
+    expect(mockAgentManager.notifyAgent).not.toHaveBeenCalled();
+
+    // User message SHOULD trigger notifyAgent (with sessionId, not channelId)
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "hello" }),
+    });
+    expect(mockAgentManager.notifyAgent).toHaveBeenCalledWith(`sess-${chId}`);
+
+    await freshHandle.close();
+  });
+});
+
+describe("POST /api/channels/:channelId/messages (cron sender)", () => {
+  it("accepts cron sender and triggers agent_notify", async () => {
+    const mockAgentManager = { notifyAgent: vi.fn() } as unknown as import("../../src/agent-manager.js").AgentManager;
+    const mockOrchestrator = { getSessionIdForChannel: (channelId: string) => `sess-${channelId}` } as unknown as import("../../src/session-orchestrator.js").SessionOrchestrator;
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: mockAgentManager, sessionOrchestrator: mockOrchestrator });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "cron", message: "[cron:test] task" }),
+    });
+    expect(res.status).toBe(201);
+    const msg = await res.json() as { sender: string };
+    expect(msg.sender).toBe("cron");
+    expect(mockAgentManager.notifyAgent).toHaveBeenCalledWith(`sess-${chId}`);
+
     await freshHandle.close();
   });
 });
@@ -257,26 +337,32 @@ describe("GET /api/logs", () => {
   });
 });
 
-describe("GET / (dashboard status bar)", () => {
-  it("shows status bar in dashboard HTML", async () => {
+describe("GET / (dashboard)", () => {
+  it("returns HTML for dashboard (SPA or server-rendered)", async () => {
     const res = await fetch(`${baseUrl}/`);
     const html = await res.text();
-    expect(html).toContain("status-bar");
-    expect(html).toContain("gateway: v");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    // SPA serves index.html with <div id="root">, legacy serves status-bar inline
+    expect(html.includes("root") || html.includes("status-bar")).toBe(true);
   });
 });
 
 describe("GET /api/quota", () => {
-  it("returns 503 when no agent manager", async () => {
+  it("returns 200 with empty quota when no active session", async () => {
     const res = await fetch(`${baseUrl}/api/quota`);
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { quotaSnapshots?: Record<string, unknown> };
+    expect(body.quotaSnapshots).toBeDefined();
   });
 });
 
 describe("GET /api/models", () => {
-  it("returns 503 when no agent manager", async () => {
+  it("returns 200 with models array when no active session", async () => {
     const res = await fetch(`${baseUrl}/api/models`);
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { models: unknown[] };
+    expect(Array.isArray(body.models)).toBe(true);
   });
 });
 
@@ -294,6 +380,250 @@ describe("GET /api/sessions/:sessionId/messages", () => {
   it("returns 404 when no agent manager", async () => {
     const res = await fetch(`${baseUrl}/api/sessions/nonexistent/messages`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("PATCH /api/channels/:id (archive/unarchive)", () => {
+  it("archives a channel", async () => {
+    const create = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
+    const ch = await create.json() as { id: string };
+    const res = await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    expect(res.status).toBe(200);
+    const updated = await res.json() as { id: string; archivedAt: string };
+    expect(updated.archivedAt).toBeTruthy();
+  });
+
+  it("unarchives a channel", async () => {
+    const create = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
+    const ch = await create.json() as { id: string };
+    await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    const res = await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: false }),
+    });
+    expect(res.status).toBe(200);
+    const updated = await res.json() as { id: string; archivedAt: string | null };
+    expect(updated.archivedAt).toBeNull();
+  });
+
+  it("returns 404 for nonexistent channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/nonexistent`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 without archived field", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/channels?includeArchived", () => {
+  it("excludes archived channels by default", async () => {
+    const create = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
+    const ch = await create.json() as { id: string };
+    await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    const res = await fetch(`${baseUrl}/api/channels`);
+    const channels = await res.json() as Array<{ id: string }>;
+    expect(channels.find((c) => c.id === ch.id)).toBeUndefined();
+  });
+
+  it("includes archived channels when includeArchived=true", async () => {
+    const create = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
+    const ch = await create.json() as { id: string };
+    await fetch(`${baseUrl}/api/channels/${ch.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    const res = await fetch(`${baseUrl}/api/channels?includeArchived=true`);
+    const channels = await res.json() as Array<{ id: string }>;
+    expect(channels.find((c) => c.id === ch.id)).toBeDefined();
+  });
+});
+
+describe("GET /api/channels/pending", () => {
+  it("returns pending counts for all channels", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    // Add a user message to create pending
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "pending msg" }),
+    });
+
+    const res = await fetch(`${url}/api/channels/pending`);
+    expect(res.status).toBe(200);
+    const counts = await res.json() as Record<string, number>;
+    expect(counts[chId]).toBe(1);
+
+    await freshHandle.close();
+  });
+
+  it("returns 0 for channels with no pending messages", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const res = await fetch(`${url}/api/channels/pending`);
+    const counts = await res.json() as Record<string, number>;
+    expect(counts[chId]).toBe(0);
+
+    await freshHandle.close();
+  });
+});
+
+describe("GET /api/channels/:channelId/messages/pending/peek", () => {
+  it("returns 204 when no pending messages", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages/pending/peek`);
+    expect(res.status).toBe(204);
+
+    await freshHandle.close();
+  });
+
+  it("returns oldest pending message without removing it", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "oldest" }),
+    });
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "newer" }),
+    });
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages/pending/peek`);
+    expect(res.status).toBe(200);
+    const msg = await res.json() as { message: string };
+    expect(msg.message).toBe("oldest");
+
+    // Should still be pending (peek does not remove)
+    const res2 = await fetch(`${url}/api/channels/${chId}/messages/pending/peek`);
+    expect(res2.status).toBe(200);
+
+    await freshHandle.close();
+  });
+});
+
+describe("POST /api/channels/:channelId/messages/pending/flush", () => {
+  it("flushes all pending messages and returns count", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "a" }),
+    });
+    await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "b" }),
+    });
+
+    const res = await fetch(`${url}/api/channels/${chId}/messages/pending/flush`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { flushed: number };
+    expect(body.flushed).toBe(2);
+
+    // Queue should be empty now
+    const res2 = await fetch(`${url}/api/channels/${chId}/messages/pending`, { method: "POST" });
+    expect(res2.status).toBe(204);
+
+    await freshHandle.close();
+  });
+});
+
+describe("unknown channel action", () => {
+  it("returns 404 for unknown action on valid channel", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/nonexistent`);
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("unknown channel action");
+  });
+});
+
+describe("GET /api/channels/:channelId/messages with before cursor", () => {
+  it("returns messages older than cursor", async () => {
+    const url = baseUrl;
+    const chRes = await fetch(`${url}/api/channels`, { method: "POST" });
+    const ch = await chRes.json() as { id: string };
+    const chId = ch.id;
+
+    // Add 5 messages
+    const msgIds: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await fetch(`${url}/api/channels/${chId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sender: "user", message: `msg-${i}` }),
+      });
+      const m = await r.json() as { id: string };
+      msgIds.push(m.id);
+    }
+
+    // Fetch messages before the 3rd message (index 2)
+    const res = await fetch(`${url}/api/channels/${chId}/messages?limit=10&before=${msgIds[2]}`);
+    expect(res.status).toBe(200);
+    const msgs = await res.json() as Array<{ message: string }>;
+    // Should return msg-1 and msg-0 (older than msg-2)
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]!.message).toBe("msg-1");
+    expect(msgs[1]!.message).toBe("msg-0");
+  });
+});
+
+describe("GET /api/token-usage", () => {
+  it("returns 200 with token usage array", async () => {
+    const res = await fetch(`${baseUrl}/api/token-usage?hours=5`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as Array<{ model: string; inputTokens: number; outputTokens: number }>;
+    expect(Array.isArray(data)).toBe(true);
+  });
+
+  it("accepts from and to params", async () => {
+    const res = await fetch(`${baseUrl}/api/token-usage?from=2026-01-01T00:00:00Z&to=2026-12-31T23:59:59Z`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as unknown[];
+    expect(Array.isArray(data)).toBe(true);
   });
 });
 

@@ -55,6 +55,9 @@ Open the gateway URL shown at startup in your browser.
 - Type a message and press Send (or Enter)
 - Use the "+" button to create additional channels for parallel conversations
 - Click the status bar for detailed status (gateway, agent, Copilot sessions, premium requests, models)
+- Open `/status` for a standalone system status page
+- Click "View events" on a physical session to see real-time SDK session events (flat or nested view)
+- Original and session system prompts are captured and viewable from the status page
 - A typing indicator shows when the agent is processing
 - Sessions survive disconnections and agent restarts — conversations resume automatically
 
@@ -171,8 +174,10 @@ All persistent data is stored under `~/.copilotclaw/` (or `~/.copilotclaw-{{prof
 | Path | Purpose |
 |:---|:---|
 | `config.json` | Configuration |
-| `data/store.json` | Channels and message history |
+| `data/store.db` | Channels and message history (SQLite) |
+| `data/session-events.db` | Session events (SQLite) |
 | `data/agent-bindings.json` | Agent session bindings and token history (survives agent restarts) |
+| `data/prompts/` | System prompt snapshots (original per model, per session) |
 | `data/gateway.log` | Gateway structured log (JSON Lines) |
 | `data/agent.log` | Agent structured log (JSON Lines) |
 | `workspace/SOUL.md` | Agent persona and tone (user-customizable) |

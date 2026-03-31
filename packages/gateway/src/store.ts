@@ -1,11 +1,13 @@
 /// <reference types="node" />
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import Database from "better-sqlite3";
 
 export interface Message {
   id: string;
   channelId: string;
-  sender: "user" | "agent";
+  sender: "user" | "agent" | "cron" | "system";
   message: string;
   createdAt: string;
 }
@@ -13,79 +15,165 @@ export interface Message {
 export interface Channel {
   id: string;
   createdAt: string;
-}
-
-interface StoreSnapshot {
-  channels: Channel[];
-  messages: Record<string, Message[]>;
-  pendingQueues: Record<string, string[]>;
+  archivedAt?: string | null;
 }
 
 export interface StoreOptions {
+  /** Path to the SQLite database file. When omitted, uses in-memory database. */
   persistPath?: string;
+  /** Path to legacy JSON store file for one-time migration. */
+  legacyJsonPath?: string;
 }
 
 export class Store {
-  private readonly channels = new Map<string, Channel>();
-  private readonly messages = new Map<string, Message[]>();
-  private readonly pendingQueues = new Map<string, string[]>();
-  private readonly messageIndex = new Map<string, Message>();
-  private readonly persistPath: string | undefined;
+  private readonly db: Database.Database;
 
   constructor(options?: StoreOptions) {
-    this.persistPath = options?.persistPath;
-    if (this.persistPath !== undefined) {
-      this.loadFromDisk();
+    const dbPath = options?.persistPath ?? ":memory:";
+    if (dbPath !== ":memory:") {
+      mkdirSync(dirname(dbPath), { recursive: true });
+    }
+    this.db = new Database(dbPath);
+    this.db.pragma("journal_mode = WAL");
+    this.db.pragma("foreign_keys = ON");
+    this.initSchema();
+
+    // One-time migration from legacy JSON store
+    if (options?.legacyJsonPath !== undefined) {
+      this.migrateFromJson(options.legacyJsonPath);
     }
   }
 
-  private loadFromDisk(): void {
-    if (this.persistPath === undefined) return;
+  private static readonly LATEST_STORE_VERSION = 2;
+
+  private static readonly STORE_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
+    // v0 → v1: Add archivedAt column to channels
+    0: (db) => {
+      const columns = db.pragma("table_info(channels)") as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === "archivedAt")) {
+        db.exec("ALTER TABLE channels ADD COLUMN archivedAt TEXT");
+      }
+    },
+    // v1 → v2: Replace CHECK constraint with message_senders FK table, add 'cron' sender
+    1: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS message_senders (sender TEXT PRIMARY KEY);
+        INSERT OR IGNORE INTO message_senders (sender) VALUES ('user'), ('agent'), ('cron'), ('system');
+      `);
+      const checkInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").get() as { sql: string } | undefined;
+      if (checkInfo?.sql && checkInfo.sql.includes("CHECK")) {
+        db.exec(`
+          PRAGMA foreign_keys = OFF;
+          CREATE TABLE messages_migrated (
+            id TEXT PRIMARY KEY,
+            channelId TEXT NOT NULL,
+            sender TEXT NOT NULL REFERENCES message_senders(sender),
+            message TEXT NOT NULL,
+            createdAt TEXT NOT NULL,
+            FOREIGN KEY (channelId) REFERENCES channels(id)
+          );
+          INSERT INTO messages_migrated SELECT * FROM messages;
+          DROP TABLE messages;
+          ALTER TABLE messages_migrated RENAME TO messages;
+          CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channelId, createdAt);
+          PRAGMA foreign_keys = ON;
+        `);
+      }
+    },
+  };
+
+  private initSchema(): void {
+    // Base schema (version 0)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS store_schema_version (
+        version INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS channels (
+        id TEXT PRIMARY KEY,
+        createdAt TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS message_senders (
+        sender TEXT PRIMARY KEY
+      );
+      INSERT OR IGNORE INTO message_senders (sender) VALUES ('user'), ('agent'), ('cron'), ('system');
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        channelId TEXT NOT NULL,
+        sender TEXT NOT NULL REFERENCES message_senders(sender),
+        message TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        FOREIGN KEY (channelId) REFERENCES channels(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_messages_channel_created ON messages(channelId, createdAt);
+      CREATE TABLE IF NOT EXISTS pending_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channelId TEXT NOT NULL,
+        messageId TEXT NOT NULL,
+        FOREIGN KEY (channelId) REFERENCES channels(id),
+        FOREIGN KEY (messageId) REFERENCES messages(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_pending_channel ON pending_queue(channelId);
+    `);
+
+    // Determine current version
+    const row = this.db.prepare("SELECT version FROM store_schema_version LIMIT 1").get() as { version: number } | undefined;
+    let version = row?.version ?? 0;
+
+    // Apply sequential migrations
+    while (version < Store.LATEST_STORE_VERSION) {
+      const fn = Store.STORE_MIGRATIONS[version];
+      if (fn === undefined) break;
+      fn(this.db);
+      version++;
+    }
+
+    // Persist version
+    if (row === undefined) {
+      this.db.prepare("INSERT INTO store_schema_version (version) VALUES (?)").run(version);
+    } else if (version !== row.version) {
+      this.db.prepare("UPDATE store_schema_version SET version = ?").run(version);
+    }
+  }
+
+  /** Migrate data from legacy store.json if it exists and the DB is empty. */
+  private migrateFromJson(jsonPath: string): void {
+    if (!existsSync(jsonPath)) return;
+    // Only migrate if DB has no channels (fresh DB)
+    const count = this.db.prepare("SELECT COUNT(*) as c FROM channels").get() as { c: number };
+    if (count.c > 0) return;
+
     try {
-      const raw = readFileSync(this.persistPath, "utf-8");
-      const snapshot = JSON.parse(raw) as StoreSnapshot;
-      for (const ch of snapshot.channels) {
-        this.channels.set(ch.id, ch);
-      }
-      for (const [channelId, msgs] of Object.entries(snapshot.messages)) {
-        this.messages.set(channelId, msgs);
-      }
-      for (const [channelId, queue] of Object.entries(snapshot.pendingQueues)) {
-        this.pendingQueues.set(channelId, queue);
-        // Rebuild messageIndex from pending queue
-        const msgs = this.messages.get(channelId) ?? [];
-        const pendingSet = new Set(queue);
-        for (const msg of msgs) {
-          if (pendingSet.has(msg.id)) {
-            this.messageIndex.set(msg.id, msg);
+      const raw = readFileSync(jsonPath, "utf-8");
+      const snapshot = JSON.parse(raw) as {
+        channels?: Array<{ id: string; createdAt: string }>;
+        messages?: Record<string, Array<{ id: string; channelId: string; sender: string; message: string; createdAt: string }>>;
+        pendingQueues?: Record<string, string[]>;
+      };
+
+      const insertChannel = this.db.prepare("INSERT OR IGNORE INTO channels (id, createdAt) VALUES (?, ?)");
+      const insertMessage = this.db.prepare("INSERT OR IGNORE INTO messages (id, channelId, sender, message, createdAt) VALUES (?, ?, ?, ?, ?)");
+      const insertPending = this.db.prepare("INSERT INTO pending_queue (channelId, messageId) VALUES (?, ?)");
+
+      this.db.transaction(() => {
+        for (const ch of snapshot.channels ?? []) {
+          insertChannel.run(ch.id, ch.createdAt);
+        }
+        for (const [channelId, msgs] of Object.entries(snapshot.messages ?? {})) {
+          for (const msg of msgs) {
+            insertMessage.run(msg.id, channelId, msg.sender, msg.message, msg.createdAt);
           }
         }
-      }
-      // Ensure all channels have entries in messages and pendingQueues
-      for (const ch of this.channels.values()) {
-        if (!this.messages.has(ch.id)) this.messages.set(ch.id, []);
-        if (!this.pendingQueues.has(ch.id)) this.pendingQueues.set(ch.id, []);
-      }
-    } catch (err: unknown) {
-      // ENOENT = first run; anything else = corrupt file
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        console.error(`[store] WARNING: could not load ${this.persistPath} (${String(err)}) — starting fresh`);
-      }
-    }
-  }
+        for (const [channelId, queue] of Object.entries(snapshot.pendingQueues ?? {})) {
+          for (const msgId of queue) {
+            insertPending.run(channelId, msgId);
+          }
+        }
+      })();
 
-  private saveToDisk(): void {
-    if (this.persistPath === undefined) return;
-    const snapshot: StoreSnapshot = {
-      channels: [...this.channels.values()],
-      messages: Object.fromEntries(this.messages),
-      pendingQueues: Object.fromEntries(this.pendingQueues),
-    };
-    // Atomic write: write to a temp file then rename to avoid partial-write corruption
-    const tmp = `${this.persistPath}.tmp`;
-    writeFileSync(tmp, JSON.stringify(snapshot, null, 2), "utf-8");
-    renameSync(tmp, this.persistPath);
+      console.error(`[store] migrated ${snapshot.channels?.length ?? 0} channels from legacy JSON store`);
+    } catch (err: unknown) {
+      console.error(`[store] WARNING: failed to migrate legacy JSON store: ${String(err)}`);
+    }
   }
 
   createChannel(): Channel {
@@ -93,26 +181,34 @@ export class Store {
       id: randomUUID(),
       createdAt: new Date().toISOString(),
     };
-    this.channels.set(channel.id, channel);
-    this.messages.set(channel.id, []);
-    this.pendingQueues.set(channel.id, []);
-    this.saveToDisk();
+    this.db.prepare("INSERT INTO channels (id, createdAt) VALUES (?, ?)").run(channel.id, channel.createdAt);
     return channel;
   }
 
   getChannel(channelId: string): Channel | undefined {
-    return this.channels.get(channelId);
+    return this.db.prepare("SELECT id, createdAt, archivedAt FROM channels WHERE id = ?").get(channelId) as Channel | undefined;
   }
 
-  listChannels(): Channel[] {
-    return [...this.channels.values()].sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-    );
+  listChannels(options?: { includeArchived?: boolean }): Channel[] {
+    if (options?.includeArchived) {
+      return this.db.prepare("SELECT id, createdAt, archivedAt FROM channels ORDER BY createdAt ASC").all() as Channel[];
+    }
+    return this.db.prepare("SELECT id, createdAt, archivedAt FROM channels WHERE archivedAt IS NULL ORDER BY createdAt ASC").all() as Channel[];
   }
 
-  addMessage(channelId: string, sender: "user" | "agent", message: string): Message | undefined {
-    const msgs = this.messages.get(channelId);
-    if (msgs === undefined) return undefined;
+  archiveChannel(channelId: string): boolean {
+    const result = this.db.prepare("UPDATE channels SET archivedAt = ? WHERE id = ? AND archivedAt IS NULL").run(new Date().toISOString(), channelId);
+    return result.changes > 0;
+  }
+
+  unarchiveChannel(channelId: string): boolean {
+    const result = this.db.prepare("UPDATE channels SET archivedAt = NULL WHERE id = ? AND archivedAt IS NOT NULL").run(channelId);
+    return result.changes > 0;
+  }
+
+  addMessage(channelId: string, sender: "user" | "agent" | "cron" | "system", message: string): Message | undefined {
+    const ch = this.getChannel(channelId);
+    if (ch === undefined) return undefined;
     const msg: Message = {
       id: randomUUID(),
       channelId,
@@ -120,66 +216,81 @@ export class Store {
       message,
       createdAt: new Date().toISOString(),
     };
-    msgs.push(msg);
-    if (sender === "user") {
-      this.pendingQueues.get(channelId)!.push(msg.id);
-      this.messageIndex.set(msg.id, msg);
-    }
-    this.saveToDisk();
+    this.db.transaction(() => {
+      this.db.prepare("INSERT INTO messages (id, channelId, sender, message, createdAt) VALUES (?, ?, ?, ?, ?)").run(msg.id, msg.channelId, msg.sender, msg.message, msg.createdAt);
+      if (sender === "user" || sender === "cron" || sender === "system") {
+        this.db.prepare("INSERT INTO pending_queue (channelId, messageId) VALUES (?, ?)").run(channelId, msg.id);
+      }
+    })();
     return msg;
   }
 
-  listMessages(channelId: string, limit = 5): Message[] {
-    const msgs = this.messages.get(channelId);
-    if (msgs === undefined) return [];
+  listMessages(channelId: string, limit = 5, before?: string): Message[] {
     const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 5;
-    return msgs.slice(-safeLimit).reverse();
+    // Return newest N messages in reverse chronological order.
+    // When `before` is specified, return messages older than the given message ID (cursor-based pagination).
+    if (before !== undefined) {
+      return this.db.prepare(
+        "SELECT id, channelId, sender, message, createdAt FROM messages WHERE channelId = ? AND rowid < (SELECT rowid FROM messages WHERE id = ?) ORDER BY rowid DESC LIMIT ?",
+      ).all(channelId, before, safeLimit) as Message[];
+    }
+    return this.db.prepare(
+      "SELECT id, channelId, sender, message, createdAt FROM messages WHERE channelId = ? ORDER BY rowid DESC LIMIT ?",
+    ).all(channelId, safeLimit) as Message[];
   }
 
   drainPending(channelId: string): Message[] {
-    const queue = this.pendingQueues.get(channelId);
-    if (queue === undefined) return [];
-    const results: Message[] = [];
-    while (queue.length > 0) {
-      const id = queue.shift()!;
-      const msg = this.messageIndex.get(id);
-      if (msg !== undefined) {
-        results.push(msg);
-        this.messageIndex.delete(id);
+    let rows: Message[] = [];
+    this.db.transaction(() => {
+      rows = this.db.prepare(
+        "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC",
+      ).all(channelId) as Message[];
+      if (rows.length > 0) {
+        this.db.prepare("DELETE FROM pending_queue WHERE channelId = ?").run(channelId);
       }
-    }
-    this.saveToDisk();
-    return results;
+    })();
+    return rows;
   }
 
   peekOldestPending(channelId: string): Message | undefined {
-    const queue = this.pendingQueues.get(channelId);
-    if (queue === undefined || queue.length === 0) return undefined;
-    return this.messageIndex.get(queue[0]!);
+    return this.db.prepare(
+      "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC LIMIT 1",
+    ).get(channelId) as Message | undefined;
   }
 
   flushPending(channelId: string): number {
-    const queue = this.pendingQueues.get(channelId);
-    if (queue === undefined) return 0;
-    const count = queue.length;
-    for (const id of queue) {
-      this.messageIndex.delete(id);
-    }
-    queue.length = 0;
-    this.saveToDisk();
-    return count;
+    const result = this.db.prepare("DELETE FROM pending_queue WHERE channelId = ?").run(channelId);
+    return result.changes;
   }
 
   pendingCounts(): Record<string, number> {
+    const rows = this.db.prepare("SELECT channelId, COUNT(*) as cnt FROM pending_queue GROUP BY channelId").all() as Array<{ channelId: string; cnt: number }>;
     const counts: Record<string, number> = {};
-    for (const [channelId, queue] of this.pendingQueues) {
-      counts[channelId] = queue.length;
+    // Include channels with 0 pending
+    for (const ch of this.listChannels()) {
+      counts[ch.id] = 0;
+    }
+    for (const row of rows) {
+      counts[row.channelId] = row.cnt;
     }
     return counts;
   }
 
   hasPending(channelId: string): boolean {
-    const queue = this.pendingQueues.get(channelId);
-    return queue !== undefined && queue.length > 0;
+    const row = this.db.prepare("SELECT COUNT(*) as cnt FROM pending_queue WHERE channelId = ?").get(channelId) as { cnt: number } | undefined;
+    return row !== undefined && row.cnt > 0;
+  }
+
+  /** Check if a cron message with the given prefix is already pending for a channel. */
+  hasPendingCronMessage(channelId: string, cronIdPrefix: string): boolean {
+    const row = this.db.prepare(
+      "SELECT COUNT(*) as cnt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? AND m.sender = 'cron' AND m.message LIKE ?",
+    ).get(channelId, `${cronIdPrefix}%`) as { cnt: number } | undefined;
+    return row !== undefined && row.cnt > 0;
+  }
+
+  /** Close the database connection. */
+  close(): void {
+    this.db.close();
   }
 }

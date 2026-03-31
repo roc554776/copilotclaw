@@ -109,7 +109,7 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
   <div id="status-modal-overlay" onclick="closeStatusModal()"></div>
   <div id="status-modal" style="display:none">
     <button class="close-btn" onclick="closeStatusModal()">&times;</button>
-    <h3>System Status</h3>
+    <h3>System Status <a href="/status" style="font-size:0.8rem;font-weight:normal;color:#58a6ff;margin-left:0.5rem">Open in new tab &rarr;</a></h3>
     <div id="status-modal-content">Loading...</div>
   </div>
   <div id="tabs">
@@ -241,10 +241,14 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
           const sessions = body.agent.sessions || {};
           const entries = Object.entries(sessions);
           if (entries.length > 0) {
-            html += '<div class="section"><div class="section-title">Sessions (' + escHtml(String(entries.length)) + ')</div>';
+            html += '<div class="section"><div class="section-title">Sessions (' + escHtml(String(entries.length)) + ') · <a href="/sessions" target="_blank" style="font-weight:normal;text-transform:none">All sessions &rarr;</a></div>';
             for (const [id, sess] of entries) {
               const chLabel = sess.boundChannelId ? ' → ch:' + escHtml(sess.boundChannelId.slice(0,8)) : '';
               html += '<div class="row"><span class="label">' + escHtml(id.slice(0,8)) + chLabel + '</span><span class="value">' + escHtml(sess.status) + '</span></div>';
+              // Abstract session startedAt (always shown)
+              if (sess.startedAt) {
+                html += '<div style="margin-left:1rem;font-size:0.8rem;color:#8b949e"><div class="row"><span class="label">Session started</span><span class="value">' + escHtml(sess.startedAt) + ' (' + elapsed(sess.startedAt) + ')</span></div></div>';
+              }
               // Physical session details
               if (sess.physicalSession) {
                 const ps = sess.physicalSession;
@@ -263,7 +267,8 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
                   html += '<div class="row"><span class="label">Tokens used</span><span class="value">in: ' + escHtml(String(inp)) + ' / out: ' + escHtml(String(out)) + ' / total: ' + escHtml(String(inp + out)) + '</span></div>';
                 }
                 html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(ps.startedAt) + ' (' + elapsed(ps.startedAt) + ')</span></div>';
-                html += '<div style="margin-top:0.3rem"><a href="#" style="color:#58a6ff;text-decoration:none" data-session-id="' + psId + '" onclick="showSessionDetail(this.dataset.sessionId);return false;">Show context detail</a></div>';
+                html += '<div style="margin-top:0.3rem"><a href="#" style="color:#58a6ff;text-decoration:none" data-session-id="' + psId + '" onclick="showSessionDetail(this.dataset.sessionId);return false;">Show context detail</a>';
+                html += ' · <a href="/sessions/' + encodeURIComponent(ps.sessionId) + '/events" style="color:#58a6ff;text-decoration:none">View events &rarr;</a></div>';
                 html += '</div>';
                 html += '<div id="session-detail-' + psId + '" style="display:none;margin-left:1rem;margin-top:0.5rem;font-size:0.75rem;max-height:300px;overflow-y:auto;border:1px solid #30363d;padding:0.5rem;border-radius:0.5rem;white-space:pre-wrap;color:#8b949e"></div>';
               }
@@ -290,10 +295,31 @@ export function renderDashboard(channels: Channel[], chatMessages: Message[], ac
                   html += '</div>';
                 }
               }
+              // Stopped physical session history
+              const history = sess.physicalSessionHistory || [];
+              if (history.length > 0) {
+                html += '<div style="margin-left:1rem;font-size:0.8rem;margin-top:0.3rem">';
+                html += '<div style="color:#8b949e;margin-bottom:0.3rem">Physical sessions (' + escHtml(String(history.length)) + ')</div>';
+                for (const hps of history) {
+                  html += '<div style="margin-bottom:0.5rem;padding:0.3rem;border:1px solid #21262d;border-radius:0.3rem;color:#8b949e">';
+                  html += '<div class="row"><span class="label">SDK Session</span><span class="value">' + escHtml(hps.sessionId.slice(0,12)) + '</span></div>';
+                  html += '<div class="row"><span class="label">Model</span><span class="value">' + escHtml(hps.model) + '</span></div>';
+                  html += '<div class="row"><span class="label">State</span><span class="value">' + escHtml(hps.currentState || 'stopped') + '</span></div>';
+                  if (hps.totalInputTokens != null || hps.totalOutputTokens != null) {
+                    const hi = hps.totalInputTokens ?? 0;
+                    const ho = hps.totalOutputTokens ?? 0;
+                    html += '<div class="row"><span class="label">Tokens used</span><span class="value">in: ' + escHtml(String(hi)) + ' / out: ' + escHtml(String(ho)) + '</span></div>';
+                  }
+                  html += '<div class="row"><span class="label">Started</span><span class="value">' + escHtml(hps.startedAt) + '</span></div>';
+                  html += '<div class="row"><span class="label">Events</span><span class="value"><a href="/sessions/' + encodeURIComponent(hps.sessionId) + '/events" style="color:#58a6ff;text-decoration:none">View events &rarr;</a></span></div>';
+                  html += '</div>';
+                }
+                html += '</div>';
+              }
             }
             html += '</div>';
           } else {
-            html += '<div class="section"><div class="section-title">Sessions</div><div class="row"><span class="label">None active</span></div></div>';
+            html += '<div class="section"><div class="section-title">Sessions</div><div class="row"><span class="label">None active</span><span class="value"><a href="/sessions" target="_blank">Past sessions &rarr;</a></span></div></div>';
           }
         } else {
           html += '<div class="section"><div class="section-title">Agent</div><div class="row"><span class="label">Not running</span></div></div>';
