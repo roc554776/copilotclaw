@@ -33,26 +33,24 @@ describe("SessionController — state transitions", () => {
   it("rejects invalid transition and logs", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    // new → processing is not valid
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    // Force status to "new" state — startSession sets it to "starting" internally,
-    // but for test purposes we check from a known valid state
+    // Put session in "waiting" state
     orchestrator.updateSessionStatus(sessionId, "waiting");
-    // waiting → starting is not valid
-    const result = (controller as unknown as { transition(id: string, to: string): boolean }).transition(sessionId, "starting");
-    expect(result).toBe(false);
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Try to transition waiting → waiting via onPhysicalSessionStarted (which does starting → waiting)
+    // But since we're already in "waiting", the transition from waiting → waiting is not in VALID_TRANSITIONS
+    controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
+    // The transition should succeed because waiting → waiting... actually waiting is not in VALID_TRANSITIONS from waiting.
+    // Let's check: onPhysicalSessionStarted does transition(sessionId, "waiting") which is waiting → waiting — not valid
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("rejected transition"));
     consoleSpy.mockRestore();
   });
 
-  it("allows valid transitions", () => {
+  it("allows valid transition: starting → waiting via onPhysicalSessionStarted", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    // startSession puts it in "starting" (via revive from "new")
-    // starting → waiting is valid
+    // startSession sets status — force to "starting" for test
     orchestrator.updateSessionStatus(sessionId, "starting");
-    const result = (controller as unknown as { transition(id: string, to: string): boolean }).transition(sessionId, "waiting");
-    expect(result).toBe(true);
+    controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
     expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("waiting");
   });
 });

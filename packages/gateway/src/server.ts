@@ -502,6 +502,11 @@ function createRequestHandler(
 
       if (action === "messages/pending" && method === "POST") {
         const pending = store.drainPending(channelId);
+        // Notify SessionController about drained messages (unified swallowed-message tracking)
+        if (sessionController !== null && sessionOrchestrator !== null && pending.length > 0) {
+          const sid = sessionOrchestrator.getSessionIdForChannel(channelId);
+          if (sid !== undefined) sessionController.onAgentDrainedMessages(sid, pending);
+        }
         if (pending.length === 0) {
           json(res, 204, null);
           return;

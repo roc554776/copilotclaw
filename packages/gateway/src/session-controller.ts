@@ -56,7 +56,7 @@ export class SessionController {
   private readonly store: Store;
   private readonly agentManager: AgentManager;
   private sseBroadcast: SseBroadcastFn | undefined;
-  private resolveModelForChannel: (channelId: string) => Promise<string | undefined>;
+  private readonly resolveModelForChannel: (channelId: string) => Promise<string | undefined>;
   private readonly contexts = new Map<string, SessionContext>();
   private reconciled = false;
 
@@ -195,8 +195,8 @@ export class SessionController {
     const session = this.orchestrator.getSessionStatuses()[sessionId];
     const channelId = session?.channelId;
 
-    // Backoff for rapid failure
-    if (channelId !== undefined && elapsedMs < 30_000) {
+    // Backoff for rapid failure (only on error/abort, not clean idle)
+    if (channelId !== undefined && reason !== "idle" && elapsedMs < 30_000) {
       this.orchestrator.recordBackoff(channelId, 60_000);
       console.error(`[session-controller] channel ${channelId.slice(0, 8)} entering 60s backoff after rapid failure (${elapsedMs}ms)`);
     }
@@ -205,11 +205,13 @@ export class SessionController {
 
     // Skip if API already transitioned (end-turn-run → idle, stop → suspended)
     if (session?.status === "idle" || session?.status === "suspended") {
-      // no-op
+      // no-op — broadcast already happened via the API path
     } else if (reason === "idle") {
       this.orchestrator.idleSession(sessionId);
+      this.broadcastStatusChange(sessionId, "idle");
     } else {
       this.orchestrator.suspendSession(sessionId);
+      this.broadcastStatusChange(sessionId, "suspended");
       if (channelId !== undefined) {
         const detail = error !== undefined ? `: ${error}` : "";
         this.store.addMessage(channelId, "system", `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`);
