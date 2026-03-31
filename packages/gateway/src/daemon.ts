@@ -703,8 +703,8 @@ async function main(): Promise<void> {
 
   // On stream "disconnected" event: suspend all active sessions (agent restart scenario)
   agentManager.onStreamDisconnected(() => {
-    console.error("[gateway] stream disconnected, suspending all active sessions");
-    orchestrator.suspendAllActive();
+    console.error("[gateway] stream disconnected, idling all active sessions");
+    orchestrator.idleAllActive();
   });
 
   // Graceful shutdown on process exit

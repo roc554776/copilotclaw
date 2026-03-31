@@ -263,19 +263,19 @@ describe("SessionOrchestrator", () => {
     });
   });
 
-  describe("suspendAllActive", () => {
-    it("suspends all non-suspended sessions", () => {
+  describe("idleAllActive", () => {
+    it("idles all active sessions (not suspended)", () => {
       const orch = new SessionOrchestrator();
       const id1 = orch.startSession("ch-1");
       const id2 = orch.startSession("ch-2");
       orch.updateSessionStatus(id1, "processing");
       orch.updateSessionStatus(id2, "waiting");
 
-      orch.suspendAllActive();
+      orch.idleAllActive();
 
       const statuses = orch.getSessionStatuses();
-      expect(statuses[id1].status).toBe("suspended");
-      expect(statuses[id2].status).toBe("suspended");
+      expect(statuses[id1].status).toBe("idle");
+      expect(statuses[id2].status).toBe("idle");
     });
 
     it("does not affect already suspended sessions", () => {
@@ -283,7 +283,7 @@ describe("SessionOrchestrator", () => {
       const id1 = orch.startSession("ch-1");
       orch.suspendSession(id1);
 
-      expect(() => orch.suspendAllActive()).not.toThrow();
+      expect(() => orch.idleAllActive()).not.toThrow();
 
       const statuses = orch.getSessionStatuses();
       expect(statuses[id1].status).toBe("suspended");
@@ -291,7 +291,7 @@ describe("SessionOrchestrator", () => {
 
     it("handles empty orchestrator", () => {
       const orch = new SessionOrchestrator();
-      expect(() => orch.suspendAllActive()).not.toThrow();
+      expect(() => orch.idleAllActive()).not.toThrow();
     });
   });
 
@@ -692,7 +692,7 @@ describe("SessionOrchestrator", () => {
     });
   });
 
-  describe("suspendAllActive skips idle sessions", () => {
+  describe("idleAllActive skips idle sessions", () => {
     it("does not suspend idle sessions", () => {
       const orch = new SessionOrchestrator();
       const s1 = orch.startSession("ch-active");
@@ -701,10 +701,10 @@ describe("SessionOrchestrator", () => {
       orch.updatePhysicalSession(s2, makePhysicalSession());
       orch.idleSession(s2);
 
-      orch.suspendAllActive();
+      orch.idleAllActive();
 
       const statuses = orch.getSessionStatuses();
-      expect(statuses[s1]?.status).toBe("suspended");
+      expect(statuses[s1]?.status).toBe("idle");
       expect(statuses[s2]?.status).toBe("idle");
     });
   });

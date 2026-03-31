@@ -62,11 +62,13 @@ export class SessionOrchestrator {
         `UPDATE abstract_sessions SET status = 'idle' WHERE status = 'suspended' AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
       ).run();
     },
-    // v1 → v2: Convert remaining suspended sessions with channel binding (including history=0) to "idle".
-    // v0→v1 only covered sessions with history. This catches the rest.
+    // v1 → v2: Convert all non-idle channel-bound sessions to "idle" on startup.
+    // Before v0.58.0, sessions could be persisted in any status (starting, waiting,
+    // processing, suspended) depending on when the gateway was stopped. All of these
+    // are stale after restart and should be "idle" (no running physical session).
     1: (db) => {
       db.prepare(
-        `UPDATE abstract_sessions SET status = 'idle' WHERE status = 'suspended' AND channelId IS NOT NULL`,
+        `UPDATE abstract_sessions SET status = 'idle' WHERE status != 'idle' AND channelId IS NOT NULL`,
       ).run();
     },
   };
@@ -493,10 +495,15 @@ export class SessionOrchestrator {
    * Used when the agent stream disconnects (agent restart) to mark all
    * physical sessions as ended while keeping abstract sessions alive.
    */
-  suspendAllActive(): void {
+  /**
+   * Transition all active sessions to idle (not suspended).
+   * Used when the agent stream disconnects (agent restart) — physical sessions
+   * are gone but abstract sessions should remain visible with their last state.
+   */
+  idleAllActive(): void {
     for (const [sessionId, session] of this.sessions) {
       if (session.status !== "suspended" && session.status !== "idle") {
-        this.suspendSession(sessionId);
+        this.idleSession(sessionId);
       }
     }
   }
@@ -519,8 +526,8 @@ export class SessionOrchestrator {
     // → agent is a new process with no sessions → stale active sessions must be suspended.
     for (const [sessionId, session] of this.sessions) {
       if (session.status !== "suspended" && session.status !== "idle" && !reportedIds.has(sessionId)) {
-        console.error(`[orchestrator] reconciled: suspending stale session ${sessionId.slice(0, 8)} (not reported by agent)`);
-        this.suspendSession(sessionId);
+        console.error(`[orchestrator] reconciled: idling stale session ${sessionId.slice(0, 8)} (not reported by agent)`);
+        this.idleSession(sessionId);
       }
     }
 
