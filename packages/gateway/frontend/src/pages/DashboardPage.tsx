@@ -1434,7 +1434,7 @@ function ChannelSettingsModal({
           <div style={modalTitleStyle}>Model</div>
           <div style={modalRowStyle}>
             <span style={modalLabelStyle}>Session status</span>
-            <span>{sessionStatus ?? "unknown"}</span>
+            <span>{sessionStatus ?? "no session"}</span>
           </div>
           <div style={modalRowStyle}>
             <span style={modalLabelStyle}>Current model</span>
@@ -1534,7 +1534,8 @@ function ChannelSettingsModal({
             </div>
           ) : (
             <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
-              {sessionStatus === "new" ? "No session yet — will start on first message" :
+              {sessionStatus === undefined ? "Send a message to start" :
+               sessionStatus === "new" ? "No session yet — will start on first message" :
                sessionStatus === "idle" ? "Session idle — will resume on next message" :
                sessionStatus === "starting" ? "Starting..." :
                "No active physical session"}
