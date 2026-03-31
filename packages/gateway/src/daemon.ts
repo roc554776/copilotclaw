@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentPromptConfig, resolveModel } from "./agent-config.js";
 import { AgentManager } from "./agent-manager.js";
-import { getProfileName, getStateDir, loadConfig, resolvePort } from "./config.js";
+import { type CronJobConfig, getProfileName, getStateDir, loadConfig, loadFileConfig, resolvePort, saveConfig } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
 import { initOtel, shutdownOtel } from "./otel.js";
 import { initMetrics } from "./otel-metrics.js";
@@ -560,7 +560,15 @@ async function main(): Promise<void> {
     console.error("[gateway] cron scheduler reloaded");
   };
   let serverHandle: Awaited<ReturnType<typeof startServer>> | undefined;
-  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator, onCronReload, getCronJobStatuses: () => getCronJobStatuses() });
+  const saveCronJobs = (jobs: CronJobConfig[]) => {
+    const fileConfig = loadFileConfig(getProfileName());
+    fileConfig.cron = jobs;
+    saveConfig(fileConfig, getProfileName());
+    // Reload scheduler with the new config
+    reloadCronScheduler(jobs);
+    console.error(`[gateway] cron config saved (${jobs.length} jobs) and scheduler reloaded`);
+  };
+  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator, onCronReload, getCronJobStatuses: () => getCronJobStatuses(), saveCronJobs });
 
   // Periodic agent process monitoring
   let consecutiveFailures = 0;

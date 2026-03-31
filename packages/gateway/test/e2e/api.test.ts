@@ -686,6 +686,27 @@ describe("POST /api/cron/reload", () => {
   });
 });
 
+describe("PUT /api/cron", () => {
+  it("returns 503 when no saveCronJobs handler", async () => {
+    const res = await fetch(`${baseUrl}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([]),
+    });
+    expect(res.status).toBe(503);
+  });
+
+  it("returns 503 for non-array body (no handler)", async () => {
+    const res = await fetch(`${baseUrl}/api/cron`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: "test" }),
+    });
+    // Without saveCronJobs handler, returns 503 before validation
+    expect(res.status).toBe(503);
+  });
+});
+
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);

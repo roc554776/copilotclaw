@@ -143,6 +143,7 @@ export interface ServerDeps {
   sessionOrchestrator?: SessionOrchestrator;
   onCronReload?: () => void;
   getCronJobStatuses?: () => CronJobStatus[];
+  saveCronJobs?: (jobs: Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>) => void;
 }
 
 function createRequestHandler(
@@ -155,6 +156,7 @@ function createRequestHandler(
   sessionOrchestrator: SessionOrchestrator | null,
   onCronReload: (() => void) | null,
   getCronJobStatuses: (() => CronJobStatus[]) | null,
+  saveCronJobs: ((jobs: Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>) => void) | null,
 ) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
@@ -292,6 +294,32 @@ function createRequestHandler(
       } else {
         json(res, 503, { error: "cron reload not available" });
       }
+      return;
+    }
+
+    if (fullPathname === "/api/cron" && method === "PUT") {
+      if (saveCronJobs === null) {
+        json(res, 503, { error: "cron save not available" });
+        return;
+      }
+      const body = parseJson(await readBody(req));
+      if (!Array.isArray(body)) {
+        json(res, 400, { error: "body must be an array of cron jobs" });
+        return;
+      }
+      for (const job of body) {
+        if (!isRecord(job) || typeof job["id"] !== "string" || typeof job["channelId"] !== "string" ||
+            typeof job["intervalMs"] !== "number" || typeof job["message"] !== "string") {
+          json(res, 400, { error: "each cron job must have id (string), channelId (string), intervalMs (number), message (string)" });
+          return;
+        }
+        if (job["disabled"] !== undefined && typeof job["disabled"] !== "boolean") {
+          json(res, 400, { error: "disabled must be a boolean if provided" });
+          return;
+        }
+      }
+      saveCronJobs(body as Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>);
+      json(res, 200, { status: "saved" });
       return;
     }
 
@@ -630,7 +658,8 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
 
   const onCronReload = options?.onCronReload ?? null;
   const getCronJobStatuses = options?.getCronJobStatuses ?? null;
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, onCronReload, getCronJobStatuses);
+  const saveCronJobs = options?.saveCronJobs ?? null;
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, onCronReload, getCronJobStatuses, saveCronJobs);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {

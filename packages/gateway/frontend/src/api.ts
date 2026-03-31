@@ -263,3 +263,20 @@ export async function reloadCron(): Promise<void> {
   if (!res.ok) throw new Error(`cron reload ${res.status}`);
 }
 
+export interface CronJobInput {
+  id: string;
+  channelId: string;
+  intervalMs: number;
+  message: string;
+  disabled?: boolean;
+}
+
+export async function saveCronJobs(jobs: CronJobInput[]): Promise<void> {
+  const res = await fetch("/api/cron", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(jobs),
+  });
+  if (!res.ok) throw new Error(`save cron ${res.status}`);
+}
+

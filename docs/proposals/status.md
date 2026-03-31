@@ -154,7 +154,7 @@
 
 - Cron 設定のリロード（`copilotclaw cron reload` CLI、`POST /api/cron/reload` API、設定差分なしジョブのタイマー保持。`copilotclaw cron list` CLI、`GET /api/cron` API）（v0.55.0）
 
-- チャンネル設定モーダル（chat 画面のタブ channel ID クリックで開く。モデル表示・設定、物理セッションアーカイブ、cron ジョブ表示・リロード。cron 設定の変更/追加/削除は未実現）（v0.55.0）
+- チャンネル設定モーダル（chat 画面のタブ channel ID クリックで開く。モデル表示・設定、物理セッションアーカイブ、cron ジョブの変更/追加/削除 + 自動リロード）（v0.55.0-v0.56.0）
 
 - 物理セッション停止 API（`POST /api/sessions/{{sessionId}}/stop`、チャンネル設定モーダルからの物理セッションアーカイブに使用）（v0.55.0）
 

@@ -11,11 +11,13 @@ import {
   fetchQuota,
   fetchStatus,
   reloadCron,
+  saveCronJobs,
   sendMessage,
   stopSession,
   unarchiveChannel,
   updateChannelModel,
   type Channel,
+  type CronJobInput,
   type CronJobStatus,
   type LogEntry,
   type Message,
@@ -1310,6 +1312,10 @@ function ChannelSettingsModal({
 }) {
   const [selectedModel, setSelectedModel] = useState<string>(channel?.model ?? "");
   const [saving, setSaving] = useState(false);
+  const [editingCron, setEditingCron] = useState<CronJobInput[]>(
+    cronJobs.map((j) => ({ id: j.id, channelId: j.channelId, intervalMs: j.intervalMs, message: j.message, disabled: j.disabled || undefined })),
+  );
+  const [cronSaving, setCronSaving] = useState(false);
 
   const handleModelSave = async () => {
     setSaving(true);
@@ -1326,10 +1332,31 @@ function ChannelSettingsModal({
     onRefreshStatus();
   };
 
-  const handleCronReload = async () => {
+  const updateCronField = (idx: number, field: keyof CronJobInput, value: string | number | boolean | undefined) => {
+    setEditingCron((prev) => prev.map((j, i) => i === idx ? { ...j, [field]: value } : j));
+  };
+
+  const addCronJob = () => {
+    const newId = `job-${Date.now()}`;
+    setEditingCron((prev) => [...prev, { id: newId, channelId, intervalMs: 3600000, message: "" }]);
+  };
+
+  const removeCronJob = (idx: number) => {
+    setEditingCron((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleCronSave = async () => {
+    setCronSaving(true);
     try {
-      await reloadCron();
+      // Fetch ALL cron jobs (not just this channel), replace this channel's jobs, save all
+      const allJobs = await fetchCronJobs();
+      const otherChannelJobs: CronJobInput[] = allJobs
+        .filter((j) => j.channelId !== channelId)
+        .map((j) => ({ id: j.id, channelId: j.channelId, intervalMs: j.intervalMs, message: j.message, disabled: j.disabled || undefined }));
+      const merged = [...otherChannelJobs, ...editingCron];
+      await saveCronJobs(merged);
     } catch { /* ignore */ }
+    setCronSaving(false);
   };
 
   return (
@@ -1468,49 +1495,73 @@ function ChannelSettingsModal({
         {/* Cron Section */}
         <div style={modalSectionStyle}>
           <div style={modalTitleStyle}>Cron Jobs</div>
-          {cronJobs.length > 0 ? (
-            cronJobs.map((job) => (
-              <div
-                key={job.id}
-                style={{
-                  padding: "0.3rem",
-                  marginBottom: "0.3rem",
-                  border: "1px solid #21262d",
-                  borderRadius: "0.3rem",
-                }}
-              >
-                <div style={modalRowStyle}>
-                  <span style={modalLabelStyle}>{job.id}</span>
-                  <span style={{ color: job.scheduled ? "#3fb950" : "#f85149" }}>
-                    {job.scheduled ? "scheduled" : job.disabled ? "disabled" : "inactive"}
-                  </span>
-                </div>
-                <div style={{ fontSize: "0.75rem", color: "#8b949e" }}>
-                  Every {Math.round(job.intervalMs / 1000)}s — {job.message.slice(0, 60)}{job.message.length > 60 ? "..." : ""}
-                </div>
+          {editingCron.map((job, idx) => (
+            <div
+              key={idx}
+              style={{
+                padding: "0.5rem",
+                marginBottom: "0.5rem",
+                border: "1px solid #21262d",
+                borderRadius: "0.3rem",
+              }}
+            >
+              <div style={{ display: "flex", gap: "0.3rem", marginBottom: "0.3rem", alignItems: "center" }}>
+                <input
+                  value={job.id}
+                  onChange={(e) => updateCronField(idx, "id", e.target.value)}
+                  placeholder="Job ID"
+                  style={{ flex: 1, padding: "0.2rem 0.3rem", background: "#0d1117", border: "1px solid #30363d", borderRadius: "0.3rem", color: "#c9d1d9", fontSize: "0.8rem" }}
+                />
+                <button
+                  onClick={() => removeCronJob(idx)}
+                  title="Delete"
+                  style={{ background: "none", border: "none", color: "#f85149", cursor: "pointer", fontSize: "1rem", padding: "0 0.3rem" }}
+                >
+                  &times;
+                </button>
               </div>
-            ))
-          ) : (
-            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No cron jobs for this channel</div>
-          )}
-          <div style={{ fontSize: "0.75rem", color: "#8b949e", marginTop: "0.3rem" }}>
-            Edit cron jobs in config.json, then reload.
+              <div style={{ display: "flex", gap: "0.3rem", marginBottom: "0.3rem", alignItems: "center" }}>
+                <label style={{ fontSize: "0.75rem", color: "#8b949e", width: "5rem" }}>Interval (s)</label>
+                <input
+                  type="number"
+                  value={Math.round(job.intervalMs / 1000)}
+                  onChange={(e) => updateCronField(idx, "intervalMs", Math.max(1, parseInt(e.target.value, 10) || 1) * 1000)}
+                  style={{ width: "5rem", padding: "0.2rem 0.3rem", background: "#0d1117", border: "1px solid #30363d", borderRadius: "0.3rem", color: "#c9d1d9", fontSize: "0.8rem" }}
+                />
+                <label style={{ fontSize: "0.75rem", color: "#8b949e", marginLeft: "0.5rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={job.disabled === true}
+                    onChange={(e) => updateCronField(idx, "disabled", e.target.checked ? true : undefined)}
+                    style={{ marginRight: "0.3rem" }}
+                  />
+                  Disabled
+                </label>
+              </div>
+              <textarea
+                value={job.message}
+                onChange={(e) => updateCronField(idx, "message", e.target.value)}
+                placeholder="Message"
+                rows={2}
+                style={{ width: "100%", padding: "0.2rem 0.3rem", background: "#0d1117", border: "1px solid #30363d", borderRadius: "0.3rem", color: "#c9d1d9", fontSize: "0.8rem", resize: "vertical", boxSizing: "border-box" }}
+              />
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.3rem" }}>
+            <button
+              onClick={addCronJob}
+              style={{ padding: "0.3rem 0.8rem", background: "#21262d", border: "1px solid #30363d", borderRadius: "0.3rem", color: "#c9d1d9", cursor: "pointer", fontSize: "0.85rem" }}
+            >
+              + Add
+            </button>
+            <button
+              onClick={handleCronSave}
+              disabled={cronSaving}
+              style={{ padding: "0.3rem 0.8rem", background: "#238636", border: "none", borderRadius: "0.3rem", color: "#fff", cursor: cronSaving ? "default" : "pointer", fontSize: "0.85rem", opacity: cronSaving ? 0.6 : 1 }}
+            >
+              {cronSaving ? "Saving..." : "Save & Reload"}
+            </button>
           </div>
-          <button
-            onClick={handleCronReload}
-            style={{
-              marginTop: "0.3rem",
-              padding: "0.3rem 0.8rem",
-              background: "#21262d",
-              border: "1px solid #30363d",
-              borderRadius: "0.3rem",
-              color: "#c9d1d9",
-              cursor: "pointer",
-              fontSize: "0.85rem",
-            }}
-          >
-            Reload cron
-          </button>
         </div>
       </div>
     </>
