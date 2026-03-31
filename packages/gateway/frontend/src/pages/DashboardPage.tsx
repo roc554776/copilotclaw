@@ -612,7 +612,6 @@ export function DashboardPage() {
           models={channelSettingsModels}
           cronJobs={channelSettingsCron}
           activeSession={(() => {
-            // Find the active physical session for this channel from the last status poll
             if (!modalStatus?.agent?.sessions) return null;
             for (const s of Object.values(modalStatus.agent.sessions)) {
               if (s.boundChannelId === channelSettingsId && s.physicalSession) {
@@ -627,6 +626,13 @@ export function DashboardPage() {
               if (s.boundChannelId === channelSettingsId && s.status !== "suspended") {
                 return sid;
               }
+            }
+            return undefined;
+          })()}
+          sessionStatus={(() => {
+            if (!modalStatus?.agent?.sessions) return undefined;
+            for (const s of Object.values(modalStatus.agent.sessions)) {
+              if (s.boundChannelId === channelSettingsId) return s.status;
             }
             return undefined;
           })()}
@@ -1308,6 +1314,7 @@ function ChannelSettingsModal({
   onStopSession,
   onEndTurnRun,
   onRefreshStatus,
+  sessionStatus,
 }: {
   channelId: string;
   channel: Channel | null;
@@ -1315,6 +1322,7 @@ function ChannelSettingsModal({
   cronJobs: CronJobStatus[];
   activeSession: { model: string } | null;
   activeSessionId?: string;
+  sessionStatus?: string;
   onClose: () => void;
   onModelChange: (channelId: string, model: string | null) => Promise<void>;
   onStopSession: (sessionId: string) => Promise<void>;
@@ -1425,8 +1433,12 @@ function ChannelSettingsModal({
         <div style={modalSectionStyle}>
           <div style={modalTitleStyle}>Model</div>
           <div style={modalRowStyle}>
-            <span style={modalLabelStyle}>Current physical session</span>
-            <span>{activeSession?.model ?? "none"}</span>
+            <span style={modalLabelStyle}>Session status</span>
+            <span>{sessionStatus ?? "unknown"}</span>
+          </div>
+          <div style={modalRowStyle}>
+            <span style={modalLabelStyle}>Current model</span>
+            <span>{activeSession?.model ?? "—"}</span>
           </div>
           <div style={modalRowStyle}>
             <span style={modalLabelStyle}>Setting</span>
@@ -1521,7 +1533,12 @@ function ChannelSettingsModal({
               </div>
             </div>
           ) : (
-            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No active physical session</div>
+            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
+              {sessionStatus === "new" ? "No session yet — will start on first message" :
+               sessionStatus === "idle" ? "Session idle — will resume on next message" :
+               sessionStatus === "starting" ? "Starting..." :
+               "No active physical session"}
+            </div>
           )}
         </div>
 
