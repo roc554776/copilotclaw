@@ -586,59 +586,33 @@ describe("PhysicalSessionManager — system prompt reinforcement via onPostToolU
     return { mockSession, createSessionSpy, manager };
   }
 
-  it("sets needsReminder when context usage crosses 10% threshold", async () => {
+  // Reminder state tracking (context usage, compaction) has moved to gateway.
+  // Agent no longer injects reminders locally — gateway handles this via onHook.
+  it("does not inject reminder on agent side (gateway responsibility)", async () => {
     const { mockSession, createSessionSpy } = await setupWithHookCapture();
 
     const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
     const hook = config.hooks.onPostToolUse;
 
-    // 30% usage (≥ lastReminderPercent 0% + 10% threshold)
+    // Even with high usage, agent does NOT inject reminder (gateway's concern)
     mockSession.emit("session.usage_info", { data: { currentTokens: 30000, tokenLimit: 100000 } });
-
-    // Any parent tool triggers reminder (hook only fires for parent agent tools)
     const result = await hook({ toolName: "copilotclaw_wait" });
-    expect(result?.additionalContext).toContain("<system>");
-    expect(result?.additionalContext).toContain("copilotclaw_wait");
-
-    // Second call at same usage should NOT contain reminder (already fired)
-    const result2 = await hook({ toolName: "copilotclaw_wait" });
-    expect(result2?.additionalContext ?? "").not.toContain("<system>");
+    expect(result?.additionalContext ?? "").not.toContain("<system>");
 
     mockSession.emit("session.idle");
     await wait(30);
   });
 
-  it("fires for any parent tool when reminder is needed (no toolName gate)", async () => {
+  it("does not inject reminder after compaction_complete (gateway responsibility)", async () => {
     const { mockSession, createSessionSpy } = await setupWithHookCapture();
 
     const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
     const hook = config.hooks.onPostToolUse;
 
-    mockSession.emit("session.usage_info", { data: { currentTokens: 50000, tokenLimit: 100000 } });
-
-    // Hook fires for any tool — onPostToolUse only fires for parent agent tools
-    const result = await hook({ toolName: "copilotclaw_send_message" });
-    expect(result?.additionalContext).toContain("<system>");
-
-    // Second call should NOT contain reminder (already fired at this usage level)
-    const result2 = await hook({ toolName: "Read" });
-    expect(result2).toBeUndefined();
-
-    mockSession.emit("session.idle");
-    await wait(30);
-  });
-
-  it("fires reminder immediately after compaction_complete", async () => {
-    const { mockSession, createSessionSpy } = await setupWithHookCapture();
-
-    const config = createSessionSpy.mock.calls[0]![0] as { hooks: { onPostToolUse: (input: { toolName: string }) => Promise<{ additionalContext?: string } | undefined> } };
-    const hook = config.hooks.onPostToolUse;
-
+    // Compaction event: agent no longer tracks this — gateway does
     mockSession.emit("session.compaction_complete", { data: { success: true } });
-
     const result = await hook({ toolName: "copilotclaw_wait" });
-    expect(result?.additionalContext).toContain("<system>");
-    expect(result?.additionalContext).toContain("CRITICAL REMINDER");
+    expect(result?.additionalContext ?? "").not.toContain("CRITICAL REMINDER");
 
     mockSession.emit("session.idle");
     await wait(30);

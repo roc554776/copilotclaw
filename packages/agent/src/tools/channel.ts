@@ -11,11 +11,6 @@ const WAIT_INSTRUCTION =
   `The user CANNOT see your text output — only messages sent via copilotclaw_send_message reach them. ` +
   `Do NOT stop without calling ${WAIT_TOOL_NAME}.`;
 
-const SWALLOWED_MESSAGE_INSTRUCTION =
-  `[SYSTEM] CRITICAL: You received user message(s) but called ${WAIT_TOOL_NAME} ` +
-  `without sending a reply via copilotclaw_send_message. The user received NOTHING. ` +
-  `You MUST call copilotclaw_send_message with your response NOW, then call ${WAIT_TOOL_NAME}.`;
-
 const KEEPALIVE_INSTRUCTION = `[SYSTEM] No user message received (keepalive cycle). Call ${WAIT_TOOL_NAME} immediately to continue waiting. Do NOT stop.`;
 
 export type AgentStatusChange = "waiting" | "processing";
@@ -149,9 +144,6 @@ export function createChannelTools(deps: ChannelToolDeps) {
     console.error(JSON.stringify({ ts: new Date().toISOString(), level: "error", component: "agent", msg: message }));
   });
 
-  // Swallowed-message detection state.
-  let pendingReplyExpected = false;
-
   // --- Built-in: copilotclaw_wait (always registered, has gateway-offline fallback) ---
   const wait = defineTool(WAIT_TOOL_NAME, {
     description: "Wait for user input, subagent completion, or other events. Blocks until input arrives or keepalive timeout. Call this whenever you have nothing to do, even temporarily.",
@@ -166,16 +158,10 @@ export function createChannelTools(deps: ChannelToolDeps) {
       // an error, the agent's physical session stops, causing an irrecoverable
       // deadlock. The agent must not perceive that an error occurred.
       try {
-        // Swallowed-message guard
-        if (pendingReplyExpected) {
-          logError("swallowed message detected — forcing reply reminder");
-          deps.onStatusChange?.("processing");
-          return { userMessage: SWALLOWED_MESSAGE_INSTRUCTION };
-        }
-
         deps.onStatusChange?.("waiting");
 
         // Try gateway RPC first. If gateway handles wait, use its response.
+        // Gateway owns swallowed-message detection — agent just forwards the result.
         try {
           const gatewayResult = await requestFromGateway({
             type: "tool_call",
@@ -188,7 +174,6 @@ export function createChannelTools(deps: ChannelToolDeps) {
             if (typeof msg["userMessage"] === "string") {
               if (msg["userMessage"] !== KEEPALIVE_INSTRUCTION) {
                 deps.onStatusChange?.("processing");
-                pendingReplyExpected = true;
               }
               return gatewayResult;
             }
@@ -205,7 +190,6 @@ export function createChannelTools(deps: ChannelToolDeps) {
           return { userMessage: KEEPALIVE_INSTRUCTION };
         }
         deps.onStatusChange?.("processing");
-        pendingReplyExpected = true;
         const combined = combineMessages(inputs);
         return { userMessage: combined + WAIT_INSTRUCTION };
       } catch (err: unknown) {
@@ -216,29 +200,12 @@ export function createChannelTools(deps: ChannelToolDeps) {
     skipPermission: true,
   });
 
-  // The conventional send-message tool name. When the dynamic tool list includes
-  // this tool, its handler is wrapped to clear pendingReplyExpected so the
-  // swallowed-message guard is not falsely triggered on the next wait call.
-  const SEND_MESSAGE_TOOL_NAME = "copilotclaw_send_message";
-
   // --- Dynamic tools from gateway config ---
   const dynamicTools = (deps.toolDefinitions ?? []).map((def) => {
     // Skip copilotclaw_wait if listed in toolDefinitions (it's built-in)
     if (def.name === WAIT_TOOL_NAME) return null;
 
-    const gatewayHandler = createGatewayToolHandler(def.name, deps.sessionId, logError);
-
-    // For the send-message tool: wrap the handler to clear pendingReplyExpected.
-    // Without this, the swallowed-message guard fires on every second wait even
-    // when the agent correctly replied — because the dynamic tool has no direct
-    // access to the flag inside the wait closure.
-    const handler = def.name === SEND_MESSAGE_TOOL_NAME
-      ? async (args: Record<string, unknown>) => {
-          const result = await gatewayHandler(args);
-          pendingReplyExpected = false;
-          return result;
-        }
-      : gatewayHandler;
+    const handler = createGatewayToolHandler(def.name, deps.sessionId, logError);
 
     return defineTool(def.name, {
       description: def.description,

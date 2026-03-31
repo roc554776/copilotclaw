@@ -31,6 +31,8 @@ export interface AgentPromptConfig {
   /** System prompt section IDs to capture via transform callbacks.
    *  Agent iterates this list and registers a pass-through capture for each. */
   knownSections: string[];
+  /** Max reinject count per session before treating as "wait". */
+  maxReinject: number;
   /** Max send queue size. Agent drops oldest messages when exceeded. */
   maxQueueSize: number;
   /** Extra options to pass to CopilotClient constructor (passthrough). */
@@ -198,6 +200,7 @@ export function getAgentPromptConfig(): AgentPromptConfig {
     backoffDurationMs: 60_000, // wait 60s before retrying
     keepaliveTimeoutMs: 25 * 60 * 1000, // 25 minutes
     reminderThresholdPercent: 0.10, // remind every 10% context usage increase
+    maxReinject: 10, // cap reinject depth per session
     knownSections: [
       "identity", "tone", "tool_efficiency", "environment_context",
       "code_change_rules", "guidelines", "safety", "tool_instructions",

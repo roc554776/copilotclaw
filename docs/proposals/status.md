@@ -144,13 +144,9 @@
 
 - Gateway-Agent 責務の再配置（v0.54.0）: agent から channelId 概念を除去（IPC は sessionId のみ）、命名を物理セッション明示に変更（PhysicalSessionManager 等）、ポリシー情報（zeroPremium, debugMockCopilotUnsafeTools）を agent から除去。MIN_AGENT_VERSION を 0.54.0 に引き上げ。
 
+- Gateway-Agent 責務の再配置（v0.54.0）: swallowed-message 検出を gateway に移行、MAX_REINJECT を gateway config 化、reminderState を gateway に移行（session_event 監視で判定）、agent コメントの abstract session 言及修正、初期化シーケンス修正（stream_connected ハンドラを config 受信前に登録）、pooled CopilotClient の start 修正
+
 **未実現:**
-- agent 初期化シーケンスのタイミング問題（stream_connected ハンドラが config 受信後に登録されるため最初のイベントを逃す。band-aid コードが入っている）
-- pooled CopilotClient の初期化不完全（毎回 start() を呼んでいる。作成時に一度 start() すべき）
-- agent の swallowed-message 検出が agent 側にある（pendingReplyExpected フラグ管理。gateway オンライン時でも agent が判断。gateway に移すべき）
-- reinject 上限のハードコード（MAX_REINJECT=10 が agent にハードコード。gateway config にすべき）
-- reminderState の TOCTOU workaround（ミュータブル状態と同期的消費パターンが agent にある。gateway が判断すべき）
-- agent コメント内の「abstract session」への言及（agent は抽象セッションを知るべきではない）
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
 **今後の課題:**

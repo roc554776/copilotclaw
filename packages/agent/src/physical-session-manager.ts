@@ -52,6 +52,7 @@ export interface PhysicalSessionManagerOptions {
     backoffDurationMs: number;
     keepaliveTimeoutMs?: number;
     reminderThresholdPercent?: number;
+    maxReinject?: number;
     knownSections?: string[];
     maxQueueSize?: number;
     clientOptions?: Record<string, unknown>;
@@ -66,7 +67,7 @@ export interface PhysicalSessionManagerOptions {
 
 export interface StartPhysicalSessionOptions {
   /** Opaque session token assigned by gateway. Agent uses this for all IPC communication.
-   *  Agent does not know what this token represents internally (abstract session, channel, etc.). */
+   *  Agent does not interpret this token — gateway owns its meaning. */
   sessionId: string;
   /** SDK session ID to resume instead of creating a new one. Used by deferred resume. */
   copilotSessionId?: string;
@@ -83,10 +84,9 @@ export class PhysicalSessionManager {
   private readonly githubToken: string | undefined;
   private readonly customAgents: Array<{ name: string; displayName: string; description: string; prompt: string; infer: boolean }>;
   private readonly primaryAgentName: string;
-  private readonly systemReminder: string;
   private readonly initialPrompt: string;
   private readonly keepaliveTimeoutMs: number;
-  private readonly reminderThresholdPercent: number;
+  private readonly maxReinject: number;
   private readonly knownSections: string[];
   private readonly clientOptions: Record<string, unknown>;
   private readonly sessionConfigOverrides: Record<string, unknown>;
@@ -111,10 +111,9 @@ export class PhysicalSessionManager {
     // have customAgents:[] with agent:"channel-operator", which is a degraded/broken state.
     this.customAgents = options.prompts.customAgents ?? [];
     this.primaryAgentName = options.prompts.primaryAgentName ?? this.customAgents.find((a) => !a.infer)?.name ?? "channel-operator";
-    this.systemReminder = options.prompts.systemReminder;
     this.initialPrompt = options.prompts.initialPrompt;
     this.keepaliveTimeoutMs = options.prompts.keepaliveTimeoutMs ?? 25 * 60 * 1000;
-    this.reminderThresholdPercent = options.prompts.reminderThresholdPercent ?? 0.10;
+    this.maxReinject = options.prompts.maxReinject ?? 10;
     this.knownSections = options.prompts.knownSections ?? [
       "identity", "tone", "tool_efficiency", "environment_context",
       "code_change_rules", "guidelines", "safety", "tool_instructions",
@@ -137,9 +136,11 @@ export class PhysicalSessionManager {
   }
 
   private pooledClient: CopilotClient | undefined;
+  private pooledClientStarted = false;
 
   /** Get any CopilotClient (for server-level RPCs like quota/models).
-   *  Prefers active sessions, falls back to suspended, uses pooled client if none exist. */
+   *  Prefers active sessions, falls back to suspended, uses pooled client if none exist.
+   *  The pooled client is created eagerly and started on first use. */
   private getAnyClient(): CopilotClient {
     for (const [, entry] of this.sessions) {
       if (entry.info.status !== "suspended") return entry.client;
@@ -149,14 +150,24 @@ export class PhysicalSessionManager {
     }
     if (this.pooledClient === undefined) {
       this.pooledClient = this.createClient();
+      this.pooledClientStarted = false;
     }
     return this.pooledClient;
+  }
+
+  /** Ensure the pooled client is started before use.
+   *  Session clients are started by createSession/resumeSession, but the pooled
+   *  client needs explicit start() since it's only used for RPCs like quota/models. */
+  private async ensurePooledClientStarted(client: CopilotClient): Promise<void> {
+    if (client !== this.pooledClient || this.pooledClientStarted) return;
+    await client.start();
+    this.pooledClientStarted = true;
   }
 
   async getQuota(): Promise<Record<string, unknown> | null> {
     try {
       const client = this.getAnyClient();
-      await client.start();
+      await this.ensurePooledClientStarted(client);
       return await client.rpc.account.getQuota() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
       this.logError(`getQuota error: ${err instanceof Error ? err.message : String(err)}`);
@@ -167,7 +178,7 @@ export class PhysicalSessionManager {
   async getModels(): Promise<Record<string, unknown> | null> {
     try {
       const client = this.getAnyClient();
-      await client.start();
+      await this.ensurePooledClientStarted(client);
       return await client.rpc.models.list() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
       this.logError(`getModels error: ${err instanceof Error ? err.message : String(err)}`);
@@ -267,33 +278,15 @@ export class PhysicalSessionManager {
 
     const signal = entry.abortController.signal;
 
-    // State for periodic system prompt reinforcement via onPostToolUse additionalContext.
-    // Tracks context usage percentage to avoid reminding on every tool call.
-    const reminderState = {
-      needsReminder: false,
-      lastReminderPercent: 0,
-      currentUsagePercent: 0,
-    };
-
     // Generic hook dispatcher: all SDK hooks are forwarded to gateway via RPC.
-    // Gateway decides what to return. If gateway is unreachable, agent uses fallback.
+    // Gateway decides what to return (including reminder injection).
+    // If gateway is unreachable, agent uses fallback.
     // This ensures new hook types added by SDK are automatically gateway-controllable.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const makeHookHandler = (hookName: string): ((...args: any[]) => Promise<any>) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return async (input: any, invocation?: { sessionId?: string }) => {
         if (signal.aborted) return;
-
-        // For onPostToolUse, consume reminderState synchronously before any await
-        // to prevent concurrent hook calls from duplicating reminder injection (TOCTOU).
-        let shouldRemind = false;
-        if (hookName === "onPostToolUse") {
-          shouldRemind = reminderState.needsReminder;
-          if (shouldRemind) {
-            reminderState.needsReminder = false;
-            reminderState.lastReminderPercent = reminderState.currentUsagePercent;
-          }
-        }
 
         let gatewayResult: unknown = undefined;
         let gatewayReachable = false;
@@ -311,16 +304,6 @@ export class PhysicalSessionManager {
         }
 
         if (gatewayReachable) {
-          // Gateway online: use its result, but always inject agent-side reminder for onPostToolUse.
-          if (hookName === "onPostToolUse" && shouldRemind) {
-            const existingContext = (gatewayResult !== null && gatewayResult !== undefined && typeof gatewayResult === "object")
-              ? (gatewayResult as Record<string, unknown>)["additionalContext"] as string | undefined
-              : undefined;
-            const parts: string[] = [];
-            if (existingContext !== undefined && existingContext !== "") parts.push(existingContext);
-            parts.push(this.systemReminder);
-            return { additionalContext: parts.join("\n\n") };
-          }
           if (gatewayResult !== null && gatewayResult !== undefined && typeof gatewayResult === "object") {
             return gatewayResult;
           }
@@ -328,9 +311,9 @@ export class PhysicalSessionManager {
         }
 
         // Fallback: agent-autonomous behavior when gateway is offline.
-        // Only onPostToolUse has meaningful fallback (keepalive reminder).
+        // Only onPostToolUse has meaningful fallback (pending message notification).
         if (hookName === "onPostToolUse") {
-          return this.postToolUseFallback(entry.sessionId, shouldRemind);
+          return this.postToolUseFallback(entry.sessionId);
         }
         return;
       };
@@ -469,23 +452,9 @@ export class PhysicalSessionManager {
 
     // Physical session state tracking (currentState, tokens, subagent) is handled by
     // the gateway's SessionOrchestrator via forwarded session_event messages.
-    // Agent only subscribes to events needed for its own operation:
+    // Reminder state (context usage tracking, compaction) is also handled by gateway
+    // via session_event messages — agent does not track these locally.
 
-    // Track context usage for periodic system prompt reminder (onPostToolUse).
-    session.on("session.usage_info", (event) => {
-      const limit = event.data.tokenLimit;
-      if (limit > 0) {
-        reminderState.currentUsagePercent = event.data.currentTokens / limit;
-        if (reminderState.currentUsagePercent >= reminderState.lastReminderPercent + this.reminderThresholdPercent) {
-          reminderState.needsReminder = true;
-        }
-      }
-    });
-    // After compaction, the LLM may lose critical instructions. Flag an immediate reminder.
-    session.on("session.compaction_complete", () => {
-      reminderState.needsReminder = true;
-      reminderState.lastReminderPercent = 0; // Reset — usage drops after compaction
-    });
     // Reflect assistant.message events to the channel timeline as agent messages.
     // This serves as a fallback: ideally the agent uses copilotclaw_send_message,
     // but when the LLM responds with text instead of calling a tool, this ensures
@@ -537,31 +506,19 @@ export class PhysicalSessionManager {
   }
 
   /** Fallback onPostToolUse behavior when gateway is unreachable.
-   *  Maintains keepalive by checking pending messages and injecting reminders.
-   *  This ensures physical sessions survive gateway downtime.
-   *  @param shouldRemind - pre-consumed reminder flag (consumed synchronously before the RPC call). */
+   *  Checks for pending messages to maintain keepalive.
+   *  This ensures physical sessions survive gateway downtime. */
   private async postToolUseFallback(
     sessionId: string,
-    shouldRemind: boolean,
   ): Promise<{ additionalContext: string } | void> {
-    const parts: string[] = [];
-
     // Check for pending user messages via IPC (will fail if gateway is down — that's OK)
     try {
       const peekResult = await requestFromGateway({ type: "peek_pending", sessionId });
       if (peekResult !== null && peekResult !== undefined) {
-        parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
+        return { additionalContext: `[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.` };
       }
     } catch {
       // IPC error — skip notification (non-fatal)
-    }
-
-    if (shouldRemind) {
-      parts.push(this.systemReminder);
-    }
-
-    if (parts.length > 0) {
-      return { additionalContext: parts.join("\n\n") };
     }
     return;
   }
@@ -580,7 +537,7 @@ export class PhysicalSessionManager {
     this.suspendPhysicalSessionState(entry);
   }
 
-  /** Explicitly stop a session — fully removes the abstract session. */
+  /** Explicitly stop a session — fully removes the physical session. */
   stopPhysicalSession(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return;
@@ -643,8 +600,6 @@ export class PhysicalSessionManager {
     const startTime = Date.now();
     const sessionId = entry.sessionId;
 
-    const MAX_REINJECT = 10;
-
     const handleLifecycleEvent = async (event: "idle" | "error", error?: string) => {
       if (entry.abortController.signal.aborted) return;
       const elapsed = Date.now() - startTime;
@@ -671,7 +626,7 @@ export class PhysicalSessionManager {
       // Cap reinject depth to prevent unbounded recursion when gateway persistently
       // returns "reinject" (e.g. due to a bug). Treat excess as "wait".
       const effectiveAction =
-        decision.action === "reinject" && entry.reinjectCount >= MAX_REINJECT
+        decision.action === "reinject" && entry.reinjectCount >= this.maxReinject
           ? "wait"
           : decision.action;
       if (effectiveAction !== decision.action) {

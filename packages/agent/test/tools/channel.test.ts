@@ -280,8 +280,10 @@ describe("copilotclaw_wait", () => {
   });
 });
 
-describe("copilotclaw_wait — swallowed message detection", () => {
-  it("returns swallowed-message reminder when wait called twice without send_message", async () => {
+// Swallowed-message detection has moved to gateway (daemon.ts onToolCall handler).
+// Agent no longer tracks pendingReplyExpected — gateway owns this concern.
+describe("copilotclaw_wait — agent does not track swallowed messages", () => {
+  it("does not inject swallowed-message reminder on agent side (gateway responsibility)", async () => {
     mockDrainReturns([
       { id: "input-1", sender: "user", message: "hello" },
     ]);
@@ -295,54 +297,17 @@ describe("copilotclaw_wait — swallowed message detection", () => {
 
     const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
 
-    // First wait: returns user message and sets pendingReplyExpected = true
+    // First wait: returns user message
     const result1 = await wait.handler({}, invocation) as { userMessage: string };
     expect(result1.userMessage).toContain("hello");
 
-    // Second wait: send_message was NOT called, so swallowed-message guard fires
+    // Second wait without send_message: agent does NOT inject swallowed-message reminder
+    // (gateway handles this via its onToolCall handler)
+    mockDrainReturns([
+      { id: "input-2", sender: "user", message: "world" },
+    ]);
     const result2 = await wait.handler({}, invocation) as { userMessage: string };
-    expect(result2.userMessage).toContain("CRITICAL");
-    expect(result2.userMessage).toContain("copilotclaw_send_message");
-    expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("swallowed message"));
-  });
-
-  it("does NOT trigger swallowed-message after send_message is called (dynamic tool clears flag)", async () => {
-    // The dynamic send_message tool wraps its gateway handler to clear
-    // pendingReplyExpected, so the swallowed-message guard is not falsely
-    // triggered when the agent correctly replied via send_message.
-    let drainCallCount = 0;
-    (requestFromGateway as ReturnType<typeof vi.fn>).mockImplementation(async (msg: Record<string, unknown>) => {
-      if (msg.type === "tool_call") {
-        if (msg.toolName === "copilotclaw_send_message") return { status: "sent" };
-        if (msg.toolName === "copilotclaw_list_messages") return { messages: [] };
-        return null; // copilotclaw_wait: fall through
-      }
-      if (msg.type === "drain_pending") {
-        drainCallCount++;
-        if (drainCallCount === 1) return [{ id: "input-1", sender: "user", message: "hello" }];
-        return [];
-      }
-      return null;
-    });
-
-    const logErrorSpy = vi.fn();
-    const { sendMessage, wait } = makeTools({
-      sessionId: "ch-no-swallow",
-      keepaliveTimeoutMs: 20,
-      logError: logErrorSpy,
-    });
-
-    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
-
-    // First wait: returns user message, sets pendingReplyExpected = true
-    await wait.handler({}, invocation);
-
-    // Call send_message — clears pendingReplyExpected (dynamic tool wrapper)
-    await sendMessage!.handler({ message: "reply" }, invocation);
-
-    // Second wait: swallowed-message guard should NOT fire
-    const result2 = await wait.handler({}, invocation) as { userMessage: string };
-    expect(result2.userMessage).not.toContain("CRITICAL");
+    expect(result2.userMessage).toContain("world");
     expect(logErrorSpy).not.toHaveBeenCalledWith(expect.stringContaining("swallowed message"));
   });
 });

@@ -577,11 +577,11 @@ config 化・パラメトライズ（v0.50.0 で実現済み）:
 - モデル選択 fallback（`resolveModel`）: gateway がモデルを解決できなかった場合のため。gateway オンライン時は gateway の `resolveModel` が主導する
 - ライフサイクル fallback（`queryLifecycleAction` のデフォルト `"wait"`）: gateway 停止時に物理セッションを破棄しないため
 
-残存する設計違反（未実現）:
-- swallowed-message 検出: `pendingReplyExpected` フラグの管理と `SWALLOWED_MESSAGE_INSTRUCTION` の注入が agent にある。gateway オンライン時でも agent が判断している。gateway が管理すべき
-- reinject 上限のハードコード: `MAX_REINJECT=10` が agent にハードコードされている。gateway config にすべき
-- `reminderState` の TOCTOU workaround: `reminderState` のミュータブル状態と同期的消費パターンが agent にある。本来 agent にこの状態があるべきではなく、gateway が判断すべき
-- コメント内の「abstract session」: `physical-session-manager.ts` 内のコメントに抽象セッションへの言及がある。agent は抽象セッションの存在を知るべきではない
+v0.54.0 で解決済みの設計違反:
+- swallowed-message 検出: agent から `pendingReplyExpected` フラグを削除。gateway の `onToolCall` ハンドラがセッションごとに追跡し、`copilotclaw_wait` 呼び出し時に判定・注入する
+- reinject 上限: `MAX_REINJECT` を agent のハードコードから gateway config（`maxReinject`）に移行
+- reminderState: agent から `reminderState`、`reminderThresholdPercent`、`systemReminder` を削除。gateway が `session_event`（`session.usage_info`, `session.compaction_complete`）を監視し、`onHook` の `onPostToolUse` 応答にリマインダーを含める
+- コメント内の「abstract session」言及を修正
 
 **v0.49.0 移行の経緯:**
 

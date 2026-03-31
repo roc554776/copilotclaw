@@ -52,6 +52,34 @@ async function main(): Promise<void> {
     return orchestrator.getSessionStatuses()[sessionId]?.channelId;
   };
 
+  // Reminder state per session: tracks context usage to decide when to inject
+  // systemReminder into onPostToolUse additionalContext.
+  const reminderStates = new Map<string, {
+    needsReminder: boolean;
+    lastReminderPercent: number;
+    currentUsagePercent: number;
+  }>();
+
+  const getReminderState = (sessionId: string) => {
+    let state = reminderStates.get(sessionId);
+    if (state === undefined) {
+      state = { needsReminder: false, lastReminderPercent: 0, currentUsagePercent: 0 };
+      reminderStates.set(sessionId, state);
+    }
+    return state;
+  };
+
+  // Swallowed-message detection state per session.
+  // Tracks whether the previous wait returned user messages AND no
+  // copilotclaw_send_message was called since. If so, the agent swallowed
+  // the message (processed it but never replied to the user).
+  const pendingReplyExpected = new Map<string, boolean>();
+
+  const SWALLOWED_MESSAGE_INSTRUCTION =
+    `[SYSTEM] CRITICAL: You received user message(s) but called copilotclaw_wait ` +
+    `without sending a reply via copilotclaw_send_message. The user received NOTHING. ` +
+    `You MUST call copilotclaw_send_message with your response NOW, then call copilotclaw_wait.`;
+
   // Set up IPC stream message handlers before connecting
   agentManager.setStreamMessageHandler({
     onToolCall: (request) => {
@@ -70,6 +98,8 @@ async function main(): Promise<void> {
             channelId,
             data: { sender: "agent", message },
           });
+          // Clear swallowed-message flag — agent replied successfully
+          pendingReplyExpected.set(request.sessionId, false);
           return { status: "sent" };
         }
         case "copilotclaw_list_messages": {
@@ -78,6 +108,14 @@ async function main(): Promise<void> {
           return { messages };
         }
         case "copilotclaw_wait": {
+          // Swallowed-message guard: if a previous wait returned user messages
+          // and no copilotclaw_send_message was called since, inject a reminder.
+          if (pendingReplyExpected.get(request.sessionId) === true) {
+            console.error(`[gateway] swallowed message detected for session ${request.sessionId.slice(0, 8)} — forcing reply reminder`);
+            pendingReplyExpected.set(request.sessionId, false);
+            return { userMessage: SWALLOWED_MESSAGE_INSTRUCTION };
+          }
+
           // Wait tool: check for pending messages.
           // The full keepalive loop lives in agent (built-in fallback),
           // but gateway can provide the drain+wait logic here.
@@ -90,6 +128,8 @@ async function main(): Promise<void> {
               if (sender === "system") return `[SYSTEM EVENT] ${msg}`;
               return msg;
             }).join("\n\n");
+            // Mark that we returned user messages — next wait should check for reply
+            pendingReplyExpected.set(request.sessionId, true);
             return {
               userMessage: combined +
                 "\n\n---\n[SYSTEM] Required workflow: (A) Call copilotclaw_send_message with your complete reply, " +
@@ -126,10 +166,18 @@ async function main(): Promise<void> {
         case "onPostToolUse": {
           const parts: string[] = [];
           // Check for pending user messages
-          if (hookChannelId === undefined) return null;
-          const oldest = store.peekOldestPending(hookChannelId);
-          if (oldest !== undefined) {
-            parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
+          if (hookChannelId !== undefined) {
+            const oldest = store.peekOldestPending(hookChannelId);
+            if (oldest !== undefined) {
+              parts.push(`[NOTIFICATION] New user message is available on the channel. Call copilotclaw_wait immediately to read it.`);
+            }
+          }
+          // Check reminder state: inject systemReminder when context usage crossed threshold
+          const rs = getReminderState(request.sessionId);
+          if (rs.needsReminder) {
+            rs.needsReminder = false;
+            rs.lastReminderPercent = rs.currentUsagePercent;
+            parts.push(promptConfig.systemReminder);
           }
           if (parts.length > 0) {
             return { additionalContext: parts.join("\n\n") };
@@ -179,13 +227,20 @@ async function main(): Promise<void> {
           case "session.idle":
             orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
             break;
-          case "session.usage_info":
-            orchestrator.updatePhysicalSessionTokens(
-              orchSessionId,
-              data["currentTokens"] as number ?? 0,
-              data["tokenLimit"] as number ?? 0,
-            );
+          case "session.usage_info": {
+            const currentTokens = data["currentTokens"] as number ?? 0;
+            const tokenLimit = data["tokenLimit"] as number ?? 0;
+            orchestrator.updatePhysicalSessionTokens(orchSessionId, currentTokens, tokenLimit);
+            // Track context usage for periodic system prompt reminder
+            if (tokenLimit > 0) {
+              const rs = getReminderState(orchSessionId);
+              rs.currentUsagePercent = currentTokens / tokenLimit;
+              if (rs.currentUsagePercent >= rs.lastReminderPercent + promptConfig.reminderThresholdPercent) {
+                rs.needsReminder = true;
+              }
+            }
             break;
+          }
           case "assistant.usage":
             orchestrator.accumulateUsageTokens(
               orchSessionId,
@@ -194,6 +249,13 @@ async function main(): Promise<void> {
               data["quotaSnapshots"] as Record<string, unknown> | undefined,
             );
             break;
+          case "session.compaction_complete": {
+            // After compaction, the LLM may lose critical instructions. Flag immediate reminder.
+            const compRs = getReminderState(orchSessionId);
+            compRs.needsReminder = true;
+            compRs.lastReminderPercent = 0; // Reset — usage drops after compaction
+            break;
+          }
           case "session.model_change":
             orchestrator.updatePhysicalSessionModel(orchSessionId, data["newModel"] as string ?? "unknown");
             break;

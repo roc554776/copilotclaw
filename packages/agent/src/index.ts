@@ -33,6 +33,7 @@ interface AgentPromptConfig {
   backoffDurationMs: number;
   keepaliveTimeoutMs?: number;
   reminderThresholdPercent?: number;
+  maxReinject?: number;
   knownSections?: string[];
   maxQueueSize?: number;
   clientOptions?: Record<string, unknown>;
@@ -125,7 +126,26 @@ async function main(): Promise<void> {
   process.once("SIGTERM", () => { stopRequested = true; });
   process.once("SIGINT", () => { stopRequested = true; });
 
+  // Register stream_connected handler BEFORE waitForConfig so we don't miss
+  // the first stream_connected event that fires when gateway connects.
+  const streamConnectedHandler = () => {
+    // Flush any messages buffered during gateway downtime before reporting state.
+    // This ensures gateway receives events (session_event, channel_message, etc.)
+    // that occurred while it was offline, fulfilling the "no information loss" requirement.
+    flushSendQueue();
+
+    if (sessionManager !== null) {
+      const running = sessionManager.getRunningPhysicalSessionsSummary();
+      log(`stream connected, reporting ${running.length} running session(s)`);
+      sendToGateway({ type: "running_sessions", sessions: running });
+    }
+    // If sessionManager is null (first connection, before config), running_sessions
+    // will be sent after sessionManager is created below.
+  };
+  streamEvents.on("stream_connected", streamConnectedHandler);
+
   // Wait for gateway stream connection and config push
+  let sessionManager: PhysicalSessionManager | null = null;
   log("waiting for gateway stream connection and config...");
   const config = await waitForConfig();
   log(`config: model=${config.model ?? "(auto)"}`);
@@ -172,27 +192,12 @@ async function main(): Promise<void> {
   if (config.workspaceRoot !== null) {
     managerOpts.workingDirectory = config.workspaceRoot;
   }
-  const sessionManager = new PhysicalSessionManager(managerOpts);
-  ipc.setSessionManager(sessionManager);
+  sessionManager = new PhysicalSessionManager(managerOpts);
+  ipc.setSessionManager(sessionManager!);
 
-  // Report running sessions when gateway (re)connects stream.
-  // This allows gateway to reconcile its orchestrator state with actually-running
-  // physical sessions, preventing dual-session on gateway restart.
-  const streamConnectedHandler = () => {
-    // Flush any messages buffered during gateway downtime before reporting state.
-    // This ensures gateway receives events (session_event, channel_message, etc.)
-    // that occurred while it was offline, fulfilling the "no information loss" requirement.
-    flushSendQueue();
-
-    const running = sessionManager.getRunningPhysicalSessionsSummary();
-    log(`stream connected, reporting ${running.length} running session(s)`);
-    sendToGateway({ type: "running_sessions", sessions: running });
-  };
-  streamEvents.on("stream_connected", streamConnectedHandler);
-
-  // The first stream_connected event fires BEFORE this handler is registered
-  // (stream connects → config push → agent creates sessionManager → handler registered).
-  // Send running_sessions immediately to compensate for the missed first event.
+  // Now that sessionManager exists, send running_sessions for the first connection.
+  // The streamConnectedHandler registered above checks sessionManager and skipped
+  // the report on the initial stream_connected (fired before config was received).
   flushSendQueue();
   const initialRunning = sessionManager.getRunningPhysicalSessionsSummary();
   log(`initial running_sessions report: ${initialRunning.length} session(s)`);
@@ -207,7 +212,7 @@ async function main(): Promise<void> {
     const opts: import("./physical-session-manager.js").StartPhysicalSessionOptions = { sessionId };
     if (copilotSessionId !== undefined) opts.copilotSessionId = copilotSessionId;
     if (resolvedModel !== undefined) opts.resolvedModel = resolvedModel;
-    sessionManager.startPhysicalSession(opts);
+    sessionManager!.startPhysicalSession(opts);
   };
   streamEvents.on("start_physical_session", startPhysicalSessionHandler);
 
@@ -215,9 +220,9 @@ async function main(): Promise<void> {
     const sessionId = msg["sessionId"] as string;
     log(`stop_physical_session: session=${sessionId.slice(0, 8)}`);
     // Find session by sessionId and stop it
-    const status = sessionManager.getPhysicalSessionStatus(sessionId);
+    const status = sessionManager!.getPhysicalSessionStatus(sessionId);
     if (status !== undefined) {
-      sessionManager.stopPhysicalSession(sessionId);
+      sessionManager!.stopPhysicalSession(sessionId);
     } else {
       log(`stop_physical_session: session ${sessionId.slice(0, 8)} not found, ignoring`);
     }
@@ -240,7 +245,7 @@ async function main(): Promise<void> {
   streamEvents.removeListener("stream_connected", streamConnectedHandler);
   streamEvents.removeListener("start_physical_session", startPhysicalSessionHandler);
   streamEvents.removeListener("stop_physical_session", stopPhysicalSessionHandler);
-  await sessionManager.stopAllPhysicalSessions();
+  await sessionManager!.stopAllPhysicalSessions();
   await ipc.close();
   await shutdownOtel();
 }
