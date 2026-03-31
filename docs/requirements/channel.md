@@ -89,3 +89,24 @@ chat 画面のタブの channel ID をクリックすると、モーダルでチ
 end turn run ボタンを archive physical session と同じく警戒色にする。
 
 - 理由: プレミアムリクエストを消費して開始した run を捨てることになるため
+
+### Req: メッセージ消費とセッションステータス管理のバグ修正（v0.64.0 で大部分実現。startPhysicalSession ack と IPC reconnect flush 順序は未実現）
+
+メッセージが詰まる問題を修正する。以下の全問題を修正する。
+
+HIGH:
+- POST handler がセッション起動しない（メッセージ最大30秒詰まり）
+- onPhysicalSessionEnded で pending を無条件 flush（データ消失）
+- lifecycle "wait" がゾンビセッション作る（回復手段なし）
+
+MEDIUM:
+- notifyAgent が死んだセッションに通知して無視される
+- swallowed-message 検出が cron/system メッセージで誤発火
+- copilotclaw_wait の double drain で swallowed-message 検出がバイパスされる
+- startPhysicalSession が fire-and-forget で ack なし（"starting" で永久スタック）
+
+LOW:
+- cron notify が物理セッション起動前に送られる
+- SSE broadcast にセッションステータス変更が含まれない
+- gateway 再起動時に orchestrator の stale 状態が残る
+- IPC reconnect 時の send queue flush 順序
