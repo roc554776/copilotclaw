@@ -141,7 +141,13 @@ export function DashboardPage() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
-      if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+      if (draftTimerRef.current !== null) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+        if (activeChannelIdRef.current) {
+          saveDraft(activeChannelIdRef.current, inputTextRef.current || null).catch(() => {});
+        }
+      }
     };
   }, []);
 
@@ -165,7 +171,13 @@ export function DashboardPage() {
   useEffect(() => {
     if (activeChannelRef.current !== activeChannelId) {
       // Flush any pending draft save for the previous channel immediately
-      if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+      if (draftTimerRef.current !== null) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+        if (activeChannelRef.current) {
+          saveDraft(activeChannelRef.current, inputTextRef.current || null).catch(() => {});
+        }
+      }
       setMessages([]);
       setHasOlderMessages(true);
       activeChannelRef.current = activeChannelId;
