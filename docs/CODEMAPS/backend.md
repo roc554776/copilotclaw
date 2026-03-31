@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Files scanned: 46 | Version: 0.62.0 | Token estimate: ~5000 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Files scanned: 46 | Version: 0.62.1 | Token estimate: ~5000 -->
 
 # Backend
 
@@ -21,7 +21,7 @@ GET  /api/channels/:id/draft               → 200 { draft: string }
 PUT  /api/channels/:id/draft               → 200 { ok: true } (save draft text for a channel)
 GET  /api/channels/pending                 → 200 { [channelId]: count }
 GET  /api/channels/:channelId/messages              → 200 Message[] (?limit=N&before=rowid, reverse-chronological, cursor-based pagination via rowid)
-POST /api/channels/:channelId/messages              → 201 Message (sender: "user"|"agent"|"cron"|"system", user/cron/system messages go to pending queue)
+POST /api/channels/:channelId/messages              → 201 Message | 400 (requires sender field: "user"|"agent"|"cron"|"system"; returns 400 if sender missing or invalid; user/cron/system messages go to pending queue)
 POST /api/channels/:channelId/messages/pending      → 200 Message[] | 204 (drain all pending user messages)
 GET  /api/channels/:channelId/messages/pending/peek → 200 Message | 204 (oldest pending, non-destructive)
 POST /api/channels/:channelId/messages/pending/flush → 200 { flushed: count }
