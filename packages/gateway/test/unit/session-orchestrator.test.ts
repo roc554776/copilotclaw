@@ -648,6 +648,33 @@ describe("SessionOrchestrator", () => {
       expect(session.cumulativeInputTokens).toBe(500);
       expect(session.cumulativeOutputTokens).toBe(300);
     });
+
+    it("calling idleSession twice does not double-count tokens", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-double");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 100, totalOutputTokens: 50 }));
+
+      orch.idleSession(sessionId);
+      orch.idleSession(sessionId); // simulates end-turn-run API + onPhysicalSessionEnded race
+
+      const session = orch.getSessionStatuses()[sessionId]!;
+      expect(session.cumulativeInputTokens).toBe(100);
+      expect(session.cumulativeOutputTokens).toBe(50);
+    });
+
+    it("idleSession followed by suspendSession does not double-count tokens", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-idle-suspend");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 200, totalOutputTokens: 80 }));
+
+      orch.idleSession(sessionId);
+      orch.suspendSession(sessionId);
+
+      const session = orch.getSessionStatuses()[sessionId]!;
+      expect(session.cumulativeInputTokens).toBe(200);
+      expect(session.cumulativeOutputTokens).toBe(80);
+      expect(session.physicalSessionHistory).toHaveLength(1);
+    });
   });
 
   describe("notified status", () => {

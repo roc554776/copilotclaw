@@ -404,7 +404,12 @@ async function main(): Promise<void> {
       // Token counts are already accumulated in real-time via assistant.usage events.
       orchestrator.updatePhysicalSessionState(sessionId, "stopped");
 
-      if (reason === "idle") {
+      // If the session was already transitioned by an API call (end-turn-run
+      // sets "idle", stop sets "suspended"), skip redundant state transition
+      // to avoid double token accumulation.
+      if (session?.status === "idle" || session?.status === "suspended") {
+        // no-op: API already transitioned the session
+      } else if (reason === "idle") {
         // Turn run ended (true idle): keep physical session visible, set status to "idle"
         orchestrator.idleSession(sessionId);
       } else {

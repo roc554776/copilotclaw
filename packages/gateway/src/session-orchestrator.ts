@@ -281,6 +281,11 @@ export class SessionOrchestrator {
     if (session.physicalSession !== undefined) {
       session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
       session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
+      // Zero out to prevent double-counting if idleSession or suspendSession is called
+      // again on the same physical session (e.g., end-turn-run API followed by
+      // onPhysicalSessionEnded callback).
+      session.physicalSession.totalInputTokens = 0;
+      session.physicalSession.totalOutputTokens = 0;
       session.physicalSession.currentState = "stopped";
     }
     session.subagentSessions = undefined;
