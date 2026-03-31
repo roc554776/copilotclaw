@@ -385,7 +385,6 @@ export function DashboardPage() {
   }, [setSearchParams]);
 
   const openChannelSettings = useCallback(async (channelId: string) => {
-    setChannelSettingsId(channelId);
     const [models, cron, status] = await Promise.all([
       fetchModels().then((r) => r?.models ?? []).catch(() => [] as ModelEntry[]),
       fetchCronJobs().catch(() => [] as CronJobStatus[]),
@@ -394,6 +393,8 @@ export function DashboardPage() {
     setChannelSettingsModels(models);
     setChannelSettingsCron(cron.filter((j) => j.channelId === channelId));
     if (status !== null) setModalStatus(status);
+    // Open modal after data is loaded so it renders with fresh status
+    setChannelSettingsId(channelId);
   }, []);
 
   const closeChannelSettings = useCallback(() => {
