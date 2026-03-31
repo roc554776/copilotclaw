@@ -111,7 +111,7 @@ Environment variables:
 - **Cumulative Token Tracking (v0.27.0)**: SessionOrchestrator tracks cumulativeInputTokens and cumulativeOutputTokens per abstract session; suspendSession() accumulates tokens from physical session before clearing; gateway updates physical session via onPhysicalSessionEnded handler; dashboard shows cumulative tokens
 - **Stopped Session History (v0.30.0)**: SessionOrchestrator maintains physicalSessionHistory (PhysicalSessionSummary[]) per abstract session; suspendSession() pushes physical session to history before clearing; capped at 10 entries (oldest removed); persisted in SQLite
 - **Channel backoff**: SessionOrchestrator tracks channelBackoff map (ephemeral, not persisted); daemon records backoff on rapid failure (onPhysicalSessionEnded checks elapsedMs < rapidFailureThresholdMs); isChannelInBackoff() checked before starting sessions
-- **Lifecycle RPC (v0.52.0)**: Agent queries gateway via lifecycle request-response RPC (queryLifecycleAction) when session reaches idle or error state; gateway returns action: "stop" (agent calls client.stop()), "reinject" (agent re-enters session loop), or "wait" (keep session alive); default when gateway is offline = "wait" (keep session alive); gateway daemon's onLifecycle handler returns "stop" + clearCopilotSessionId on error, "stop" on idle
+- **Lifecycle RPC (v0.52.0)**: Agent queries gateway via lifecycle request-response RPC (queryLifecycleAction) when session reaches idle or error state; gateway returns action: "stop" (agent calls client.stop()), "reinject" (agent re-enters session loop), or "wait" (keep session alive); default when gateway is offline = "wait" (keep session alive); gateway daemon's onLifecycle handler returns "stop" + clearCopilotSessionId on error; on idle checks lastIdleHasBackgroundTasks (true → "wait", subagent stop scenario) then copilotclaw_wait active state (→ "wait"), otherwise "stop"
 - **Channel notifications**: gateway daemon inserts system messages on unexpected physical session stop (with error detail) and flushes pending messages for the channel
 
 ## Observability (v0.28.0, SQLite v0.29.0)
@@ -143,6 +143,6 @@ Environment variables:
 - Channel backoff: SessionOrchestrator tracks channelBackoff map (ephemeral, not persisted); gateway daemon records backoff in onPhysicalSessionEnded when elapsedMs < rapidFailureThresholdMs; isChannelInBackoff() checked before starting sessions (prevents retry storms)
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (469 tests: 84 agent + 353 gateway + 32 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (476 tests: 84 agent + 360 gateway + 32 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
 - Frontend tests: vitest + jsdom + @testing-library/react for React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll)
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
