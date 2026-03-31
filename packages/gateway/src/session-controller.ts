@@ -79,6 +79,7 @@ export class SessionController {
     const session = this.orchestrator.getSessionStatuses()[sessionId];
     if (session === undefined) return false;
     const from = session.status;
+    if (from === to) return true; // same-state transition is a no-op
     const allowed = VALID_TRANSITIONS[from];
     if (allowed === undefined || !allowed.includes(to)) {
       console.error(`[session-controller] rejected transition ${from} → ${to} for session ${sessionId.slice(0, 8)}`);
