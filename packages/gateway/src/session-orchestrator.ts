@@ -96,11 +96,11 @@ export class SessionOrchestrator {
     const row = this.db.prepare("SELECT version FROM orchestrator_schema_version LIMIT 1").get() as { version: number } | undefined;
     let version = row?.version ?? 0;
 
-    // If the stored version exceeds LATEST, the DB was migrated by a prior version of the
-    // code that had more migration steps (v0.58.0 development iterations). Reset to 0 so
-    // the consolidated migration runs. The migration is idempotent so re-applying is safe.
+    // If the stored version exceeds LATEST, it was set by a prior version of the code
+    // that had more migration steps (v0.58.0 development iterations that were later
+    // consolidated). Those versions completed the same normalization, so clamp to LATEST.
     if (version > SessionOrchestrator.LATEST_SCHEMA_VERSION) {
-      version = 0;
+      version = SessionOrchestrator.LATEST_SCHEMA_VERSION;
     }
 
     while (version < SessionOrchestrator.LATEST_SCHEMA_VERSION) {
