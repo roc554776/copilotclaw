@@ -158,7 +158,7 @@
 
 - 物理セッション停止 API（`POST /api/sessions/{{sessionId}}/stop`、チャンネル設定モーダルからの物理セッションアーカイブに使用）（v0.55.0）
 
-- session.idle での subagent 停止と親 agent idle の区別 — v0.57.0 で gateway 側の onLifecycle 判定のみ実装したが、agent 側のセッションループ（session-loop.ts）が session.idle で無条件に終了する問題が未修正。backgroundTasks 付きの session.idle でセッションループが終了し、copilotclaw_wait が宙に浮いてゾンビ化する（未実現）
+- session.idle での subagent 停止と親 agent idle の区別 — v0.65.0 で agent 側セッションループを修正。backgroundTasks 付き session.idle ではセッションループを終了せず、真の idle またはエラーを待つ（30分タイムアウト付き安全弁）
 
 - physical session の常時保持（idle 停止時に physicalSession をクリアせず currentState: "stopped" で保持。suspendSession は明示的 archive のみ）（v0.58.0）
 
@@ -186,7 +186,6 @@
 - メッセージ消費とセッションステータス管理の設計整理 — SessionController 導入（v0.64.0）。POST handler のセッション即時起動、pending flush の安全化、lifecycle "wait" ゾンビ修正、notifyAgent 死セッション対応、swallowed-message 誤発火修正、double drain バイパス修正、cron notify タイミング、SSE broadcast 追加、gateway 再起動 stale 状態
 
 **未実現:**
-- session.idle での subagent 停止時の処理分離 — agent 側のセッションループが backgroundTasks 付き session.idle で無条件に終了する問題。gateway の onLifecycle で "wait" を返しても、セッションループは既に終了済みでゾンビ化する
 - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
