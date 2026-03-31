@@ -335,4 +335,39 @@ describe("Store", () => {
       expect(drained.map((m) => m.sender).sort()).toEqual(["cron", "system"]);
     });
   });
+
+  describe("channel model setting", () => {
+    it("new channel has no model set by default", () => {
+      const ch = store.createChannel();
+      // createChannel returns the in-memory object, getChannel returns from DB
+      const fromDb = store.getChannel(ch.id);
+      expect(fromDb?.model).toBeNull();
+    });
+
+    it("updateChannelModel sets and gets model", () => {
+      const ok = store.updateChannelModel(channelId, "gpt-4.1");
+      expect(ok).toBe(true);
+      const ch = store.getChannel(channelId);
+      expect(ch?.model).toBe("gpt-4.1");
+    });
+
+    it("updateChannelModel clears model with null", () => {
+      store.updateChannelModel(channelId, "gpt-4.1");
+      store.updateChannelModel(channelId, null);
+      const ch = store.getChannel(channelId);
+      expect(ch?.model).toBeNull();
+    });
+
+    it("updateChannelModel returns false for nonexistent channel", () => {
+      const ok = store.updateChannelModel("nonexistent", "gpt-4.1");
+      expect(ok).toBe(false);
+    });
+
+    it("listChannels includes model field", () => {
+      store.updateChannelModel(channelId, "gpt-4.1");
+      const channels = store.listChannels();
+      const ch = channels.find((c) => c.id === channelId);
+      expect(ch?.model).toBe("gpt-4.1");
+    });
+  });
 });

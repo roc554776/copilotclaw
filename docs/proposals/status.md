@@ -146,6 +146,26 @@
 
 - Gateway-Agent 責務の再配置（v0.54.0）: swallowed-message 検出を gateway に移行、MAX_REINJECT を gateway config 化、reminderState を gateway に移行（session_event 監視で判定）、agent コメントの abstract session 言及修正、初期化シーケンス修正（stream_connected ハンドラを config 受信前に登録）、pooled CopilotClient の start 修正
 
+- チャンネルごとのモデル設定（channels テーブルに model カラム追加、PATCH API 拡張、物理セッション起動時にチャンネル model 優先、config.json の `channels` セクションで永続化・API 変更時の書き戻し）（v0.55.0-v0.57.0）
+
+- Cron の `enabled` → `disabled` フラグ変更（デフォルト `false` の否定形フラグに変更、config migration v4→v5）（v0.55.0）
+
+- アーカイブされたチャンネルの cron 無効化（スケジューラ登録時・tick 時にアーカイブ状態確認、アーカイブ済みチャンネルのジョブをスキップ）（v0.55.0）
+
+- Cron 設定のリロード（`copilotclaw cron reload` CLI、`POST /api/cron/reload` API、設定差分なしジョブのタイマー保持。`copilotclaw cron list` CLI、`GET /api/cron` API）（v0.55.0）
+
+- チャンネル設定モーダル（chat 画面のタブ channel ID クリックで開く。モデル表示・設定、物理セッションアーカイブ、cron ジョブの変更/追加/削除 + 自動リロード）（v0.55.0-v0.56.0）
+
+- 物理セッション停止 API（`POST /api/sessions/{{sessionId}}/stop`、チャンネル設定モーダルからの物理セッションアーカイブに使用）（v0.55.0）
+
+- session.idle での subagent 停止と親 agent idle の区別（backgroundTasks フィールドと copilotclaw_wait 実行状態で判定。subagent 停止時は action: "wait"、真の idle は action: "stop"。backgroundTasks 存在時は currentState を idle に上書きしない）（v0.57.0）
+
+- physical session の常時保持（idle 停止時に physicalSession をクリアせず currentState: "stopped" で保持。suspendSession は明示的 archive のみ）（v0.58.0）
+
+- turn run 概念の導入（idle で turn run 終了 → idleSession()。turn run 強制停止 API `POST /api/sessions/{{sessionId}}/end-turn-run`。次の turn run 開始時にモデル切り替え）（v0.58.0）
+
+- セッション status の細分化（new/starting/waiting/notified/processing/idle/suspended の 7 状態。tool.execution_start で processing/waiting を自動設定。message 到着時に waiting → notified 遷移）（v0.58.0）
+
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 

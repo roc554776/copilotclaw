@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentPromptConfig, resolveModel } from "./agent-config.js";
 import { AgentManager } from "./agent-manager.js";
-import { getProfileName, getStateDir, loadConfig, resolvePort } from "./config.js";
+import { type CronJobConfig, getProfileName, getStateDir, loadConfig, loadFileConfig, resolvePort, saveConfig } from "./config.js";
 import { LogBuffer } from "./log-buffer.js";
 import { initOtel, shutdownOtel } from "./otel.js";
 import { initMetrics } from "./otel-metrics.js";
@@ -30,6 +30,16 @@ async function main(): Promise<void> {
   initOtel({ endpoints: otelEndpoints, serviceName: "copilotclaw-gateway" });
   initMetrics();
   const store = new Store({ persistPath: getStoreDbPath(getProfileName()), legacyJsonPath: getStoreFilePath(getProfileName()) });
+
+  // Sync channel model settings from config.json to DB on startup
+  const channelConfigs = config.channels ?? {};
+  for (const [channelId, chConfig] of Object.entries(channelConfigs)) {
+    const ch = store.getChannel(channelId);
+    if (ch !== undefined) {
+      store.updateChannelModel(channelId, chConfig.model ?? null);
+    }
+  }
+
   const port = resolvePort(getProfileName());
   const agentManager = new AgentManager();
 
@@ -74,6 +84,9 @@ async function main(): Promise<void> {
   // copilotclaw_send_message was called since. If so, the agent swallowed
   // the message (processed it but never replied to the user).
   const pendingReplyExpected = new Map<string, boolean>();
+  // Tracks whether the most recent session.idle event for a session had backgroundTasks.
+  // Used by onLifecycle to distinguish subagent stop from true parent-agent idle.
+  const lastIdleHasBackgroundTasks = new Map<string, boolean>();
 
   const SWALLOWED_MESSAGE_INSTRUCTION =
     `[SYSTEM] CRITICAL: You received user message(s) but called copilotclaw_wait ` +
@@ -154,7 +167,24 @@ async function main(): Promise<void> {
         // Error: stop the session and clear copilotSessionId (don't try to resume a broken session)
         return { action: "stop", clearCopilotSessionId: true };
       }
-      // Idle exit: stop the session (LLM finished without calling copilotclaw_wait)
+
+      // Idle exit: distinguish subagent stop from true parent-agent idle.
+      // If the most recent session.idle had backgroundTasks, a subagent just stopped
+      // and the parent agent is likely still running copilotclaw_wait.
+      if (lastIdleHasBackgroundTasks.get(request.sessionId) === true) {
+        console.error(`[gateway] session ${request.sessionId.slice(0, 8)} idle with backgroundTasks — waiting (subagent stop)`);
+        lastIdleHasBackgroundTasks.delete(request.sessionId);
+        return { action: "wait" };
+      }
+
+      // If copilotclaw_wait is still executing, the parent agent is active.
+      const sessionState = orchestrator.getSessionStatuses()[request.sessionId];
+      if (sessionState?.physicalSession?.currentState === "tool:copilotclaw_wait") {
+        console.error(`[gateway] session ${request.sessionId.slice(0, 8)} idle but copilotclaw_wait active — waiting`);
+        return { action: "wait" };
+      }
+
+      // True idle: LLM finished without calling copilotclaw_wait — stop the session
       return { action: "stop" };
     },
     onHook: (request) => {
@@ -220,13 +250,32 @@ async function main(): Promise<void> {
       const orchSessionId = sessionId;
       if (orchestrator.getSessionStatuses()[orchSessionId] !== undefined) {
         switch (eventType) {
-          case "tool.execution_start":
-            orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${data["toolName"] as string ?? "unknown"}`);
+          case "tool.execution_start": {
+            const toolName = data["toolName"] as string ?? "unknown";
+            orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${toolName}`);
+            // Update abstract status based on tool type
+            if (toolName === "copilotclaw_wait") {
+              orchestrator.updateSessionStatus(orchSessionId, "waiting");
+            } else {
+              orchestrator.updateSessionStatus(orchSessionId, "processing");
+            }
             break;
+          }
           case "tool.execution_complete":
-          case "session.idle":
             orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
             break;
+          case "session.idle": {
+            const bgTasks = data["backgroundTasks"];
+            lastIdleHasBackgroundTasks.set(orchSessionId, bgTasks != null);
+            // Only transition to "idle" when there are no background tasks.
+            // When backgroundTasks is present, a subagent stopped but the parent
+            // agent's tool (e.g. copilotclaw_wait) is still executing — preserve
+            // the current state so the onLifecycle fallback check can detect it.
+            if (bgTasks == null) {
+              orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
+            }
+            break;
+          }
           case "session.usage_info": {
             const currentTokens = data["currentTokens"] as number ?? 0;
             const tokenLimit = data["tokenLimit"] as number ?? 0;
@@ -337,6 +386,13 @@ async function main(): Promise<void> {
     onPhysicalSessionEnded: (sessionId, reason, _copilotSessionId, elapsedMs, error) => {
       console.error(`[gateway] physical session ended: session=${sessionId.slice(0, 8)}, reason=${reason}, elapsed=${Math.round(elapsedMs / 1000)}s`);
 
+      // Clear per-session state on physical session boundary.
+      // Without this, a new physical session on the same abstract session would
+      // inherit stale state (e.g., swallowed-message flag from the previous session).
+      pendingReplyExpected.delete(sessionId);
+      reminderStates.delete(sessionId);
+      lastIdleHasBackgroundTasks.delete(sessionId);
+
       // Check for rapid failure and record backoff
       const session = orchestrator.getSessionStatuses()[sessionId];
       const channelId = session?.channelId;
@@ -345,16 +401,26 @@ async function main(): Promise<void> {
         console.error(`[gateway] channel ${channelId.slice(0, 8)} entering ${promptConfig.backoffDurationMs / 1000}s backoff after rapid failure (${elapsedMs}ms)`);
       }
 
-      // Mark physical session as stopped, then suspend.
       // Token counts are already accumulated in real-time via assistant.usage events.
       orchestrator.updatePhysicalSessionState(sessionId, "stopped");
-      orchestrator.suspendSession(sessionId);
 
+      // If the session was already transitioned by an API call (end-turn-run
+      // sets "idle", stop sets "suspended"), skip redundant state transition
+      // to avoid double token accumulation.
+      if (session?.status === "idle" || session?.status === "suspended") {
+        // no-op: API already transitioned the session
+      } else if (reason === "idle") {
+        // Turn run ended (true idle): keep physical session visible, set status to "idle"
+        orchestrator.idleSession(sessionId);
+      } else {
+        // Error or abort: full suspend (archive physical session)
+        orchestrator.suspendSession(sessionId);
 
-      // Notify channel about unexpected stop
-      if (channelId !== undefined && reason !== "idle") {
-        const detail = error !== undefined ? `: ${error}` : "";
-        store.addMessage(channelId, "system", `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`);
+        // Notify channel about unexpected stop
+        if (channelId !== undefined) {
+          const detail = error !== undefined ? `: ${error}` : "";
+          store.addMessage(channelId, "system", `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`);
+        }
       }
 
       // Flush pending messages for the channel
@@ -410,11 +476,13 @@ async function main(): Promise<void> {
     const sessionId = orchestrator.startSession(channelId);
     const session = orchestrator.getSessionStatuses()[sessionId];
 
-    // Resolve model on gateway side
+    // Resolve model on gateway side (channel model overrides global config)
     let resolvedModelName: string | undefined;
     try {
       const modelsResponse = await agentManager.getModels();
-      resolvedModelName = resolveModel(modelsResponse, config.model ?? null, config.zeroPremium ?? false);
+      const channel = store.getChannel(channelId);
+      const configModel = channel?.model ?? config.model ?? null;
+      resolvedModelName = resolveModel(modelsResponse, configModel, config.zeroPremium ?? false);
     } catch {
       // Model resolution failed — agent will fall back to its own resolution
     }
@@ -440,20 +508,38 @@ async function main(): Promise<void> {
     }
   };
 
-  // Need to capture serverHandle for SSE broadcaster access in stream handler
-  let serverHandle: Awaited<ReturnType<typeof startServer>> | undefined;
-  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator });
+  // Cron scheduler: periodically send cron messages to channels.
+  // Supports dynamic reload — existing timers for unchanged jobs are preserved.
+  interface CronTimerEntry {
+    job: import("./config.js").CronJobConfig;
+    timer: ReturnType<typeof setInterval>;
+  }
+  const cronTimerMap = new Map<string, CronTimerEntry>();
 
-  // Cron scheduler: periodically send cron messages to channels
-  const cronJobs = config.cron ?? [];
-  const cronTimers: ReturnType<typeof setInterval>[] = [];
-  for (const job of cronJobs) {
-    if (job.enabled === false) {
+  /** Serialize a cron job config for diff comparison (all fields that affect scheduling). */
+  const cronJobKey = (job: import("./config.js").CronJobConfig): string =>
+    JSON.stringify({ id: job.id, channelId: job.channelId, intervalMs: job.intervalMs, message: job.message, disabled: job.disabled ?? false });
+
+  /** Schedule a single cron job. Returns the timer entry or undefined if skipped. */
+  const scheduleCronJob = (job: import("./config.js").CronJobConfig): CronTimerEntry | undefined => {
+    if (job.disabled === true) {
       console.error(`[gateway] cron job '${job.id}' skipped (disabled)`);
-      continue;
+      return undefined;
+    }
+    // Skip if channel is archived
+    const ch = store.getChannel(job.channelId);
+    if (ch?.archivedAt != null) {
+      console.error(`[gateway] cron job '${job.id}' skipped (channel archived)`);
+      return undefined;
     }
     const timer = setInterval(() => {
       console.error(`[gateway] cron tick: ${job.id}`);
+      // Re-check archive status on each tick
+      const tickCh = store.getChannel(job.channelId);
+      if (tickCh?.archivedAt != null) {
+        console.error(`[gateway] cron ${job.id}: skipped (channel archived)`);
+        return;
+      }
       const prefix = `[cron:${job.id}] `;
       if (store.hasPendingCronMessage(job.channelId, prefix)) {
         console.error(`[gateway] cron ${job.id}: skipped (pending dedup)`);
@@ -464,17 +550,109 @@ async function main(): Promise<void> {
         startSessionForChannel(job.channelId).catch((err: unknown) => {
           console.error(`[gateway] cron ${job.id}: failed to start session:`, err);
         });
-        // Fallback: also send agent_notify for backward compat
         const cronSessionId = orchestrator.getSessionIdForChannel(job.channelId);
         if (cronSessionId !== undefined) {
           agentManager.notifyAgent(cronSessionId);
+          const cronSess = orchestrator.getSessionStatuses()[cronSessionId];
+          if (cronSess?.status === "waiting") {
+            orchestrator.updateSessionStatus(cronSessionId, "notified");
+          }
         }
       }
     }, job.intervalMs);
     timer.unref();
-    cronTimers.push(timer);
     console.error(`[gateway] cron job '${job.id}' scheduled for channel ${job.channelId.slice(0, 8)} every ${Math.round(job.intervalMs / 1000)}s`);
-  }
+    return { job, timer };
+  };
+
+  /** Reload cron scheduler from a list of job configs. Preserves timers for unchanged jobs. */
+  const reloadCronScheduler = (jobs: import("./config.js").CronJobConfig[]) => {
+    const newKeys = new Map<string, import("./config.js").CronJobConfig>();
+    for (const job of jobs) {
+      newKeys.set(job.id, job);
+    }
+
+    // Remove jobs that no longer exist or have changed
+    for (const [id, entry] of cronTimerMap) {
+      const newJob = newKeys.get(id);
+      if (newJob === undefined || cronJobKey(newJob) !== cronJobKey(entry.job)) {
+        clearInterval(entry.timer);
+        cronTimerMap.delete(id);
+        if (newJob === undefined) {
+          console.error(`[gateway] cron job '${id}' removed`);
+        } else {
+          console.error(`[gateway] cron job '${id}' changed, rescheduling`);
+        }
+      }
+    }
+
+    // Add new or changed jobs
+    for (const job of jobs) {
+      if (cronTimerMap.has(job.id)) continue; // unchanged, keep existing timer
+      const entry = scheduleCronJob(job);
+      if (entry !== undefined) {
+        cronTimerMap.set(job.id, entry);
+      }
+    }
+  };
+
+  /** Get the current list of cron jobs with their scheduling status. */
+  const getCronJobStatuses = (): Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled: boolean; scheduled: boolean }> => {
+    const currentConfig = loadConfig(getProfileName());
+    const jobs = currentConfig.cron ?? [];
+    return jobs.map((job) => {
+      const ch = store.getChannel(job.channelId);
+      const effectivelyDisabled = (job.disabled === true) || (ch?.archivedAt != null);
+      return {
+        id: job.id,
+        channelId: job.channelId,
+        intervalMs: job.intervalMs,
+        message: job.message,
+        disabled: job.disabled ?? false,
+        scheduled: cronTimerMap.has(job.id) && !effectivelyDisabled,
+      };
+    });
+  };
+
+  // Initial cron scheduling
+  reloadCronScheduler(config.cron ?? []);
+
+  // Start HTTP server (after cron scheduler is initialized, so reload/list handlers are available)
+  const onCronReload = () => {
+    const freshConfig = loadConfig(getProfileName());
+    reloadCronScheduler(freshConfig.cron ?? []);
+    console.error("[gateway] cron scheduler reloaded");
+  };
+  let serverHandle: Awaited<ReturnType<typeof startServer>> | undefined;
+  const saveCronJobs = (jobs: CronJobConfig[]) => {
+    const fileConfig = loadFileConfig(getProfileName());
+    fileConfig.cron = jobs;
+    saveConfig(fileConfig, getProfileName());
+    // Reload scheduler with the new config
+    reloadCronScheduler(jobs);
+    console.error(`[gateway] cron config saved (${jobs.length} jobs) and scheduler reloaded`);
+  };
+  const saveChannelModel = (channelId: string, model: string | null) => {
+    const fileConfig = loadFileConfig(getProfileName());
+    if (fileConfig.channels === undefined) fileConfig.channels = {};
+    if (model !== null) {
+      fileConfig.channels[channelId] = { ...fileConfig.channels[channelId], model };
+    } else {
+      if (fileConfig.channels[channelId] !== undefined) {
+        delete fileConfig.channels[channelId]!.model;
+        // Remove empty channel config entry
+        if (Object.keys(fileConfig.channels[channelId]!).length === 0) {
+          delete fileConfig.channels[channelId];
+        }
+      }
+      // Remove empty channels section
+      if (Object.keys(fileConfig.channels).length === 0) {
+        delete fileConfig.channels;
+      }
+    }
+    saveConfig(fileConfig, getProfileName());
+  };
+  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator, onCronReload, getCronJobStatuses: () => getCronJobStatuses(), saveCronJobs, saveChannelModel });
 
   // Periodic agent process monitoring
   let consecutiveFailures = 0;
@@ -525,8 +703,8 @@ async function main(): Promise<void> {
 
   // On stream "disconnected" event: suspend all active sessions (agent restart scenario)
   agentManager.onStreamDisconnected(() => {
-    console.error("[gateway] stream disconnected, suspending all active sessions");
-    orchestrator.suspendAllActive();
+    console.error("[gateway] stream disconnected, idling all active sessions");
+    orchestrator.idleAllActive();
   });
 
   // Graceful shutdown on process exit

@@ -4,6 +4,7 @@ export interface Channel {
   id: string;
   createdAt: string;
   archivedAt?: string | null;
+  model?: string | null;
 }
 
 export interface Message {
@@ -223,5 +224,66 @@ export async function fetchTokenUsage(hours?: number, from?: string, to?: string
   const res = await fetch(`/api/token-usage?${params.toString()}`);
   if (!res.ok) return [];
   return res.json() as Promise<TokenUsageEntry[]>;
+}
+
+export async function updateChannelModel(channelId: string, model: string | null): Promise<Channel> {
+  const res = await fetch(`/api/channels/${encodeURIComponent(channelId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+  });
+  if (!res.ok) throw new Error(`update channel model ${res.status}`);
+  return res.json() as Promise<Channel>;
+}
+
+export async function stopSession(sessionId: string): Promise<void> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/stop`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`stop session ${res.status}`);
+}
+
+export async function endTurnRun(sessionId: string): Promise<void> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/end-turn-run`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`end turn run ${res.status}`);
+}
+
+export interface CronJobStatus {
+  id: string;
+  channelId: string;
+  intervalMs: number;
+  message: string;
+  disabled: boolean;
+  scheduled: boolean;
+}
+
+export async function fetchCronJobs(): Promise<CronJobStatus[]> {
+  const res = await fetch("/api/cron");
+  if (!res.ok) return [];
+  return res.json() as Promise<CronJobStatus[]>;
+}
+
+export async function reloadCron(): Promise<void> {
+  const res = await fetch("/api/cron/reload", { method: "POST" });
+  if (!res.ok) throw new Error(`cron reload ${res.status}`);
+}
+
+export interface CronJobInput {
+  id: string;
+  channelId: string;
+  intervalMs: number;
+  message: string;
+  disabled?: boolean;
+}
+
+export async function saveCronJobs(jobs: CronJobInput[]): Promise<void> {
+  const res = await fetch("/api/cron", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(jobs),
+  });
+  if (!res.ok) throw new Error(`save cron ${res.status}`);
 }
 

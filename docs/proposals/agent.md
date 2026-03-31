@@ -202,7 +202,7 @@ Agent session はコストが高い（プレミアムリクエスト消費）。
 - **起動条件**: channel に agent にまだ読まれていない user message（pending message）がある場合にのみ新規起動する。channel が存在するだけでは起動しない
 - **維持**: 起動した session はできるだけ長く使い続ける。pending message がない状態が続いていることは session 終了の理由にならない
 - **終了条件**: session を終了するのは以下の場合のみ:
-  - session が意図せず idle になった場合（LLM が tool を呼ばなかった）
+  - session が意図せず idle になった場合（LLM が tool を呼ばなかった）。ただし subagent 停止による session.idle は除外する（後述）
   - session 寿命制限に到達した場合（デフォルト 2 日）
   - stale session タイムアウト（processing 状態が 10 分超過）
   - 明示的な停止要求（`copilotclaw agent stop` 等）
@@ -238,6 +238,97 @@ Agent session 起動（session.send を 1 回だけ使用）
 - セッションは tool 実行中として生かし続けられる
 - `copilotclaw_send_message` は即時 return なので、作業を中断せずに状況報告できる
 - 新着 user message は `onPostToolUse` hook の `additionalContext` で LLM に通知される
+
+### session.idle での subagent 停止と親 agent idle の区別
+
+session.idle イベントには、subagent が停止しただけで親 agent はまだ `copilotclaw_wait` で待機中というケースと、親 agent 自身が idle になったケースの 2 種類がある。以下の判定ロジックで区別し、subagent 停止時は `action: "wait"` を返す。
+
+**判定ロジック:**
+
+session.idle が「親 agent の真の idle」か「subagent 停止による idle」かを以下の条件で判定する:
+
+- **subagent 停止による idle**: `session.idle` イベントの `data.backgroundTasks` が null でない（subagent が停止しただけである）
+- **copilotclaw_wait 実行中**: gateway 側で各物理セッションの `currentState` を追跡しており、`tool:copilotclaw_wait` の状態にあるならば、親 agent はまだアクティブ（tool 実行中）
+- 上記いずれかに該当する場合、lifecycle handler は `action: "stop"` ではなく `action: "wait"` を返す
+
+**変更箇所:**
+
+- **gateway daemon.ts `onSessionEvent`**: `session.idle` イベント受信時に `data.backgroundTasks` を抽出し、物理セッションの状態と組み合わせて判定に使う
+- **gateway daemon.ts `onLifecycle`**: idle イベントの判定で、上記条件に該当する場合は `action: "wait"` を返す。agent 側の `queryLifecycleAction` は変更不要（gateway の判断に従う既存の仕組み）
+- **agent の変更は不要**: lifecycle RPC で gateway に判断を委ねる既存の設計を維持する
+
+**agent 側で idle イベントの data を lifecycle RPC に含めるかどうか:**
+
+現状、agent の `queryLifecycleAction` は `event: "idle"` のみを送信し、`backgroundTasks` 情報を含めていない。gateway 側で session_event の `session.idle` データから `backgroundTasks` を取得できるため、agent 側の変更は不要。ただし、session_event と lifecycle RPC のタイミングにずれがある可能性があるため、agent 側から `backgroundTasks` を lifecycle RPC に含める方式も検討する。
+
+### physical session の常時保持（v0.58.0 で実現済み）
+
+chat 履歴があるチャンネルでは、current physical session が常に存在する状態を維持する。
+
+**現状の問題:**
+- 物理セッションが idle で停止すると、抽象セッションが suspended になり `physicalSession` が undefined になる
+- status 表示や cron 設定で物理セッションの情報（モデル等）が見えなくなり、使いづらい
+- 最後に使った物理セッションは `physicalSessionHistory` に退避されるが、current として表示されない
+
+**方針:**
+- 物理セッションが idle 停止しても、SDK セッションとしては停止するが、gateway 側では `physicalSession` フィールドをクリアせず、最後に使った物理セッションの情報を current として保持し続ける
+- 新しい物理セッションが開始されたときに current が上書きされる
+- 物理セッションの archive（明示的な削除）は既存の機能で対応
+
+### turn run（連続した turn 列）の概念導入（v0.58.0 で実現済み）
+
+セッションの子として、プレミアムリクエスト 1 回の消費に対応する連続 turn 列の概念を導入する。human は「連続した turn 列のような概念に適切に呼びやすく、内容とも一致している名前をつけて」と要望しており、本 proposal では「turn run」と命名する。
+
+**概念定義:**
+- **turn run**: session.send() または resumeSession() により開始され、親 agent（subagent でない）の session.idle により終了する、連続した turn の列。プレミアムリクエスト 1 回の消費に対応する
+- turn run の中では copilotclaw_wait による keepalive が繰り返され、LLM が自律的に動作し続ける
+- subagent の session.idle は turn run の終了とみなさない（subagent 停止は親 agent の動作に影響しない）
+- 親 agent の session.idle が来ると turn run が終了し、次の turn run 開始時にプレミアムリクエストが 1 回消費される
+
+**turn run 境界でのモデル切り替え:**
+- turn run が停止したら、次の turn run 開始時にチャンネルのモデル設定値を反映してモデルを切り替える
+- 現状は物理セッション全体の archive でしかモデル切り替えのタイミングがないが、turn run の強制停止で軽量にモデル切り替えが可能になる
+
+**turn run の強制停止:**
+- 既存の physical session archive に加えて、turn run の強制停止機能を提供する
+- turn run を停止すると、物理セッション自体は維持したまま、次の会話から設定したモデルが適用される
+- UI: チャンネル設定モーダルに「turn run 停止」ボタンを追加
+- API: 新規エンドポイントまたは既存の lifecycle RPC を利用
+
+### セッション status の細分化（v0.58.0 で実現済み）
+
+抽象セッションの status をより細かく区別して表示する。
+
+**現状の status:**
+- `starting`: 物理セッション作成中
+- `waiting`: copilotclaw_wait で待機中
+- `processing`: LLM が処理中
+- `suspended`: 物理セッションが停止し、抽象セッションのみ存続
+
+**新しい status 体系:**
+
+| status | 意味 |
+|---|---|
+| `new` | abstract session に physical session が一度も紐づいていない初期状態 |
+| `starting` | 物理セッション作成中 |
+| `waiting` | copilotclaw_wait で待機中（turn run は継続中） |
+| `notified` | wait で待っていたが新規 message が到着し、wait が解かれるまでの遷移中 |
+| `processing` | LLM が処理中（tool 実行中を含む） |
+| `idle` | turn run が終了し、物理セッションは存在するが idle 状態 |
+| `suspended` | 物理セッションが明示的に archive された状態（※ 現行の suspended は全ての物理セッション停止を含むが、本提案では idle と suspended を分離し、suspended は明示的 archive のみに限定する設計変更） |
+
+**status 遷移:**
+```
+new → starting → waiting ⇄ notified → processing → waiting（turn run 継続）
+                                                   → idle（turn run 終了）
+idle → starting（次の turn run 開始、プレミアムリクエスト消費）
+idle → suspended（明示的 archive）
+suspended → starting（revive）
+```
+
+**`notified` status の導入理由:**
+- wait で待っていたが新規 message が入ってきて、wait が解かれるまでの間を示す
+- UI 上で「メッセージを受信した、処理中になるところ」を視覚的に示すことで、反応性の高い UI を実現する
 
 ### 物理セッションの意図しない停止とリカバリ
 

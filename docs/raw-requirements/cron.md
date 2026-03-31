@@ -31,3 +31,20 @@
 
 - chat operator のプロンプトの修正をして、 cron 的なのからタスクが来ることがあること、その場合には worker subagent に委譲することをマージしましょう。
 - 別件ですが chat operator のプロンプトに、subagent 呼び出しでは常に background mode で、 worker 以外使うな、という内容をマージしておきましょう。
+
+<!-- 2026-03-31 -->
+## cron の設定リロードコマンド
+
+- cron の設定をリロードするコマンドを作る
+  - cron reload
+  - cron list
+  - リロード時に、設定差分がないもののタイマーをリセットしないように注意
+
+## cron の設定フィールドの変更
+
+- cron の設定フィールドは、 enabled ではなく disabled にする。（default false）
+  - 理由: デフォルトが true のフラグは基本的にバグの温床になる
+
+## archive されたチャンネルの cron
+
+- archive されたチャンネルの cron は設定値に関係なく disabled として扱う

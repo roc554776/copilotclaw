@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 
 import type { PhysicalSessionSummary, SubagentInfo } from "./ipc-client.js";
 
-export type AbstractSessionStatus = "starting" | "waiting" | "processing" | "suspended";
+export type AbstractSessionStatus = "new" | "starting" | "waiting" | "notified" | "processing" | "idle" | "suspended";
 
 export interface AbstractSession {
   sessionId: string;
@@ -42,13 +42,49 @@ export class SessionOrchestrator {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.initSchema();
-    this.loadFromDb();
 
-    // One-time migration from legacy agent-bindings.json
+    // One-time migration from legacy agent-bindings.json (must run before data migrations
+    // so that imported legacy data is included in the migration scope)
     if (options?.legacyBindingsPath !== undefined) {
       this.migrateFromLegacyBindings(options.legacyBindingsPath);
     }
+
+    this.runDataMigrations();
+    this.loadFromDb();
   }
+
+  private static readonly LATEST_SCHEMA_VERSION = 3;
+
+  private static readonly SCHEMA_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
+    // v0 → v1: Convert legacy "suspended" sessions with channel binding + history to "idle".
+    0: (db) => {
+      db.prepare(
+        `UPDATE abstract_sessions SET status = 'idle' WHERE status = 'suspended' AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
+      ).run();
+    },
+    // v1 → v2: Convert all non-idle channel-bound sessions to "idle" on startup.
+    // Before v0.58.0, sessions could be persisted in any status (starting, waiting,
+    // processing, suspended) depending on when the gateway was stopped. All of these
+    // are stale after restart and should be "idle" (no running physical session).
+    1: (db) => {
+      // Sessions with history → idle (physical session info can be restored from history)
+      db.prepare(
+        `UPDATE abstract_sessions SET status = 'idle' WHERE status != 'idle' AND channelId IS NOT NULL AND physicalSessionHistory != '[]'`,
+      ).run();
+      // Sessions without history → new (no physical session info to restore)
+      db.prepare(
+        `UPDATE abstract_sessions SET status = 'new' WHERE status NOT IN ('idle', 'new') AND channelId IS NOT NULL AND physicalSessionHistory = '[]'`,
+      ).run();
+    },
+    // v2 → v3: Fix sessions left as "idle" without history (should be "new").
+    // v1→v2 migration set history=0 sessions to "new" but only ran on fresh installs.
+    // Existing DBs that already had version=2 need this cleanup.
+    2: (db) => {
+      db.prepare(
+        `UPDATE abstract_sessions SET status = 'new' WHERE status = 'idle' AND channelId IS NOT NULL AND physicalSessionHistory = '[]'`,
+      ).run();
+    },
+  };
 
   private initSchema(): void {
     this.db.exec(`
@@ -61,8 +97,30 @@ export class SessionOrchestrator {
         cumulativeInputTokens INTEGER NOT NULL DEFAULT 0,
         cumulativeOutputTokens INTEGER NOT NULL DEFAULT 0,
         physicalSessionHistory TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE TABLE IF NOT EXISTS orchestrator_schema_version (
+        version INTEGER NOT NULL
       )
     `);
+  }
+
+  /** Apply sequential data migrations from the current version to LATEST_SCHEMA_VERSION. */
+  private runDataMigrations(): void {
+    const row = this.db.prepare("SELECT version FROM orchestrator_schema_version LIMIT 1").get() as { version: number } | undefined;
+    let version = row?.version ?? 0;
+
+    while (version < SessionOrchestrator.LATEST_SCHEMA_VERSION) {
+      const fn = SessionOrchestrator.SCHEMA_MIGRATIONS[version];
+      if (fn === undefined) break;
+      fn(this.db);
+      version++;
+    }
+
+    if (row === undefined) {
+      this.db.prepare("INSERT INTO orchestrator_schema_version (version) VALUES (?)").run(version);
+    } else if (version !== row.version) {
+      this.db.prepare("UPDATE orchestrator_schema_version SET version = ?").run(version);
+    }
   }
 
   /** Load all sessions from SQLite into in-memory maps on construction. */
@@ -88,14 +146,24 @@ export class SessionOrchestrator {
         // Invalid JSON — use empty array
       }
 
+      const status = (row.status as AbstractSessionStatus) ?? "suspended";
+
+      // For "idle" sessions (including those migrated from "suspended" by schema migration v0→v1),
+      // restore the last physical session from history so it remains visible in the UI.
+      let physicalSession: PhysicalSessionSummary | undefined;
+      if (status === "idle" && history.length > 0) {
+        physicalSession = { ...history[history.length - 1]!, currentState: "stopped" };
+      }
+
       const session: AbstractSession = {
         sessionId: row.sessionId,
-        status: (row.status as AbstractSessionStatus) ?? "suspended",
+        status,
         channelId: row.channelId ?? undefined,
         startedAt: row.startedAt,
         copilotSessionId: row.copilotSessionId ?? undefined,
         cumulativeInputTokens: row.cumulativeInputTokens,
         cumulativeOutputTokens: row.cumulativeOutputTokens,
+        physicalSession,
         physicalSessionHistory: history,
       };
       this.sessions.set(session.sessionId, session);
@@ -221,8 +289,8 @@ export class SessionOrchestrator {
     if (existingSessionId !== undefined) {
       const existing = this.sessions.get(existingSessionId);
       if (existing !== undefined) {
-        if (existing.status === "suspended") {
-          // Revive
+        if (existing.status === "suspended" || existing.status === "idle" || existing.status === "new") {
+          // Revive from suspended, idle, or new
           existing.status = "starting";
           existing.channelId = channelId;
           this.persistSession(existing);
@@ -236,7 +304,7 @@ export class SessionOrchestrator {
     const sessionId = randomUUID();
     const session: AbstractSession = {
       sessionId,
-      status: "starting",
+      status: "new",
       channelId,
       startedAt: new Date().toISOString(),
       cumulativeInputTokens: 0,
@@ -258,14 +326,48 @@ export class SessionOrchestrator {
     if (session === undefined) return;
 
     if (session.physicalSession !== undefined) {
-      session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
-      session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
-      session.physicalSessionHistory.push(session.physicalSession);
-      session.physicalSession = undefined;
+      // If already idle, tokens were already accumulated and physicalSession
+      // was already pushed to history — just clear the visible reference.
+      if (session.status === "idle") {
+        session.physicalSession = undefined;
+      } else {
+        session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
+        session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
+        session.physicalSessionHistory.push(session.physicalSession);
+        session.physicalSession = undefined;
+      }
     }
     session.subagentSessions = undefined;
     session.processingStartedAt = undefined;
     session.status = "suspended";
+    this.persistSession(session);
+  }
+
+  /**
+   * Transition a session to idle (turn run ended).
+   * Accumulates token counts, archives physicalSession to history (so it
+   * survives restart), and keeps a visible reference with zeroed tokens.
+   */
+  idleSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return;
+
+    if (session.physicalSession !== undefined && session.status !== "idle") {
+      session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
+      session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
+      // Push to history with original token counts before zeroing, so that
+      // loadFromDb can restore a visible physicalSession on restart.
+      session.physicalSessionHistory.push({ ...session.physicalSession });
+      // Zero out to prevent double-counting if idleSession or suspendSession is called
+      // again on the same physical session (e.g., end-turn-run API followed by
+      // onPhysicalSessionEnded callback).
+      session.physicalSession.totalInputTokens = 0;
+      session.physicalSession.totalOutputTokens = 0;
+      session.physicalSession.currentState = "stopped";
+    }
+    session.subagentSessions = undefined;
+    session.processingStartedAt = undefined;
+    session.status = "idle";
     this.persistSession(session);
   }
 
@@ -288,7 +390,7 @@ export class SessionOrchestrator {
     const sessionId = this.channelBindings.get(channelId);
     if (sessionId === undefined) return false;
     const session = this.sessions.get(sessionId);
-    return session !== undefined && session.status !== "suspended";
+    return session !== undefined && session.status !== "suspended" && session.status !== "idle" && session.status !== "new";
   }
 
   /** Whether the channel is currently in a backoff period. */
@@ -336,6 +438,11 @@ export class SessionOrchestrator {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     session.status = status;
+    if (status === "processing") {
+      session.processingStartedAt = new Date().toISOString();
+    } else {
+      session.processingStartedAt = undefined;
+    }
     this.persistSession(session);
   }
 
@@ -411,14 +518,14 @@ export class SessionOrchestrator {
   }
 
   /**
-   * Suspend all non-suspended sessions.
-   * Used when the agent stream disconnects (agent restart) to mark all
-   * physical sessions as ended while keeping abstract sessions alive.
+   * Transition all active sessions to idle (not suspended).
+   * Used when the agent stream disconnects (agent restart) — physical sessions
+   * are gone but abstract sessions should remain visible with their last state.
    */
-  suspendAllActive(): void {
+  idleAllActive(): void {
     for (const [sessionId, session] of this.sessions) {
-      if (session.status !== "suspended") {
-        this.suspendSession(sessionId);
+      if (session.status !== "suspended" && session.status !== "idle" && session.status !== "new") {
+        this.idleSession(sessionId);
       }
     }
   }
@@ -440,9 +547,9 @@ export class SessionOrchestrator {
     // This handles: gateway restart → orchestrator loads stale "active" state from SQLite
     // → agent is a new process with no sessions → stale active sessions must be suspended.
     for (const [sessionId, session] of this.sessions) {
-      if (session.status !== "suspended" && !reportedIds.has(sessionId)) {
-        console.error(`[orchestrator] reconciled: suspending stale session ${sessionId.slice(0, 8)} (not reported by agent)`);
-        this.suspendSession(sessionId);
+      if (session.status !== "suspended" && session.status !== "idle" && session.status !== "new" && !reportedIds.has(sessionId)) {
+        console.error(`[orchestrator] reconciled: idling stale session ${sessionId.slice(0, 8)} (not reported by agent)`);
+        this.idleSession(sessionId);
       }
     }
 
@@ -450,7 +557,7 @@ export class SessionOrchestrator {
     for (const running of runningSessions) {
       const existing = this.sessions.get(running.sessionId);
       if (existing !== undefined) {
-        if (existing.status === "suspended") {
+        if (existing.status === "suspended" || existing.status === "idle") {
           existing.status = running.status === "waiting" ? "waiting" : running.status === "processing" ? "processing" : "starting";
           this.persistSession(existing);
           console.error(`[orchestrator] reconciled: revived session ${running.sessionId.slice(0, 8)}`);

@@ -122,6 +122,15 @@ function parseChannelRoute(pathname: string): { channelId: string; action: strin
   return undefined;
 }
 
+export interface CronJobStatus {
+  id: string;
+  channelId: string;
+  intervalMs: number;
+  message: string;
+  disabled: boolean;
+  scheduled: boolean;
+}
+
 export interface ServerDeps {
   port?: number;
   store?: Store;
@@ -132,6 +141,10 @@ export interface ServerDeps {
   logBuffer?: LogBuffer;
   sessionEventStore?: SessionEventStore;
   sessionOrchestrator?: SessionOrchestrator;
+  onCronReload?: () => void;
+  getCronJobStatuses?: () => CronJobStatus[];
+  saveCronJobs?: (jobs: Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>) => void;
+  saveChannelModel?: (channelId: string, model: string | null) => void;
 }
 
 function createRequestHandler(
@@ -142,6 +155,10 @@ function createRequestHandler(
   logBuffer: LogBuffer,
   sessionEventStore: SessionEventStore | null,
   sessionOrchestrator: SessionOrchestrator | null,
+  onCronReload: (() => void) | null,
+  getCronJobStatuses: (() => CronJobStatus[]) | null,
+  saveCronJobs: ((jobs: Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>) => void) | null,
+  saveChannelModel: ((channelId: string, model: string | null) => void) | null,
 ) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
@@ -262,6 +279,99 @@ function createRequestHandler(
       return;
     }
 
+    // Cron management
+    if (fullPathname === "/api/cron" && method === "GET") {
+      if (getCronJobStatuses !== null) {
+        json(res, 200, getCronJobStatuses());
+      } else {
+        json(res, 200, []);
+      }
+      return;
+    }
+
+    if (fullPathname === "/api/cron/reload" && method === "POST") {
+      if (onCronReload !== null) {
+        onCronReload();
+        json(res, 200, { status: "reloaded" });
+      } else {
+        json(res, 503, { error: "cron reload not available" });
+      }
+      return;
+    }
+
+    if (fullPathname === "/api/cron" && method === "PUT") {
+      if (saveCronJobs === null) {
+        json(res, 503, { error: "cron save not available" });
+        return;
+      }
+      const body = parseJson(await readBody(req));
+      if (!Array.isArray(body)) {
+        json(res, 400, { error: "body must be an array of cron jobs" });
+        return;
+      }
+      const MIN_INTERVAL_MS = 10_000; // 10 seconds minimum to prevent abuse
+      for (const job of body) {
+        if (!isRecord(job) || typeof job["id"] !== "string" || typeof job["channelId"] !== "string" ||
+            typeof job["intervalMs"] !== "number" || typeof job["message"] !== "string") {
+          json(res, 400, { error: "each cron job must have id (string), channelId (string), intervalMs (number), message (string)" });
+          return;
+        }
+        if ((job["id"] as string).trim() === "" || (job["message"] as string).trim() === "") {
+          json(res, 400, { error: "id and message must be non-empty strings" });
+          return;
+        }
+        if (!Number.isFinite(job["intervalMs"]) || (job["intervalMs"] as number) < MIN_INTERVAL_MS) {
+          json(res, 400, { error: `intervalMs must be a finite number >= ${MIN_INTERVAL_MS}` });
+          return;
+        }
+        if (job["disabled"] !== undefined && typeof job["disabled"] !== "boolean") {
+          json(res, 400, { error: "disabled must be a boolean if provided" });
+          return;
+        }
+      }
+      // Reject duplicate IDs
+      const ids = new Set<string>();
+      for (const job of body) {
+        const id = (job as Record<string, unknown>)["id"] as string;
+        if (ids.has(id)) {
+          json(res, 400, { error: `duplicate cron job id: ${id}` });
+          return;
+        }
+        ids.add(id);
+      }
+      saveCronJobs(body as Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>);
+      json(res, 200, { status: "saved" });
+      return;
+    }
+
+    // Physical session stop via API (for channel settings modal)
+    const sessionStopMatch = /^\/api\/sessions\/([^/]+)\/stop$/.exec(fullPathname);
+    if (sessionStopMatch !== null && method === "POST") {
+      if (agentManager === null || sessionOrchestrator === null) {
+        json(res, 503, { error: "agent not available" });
+        return;
+      }
+      const sessionId = decodeURIComponent(sessionStopMatch[1]!);
+      agentManager.stopPhysicalSession(sessionId);
+      sessionOrchestrator.suspendSession(sessionId);
+      json(res, 200, { status: "stopped" });
+      return;
+    }
+
+    // Turn run stop via API (end current turn run, keep physical session visible)
+    const turnRunStopMatch = /^\/api\/sessions\/([^/]+)\/end-turn-run$/.exec(fullPathname);
+    if (turnRunStopMatch !== null && method === "POST") {
+      if (agentManager === null || sessionOrchestrator === null) {
+        json(res, 503, { error: "agent not available" });
+        return;
+      }
+      const sessionId = decodeURIComponent(turnRunStopMatch[1]!);
+      agentManager.stopPhysicalSession(sessionId);
+      sessionOrchestrator.idleSession(sessionId);
+      json(res, 200, { status: "idle" });
+      return;
+    }
+
     // Channel management (core — provider-agnostic)
     if (fullPathname === "/api/channels" && method === "GET") {
       const includeArchived = params.get("includeArchived") === "true";
@@ -280,23 +390,51 @@ function createRequestHandler(
       return;
     }
 
-    // Channel archive/unarchive
+    // Channel update (archive/unarchive and/or model setting)
     const channelPatchMatch = /^\/api\/channels\/([^/]+)$/.exec(fullPathname);
     if (channelPatchMatch !== null && method === "PATCH") {
       const channelId = decodeURIComponent(channelPatchMatch[1]!);
       const body = parseJson(await readBody(req));
-      if (!isRecord(body) || typeof body["archived"] !== "boolean") {
-        json(res, 400, { error: "missing 'archived' boolean field" });
+      if (!isRecord(body)) {
+        json(res, 400, { error: "invalid request body" });
         return;
       }
-      const ok = body["archived"]
-        ? store.archiveChannel(channelId)
-        : store.unarchiveChannel(channelId);
-      if (!ok) {
-        json(res, 404, { error: "channel not found or already in requested state" });
+
+      // Handle archive/unarchive
+      if (typeof body["archived"] === "boolean") {
+        const ok = body["archived"]
+          ? store.archiveChannel(channelId)
+          : store.unarchiveChannel(channelId);
+        if (!ok) {
+          json(res, 404, { error: "channel not found or already in requested state" });
+          return;
+        }
+      }
+
+      // Handle model setting (string to set, null to clear)
+      if ("model" in body) {
+        const modelVal = body["model"];
+        if (modelVal !== null && typeof modelVal !== "string") {
+          json(res, 400, { error: "'model' must be a string or null" });
+          return;
+        }
+        const ok = store.updateChannelModel(channelId, modelVal as string | null);
+        if (!ok) {
+          json(res, 404, { error: "channel not found" });
+          return;
+        }
+        // Write back to config.json
+        if (saveChannelModel !== null) {
+          saveChannelModel(channelId, modelVal as string | null);
+        }
+      }
+
+      const channel = store.getChannel(channelId);
+      if (channel === undefined) {
+        json(res, 404, { error: "channel not found" });
         return;
       }
-      json(res, 200, store.getChannel(channelId));
+      json(res, 200, channel);
       return;
     }
 
@@ -340,6 +478,11 @@ function createRequestHandler(
           const notifySessionId = sessionOrchestrator.getSessionIdForChannel(channelId);
           if (notifySessionId !== undefined) {
             agentManager.notifyAgent(notifySessionId);
+            // Transition to "notified" when a message arrives while waiting
+            const sess = sessionOrchestrator.getSessionStatuses()[notifySessionId];
+            if (sess?.status === "waiting") {
+              sessionOrchestrator.updateSessionStatus(notifySessionId, "notified");
+            }
           }
         }
         json(res, 201, msg);
@@ -557,7 +700,11 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
     new BuiltinChatChannel({ store, agentManager, sseBroadcaster }),
   ];
 
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator);
+  const onCronReload = options?.onCronReload ?? null;
+  const getCronJobStatuses = options?.getCronJobStatuses ?? null;
+  const saveCronJobs = options?.saveCronJobs ?? null;
+  const saveChannelModel = options?.saveChannelModel ?? null;
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, onCronReload, getCronJobStatuses, saveCronJobs, saveChannelModel);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {
