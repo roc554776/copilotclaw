@@ -515,6 +515,28 @@ function createRequestHandler(
         return;
       }
 
+      if (action === "draft" && method === "GET") {
+        const ch = store.getChannel(channelId);
+        json(res, 200, { draft: ch?.draft ?? null });
+        return;
+      }
+
+      if (action === "draft" && method === "PUT") {
+        const body = parseJson(await readBody(req));
+        if (!isRecord(body)) {
+          json(res, 400, { error: "invalid request body" });
+          return;
+        }
+        const draft = body["draft"];
+        if (draft !== null && typeof draft !== "string") {
+          json(res, 400, { error: "'draft' must be a string or null" });
+          return;
+        }
+        store.saveDraft(channelId, draft as string | null);
+        json(res, 200, { status: "saved" });
+        return;
+      }
+
       json(res, 404, { error: "unknown channel action" });
       return;
     }

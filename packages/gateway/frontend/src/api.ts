@@ -5,6 +5,7 @@ export interface Channel {
   createdAt: string;
   archivedAt?: string | null;
   model?: string | null;
+  draft?: string | null;
 }
 
 export interface Message {
@@ -287,3 +288,11 @@ export async function saveCronJobs(jobs: CronJobInput[]): Promise<void> {
   if (!res.ok) throw new Error(`save cron ${res.status}`);
 }
 
+export async function saveDraft(channelId: string, draft: string | null): Promise<void> {
+  const res = await fetch(`/api/channels/${encodeURIComponent(channelId)}/draft`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft }),
+  });
+  if (!res.ok) throw new Error(`save draft ${res.status}`);
+}

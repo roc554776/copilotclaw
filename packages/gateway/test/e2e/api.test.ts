@@ -873,6 +873,42 @@ describe("POST /api/sessions/:id/end-turn-run", () => {
   });
 });
 
+describe("PUT /api/channels/:id/draft", () => {
+  it("saves and retrieves a draft", async () => {
+    const putRes = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/draft`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draft: "hello draft" }),
+    });
+    expect(putRes.status).toBe(200);
+
+    const getRes = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/draft`);
+    expect(getRes.status).toBe(200);
+    const data = await getRes.json() as { draft: string | null };
+    expect(data.draft).toBe("hello draft");
+  });
+
+  it("clears draft with null", async () => {
+    await fetch(`${baseUrl}/api/channels/${defaultChannelId}/draft`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draft: null }),
+    });
+    const getRes = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/draft`);
+    const data = await getRes.json() as { draft: string | null };
+    expect(data.draft).toBeNull();
+  });
+
+  it("returns 400 for invalid draft type", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/draft`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draft: 123 }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("unknown routes", () => {
   it("returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);

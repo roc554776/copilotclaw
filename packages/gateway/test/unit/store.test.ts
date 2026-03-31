@@ -370,4 +370,37 @@ describe("Store", () => {
       expect(ch?.model).toBe("gpt-4.1");
     });
   });
+
+  describe("draft save", () => {
+    it("saves and retrieves draft", () => {
+      store.saveDraft(channelId, "hello draft");
+      const ch = store.getChannel(channelId);
+      expect(ch?.draft).toBe("hello draft");
+    });
+
+    it("clears draft with null", () => {
+      store.saveDraft(channelId, "some text");
+      store.saveDraft(channelId, null);
+      const ch = store.getChannel(channelId);
+      expect(ch?.draft).toBeNull();
+    });
+
+    it("clears draft with empty string", () => {
+      store.saveDraft(channelId, "some text");
+      store.saveDraft(channelId, "");
+      const ch = store.getChannel(channelId);
+      expect(ch?.draft).toBeNull();
+    });
+
+    it("returns false for nonexistent channel", () => {
+      expect(store.saveDraft("nonexistent", "text")).toBe(false);
+    });
+
+    it("draft is included in listChannels", () => {
+      store.saveDraft(channelId, "my draft");
+      const channels = store.listChannels();
+      const ch = channels.find((c) => c.id === channelId);
+      expect(ch?.draft).toBe("my draft");
+    });
+  });
 });

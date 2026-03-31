@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   archiveChannel,
@@ -13,6 +13,7 @@ import {
   endTurnRun,
   reloadCron,
   saveCronJobs,
+  saveDraft,
   sendMessage,
   stopSession,
   unarchiveChannel,
@@ -56,6 +57,18 @@ export function DashboardPage() {
   const loadingOlderRef = useRef(false);
   const [inputText, setInputText] = useState("");
   const [sending, setSending] = useState(false);
+
+  // Debounced draft save: aggregate changes over 1 second, send only the final value
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedSaveDraft = useMemo(() => {
+    return (channelId: string, text: string) => {
+      if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = setTimeout(() => {
+        draftTimerRef.current = null;
+        saveDraft(channelId, text || null).catch(() => {});
+      }, 1000);
+    };
+  }, []);
   const [sseConnected, setSseConnected] = useState(false);
   const [sessionStatus, setSessionStatus] = useState("--");
   const [gatewayVersion, setGatewayVersion] = useState("--");
@@ -103,14 +116,18 @@ export function DashboardPage() {
   messagesRef.current = messages;
   const activeChannelRef = useRef(activeChannelId);
 
-  // Reset messages when channel changes
+  // Reset messages and restore draft when channel changes
   useEffect(() => {
     if (activeChannelRef.current !== activeChannelId) {
       setMessages([]);
       setHasOlderMessages(true);
       activeChannelRef.current = activeChannelId;
+      // Restore draft from channel data
+      const ch = channels.find((c) => c.id === activeChannelId);
+      setInputText(ch?.draft ?? "");
+      if (inputRef.current) inputRef.current.style.height = "auto";
     }
-  }, [activeChannelId]);
+  }, [activeChannelId, channels]);
 
   // H-1: capture activeChannelId in closure
   const refreshMessages = useCallback(async () => {
@@ -301,6 +318,10 @@ export function DashboardPage() {
     if (!text || !activeChannelId) return;
     setSending(true);
     setInputText("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    // Clear draft immediately on send (cancel any pending debounce)
+    if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
+    saveDraft(activeChannelId, null).catch(() => {});
     try {
       await sendMessage(activeChannelId, text);
       await refreshMessages();
@@ -890,14 +911,22 @@ export function DashboardPage() {
         <textarea
           ref={inputRef}
           value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value;
+            setInputText(val);
+            if (activeChannelId) debouncedSaveDraft(activeChannelId, val);
+            // Auto-resize textarea height
+            const el = e.target;
+            el.style.height = "auto";
+            el.style.height = Math.min(el.scrollHeight, window.innerHeight * 0.4) + "px";
+          }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (e.key === "Enter" && (e.altKey || e.metaKey)) {
               e.preventDefault();
               handleSend();
             }
           }}
-          placeholder="Type a message..."
+          placeholder="Type a message... (Alt+Enter or Cmd+Enter to send)"
           rows={1}
           style={{
             flex: 1,
@@ -910,6 +939,8 @@ export function DashboardPage() {
             fontSize: "0.9rem",
             resize: "none",
             outline: "none",
+            overflow: "auto",
+            maxHeight: "40vh",
           }}
         />
         <button
