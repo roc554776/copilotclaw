@@ -805,7 +805,7 @@ gateway onSessionEvent ハンドラ
   → 条件を満たさない → 何もしない
 ```
 
-設計根拠: gateway は既に `session_event` として `assistant.message` を受信しているので、gateway 側の `onSessionEvent` で処理すべき。agent 側で直接 `channel_message` を送信するのは wrong-side ロジック。（未実現）
+設計根拠: gateway は既に `session_event` として `assistant.message` を受信しているので、gateway 側の `onSessionEvent` で処理すべき。agent 側で直接 `channel_message` を送信するのは wrong-side ロジック。（v0.62.0 で実現済み。MIN_AGENT_VERSION を 0.62.0 に引き上げ）
 
 - `copilotclaw_send_message` tool と `assistant.message` の両方が同じ内容を送る可能性がある。重複排除は現時点では行わない（agent のメッセージが届かないリスクの方が、重複するリスクより大きいため）
 - `assistant.message` はターンごとに複数回発生しうる（tool call の合間に assistant がテキストを返す場合）。各メッセージを個別に channel に反映する
