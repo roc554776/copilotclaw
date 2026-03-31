@@ -142,6 +142,7 @@ export interface ServerDeps {
   logBuffer?: LogBuffer;
   sessionEventStore?: SessionEventStore;
   sessionOrchestrator?: SessionOrchestrator;
+  sessionController?: import("./session-controller.js").SessionController;
   onCronReload?: () => void;
   getCronJobStatuses?: () => CronJobStatus[];
   saveCronJobs?: (jobs: Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>) => void;
@@ -156,6 +157,7 @@ function createRequestHandler(
   logBuffer: LogBuffer,
   sessionEventStore: SessionEventStore | null,
   sessionOrchestrator: SessionOrchestrator | null,
+  sessionController: import("./session-controller.js").SessionController | null,
   onCronReload: (() => void) | null,
   getCronJobStatuses: (() => CronJobStatus[]) | null,
   saveCronJobs: ((jobs: Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>) => void) | null,
@@ -348,8 +350,12 @@ function createRequestHandler(
         return;
       }
       const sessionId = decodeURIComponent(sessionStopMatch[1]!);
-      agentManager.stopPhysicalSession(sessionId);
-      sessionOrchestrator.suspendSession(sessionId);
+      if (sessionController !== null) {
+        sessionController.stopSession(sessionId);
+      } else {
+        agentManager.stopPhysicalSession(sessionId);
+        sessionOrchestrator.suspendSession(sessionId);
+      }
       json(res, 200, { status: "stopped" });
       return;
     }
@@ -362,8 +368,12 @@ function createRequestHandler(
         return;
       }
       const sessionId = decodeURIComponent(turnRunStopMatch[1]!);
-      agentManager.stopPhysicalSession(sessionId);
-      sessionOrchestrator.idleSession(sessionId);
+      if (sessionController !== null) {
+        sessionController.idleSession(sessionId);
+      } else {
+        agentManager.stopPhysicalSession(sessionId);
+        sessionOrchestrator.idleSession(sessionId);
+      }
       json(res, 200, { status: "idle" });
       return;
     }
@@ -464,28 +474,29 @@ function createRequestHandler(
           return;
         }
         const sender = senderRaw;
-        const msg = store.addMessage(channelId, sender, body["message"] as string);
-        if (msg === undefined) {
-          json(res, 404, { error: "channel not found" });
-          return;
-        }
-        // Notify all channel providers
-        for (const provider of channelProviders) {
-          provider.onMessage?.(channelId, sender, msg.message);
-        }
-        // Notify agent via IPC stream when a user or cron message arrives
-        if ((sender === "user" || sender === "cron") && agentManager !== null && sessionOrchestrator !== null) {
-          const notifySessionId = sessionOrchestrator.getSessionIdForChannel(channelId);
-          if (notifySessionId !== undefined) {
-            agentManager.notifyAgent(notifySessionId);
-            // Transition to "notified" when a message arrives while waiting
-            const sess = sessionOrchestrator.getSessionStatuses()[notifySessionId];
-            if (sess?.status === "waiting") {
-              sessionOrchestrator.updateSessionStatus(notifySessionId, "notified");
-            }
+        if (sessionController !== null) {
+          // Use SessionController for unified message delivery + session start
+          const { msg } = await sessionController.deliverMessage(channelId, sender, body["message"] as string);
+          if (msg === undefined) {
+            json(res, 404, { error: "channel not found" });
+            return;
           }
+          for (const provider of channelProviders) {
+            provider.onMessage?.(channelId, sender, msg.message);
+          }
+          json(res, 201, msg);
+        } else {
+          // Fallback when no SessionController (e.g., tests with minimal deps)
+          const msg = store.addMessage(channelId, sender, body["message"] as string);
+          if (msg === undefined) {
+            json(res, 404, { error: "channel not found" });
+            return;
+          }
+          for (const provider of channelProviders) {
+            provider.onMessage?.(channelId, sender, msg.message);
+          }
+          json(res, 201, msg);
         }
-        json(res, 201, msg);
         return;
       }
 
@@ -743,7 +754,8 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const getCronJobStatuses = options?.getCronJobStatuses ?? null;
   const saveCronJobs = options?.saveCronJobs ?? null;
   const saveChannelModel = options?.saveChannelModel ?? null;
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, onCronReload, getCronJobStatuses, saveCronJobs, saveChannelModel);
+  const sessionController = options?.sessionController ?? null;
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, sessionController, onCronReload, getCronJobStatuses, saveCronJobs, saveChannelModel);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {

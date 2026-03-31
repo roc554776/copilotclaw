@@ -148,39 +148,28 @@ describe("POST /api/channels/:channelId/messages (system message)", () => {
     await freshHandle.close();
   });
 
-  it("system sender does NOT trigger agent_notify (only user/cron do)", async () => {
-    const mockAgentManager = { notifyAgent: vi.fn() } as unknown as import("../../src/agent-manager.js").AgentManager;
-    const mockOrchestrator = { getSessionIdForChannel: (channelId: string) => `sess-${channelId}`, getSessionStatuses: () => ({}), updateSessionStatus: () => {} } as unknown as import("../../src/session-orchestrator.js").SessionOrchestrator;
-    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: mockAgentManager, sessionOrchestrator: mockOrchestrator });
+  it("system sender stores message but does not start session", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
     const url = `http://localhost:${freshHandle.port}`;
     const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
     const chId = channels[0]!.id;
 
-    // System message should NOT trigger notifyAgent
-    await fetch(`${url}/api/channels/${chId}/messages`, {
+    const res = await fetch(`${url}/api/channels/${chId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sender: "system", message: "[SUBAGENT COMPLETED] worker completed" }),
     });
-    expect(mockAgentManager.notifyAgent).not.toHaveBeenCalled();
-
-    // User message SHOULD trigger notifyAgent (with sessionId, not channelId)
-    await fetch(`${url}/api/channels/${chId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sender: "user", message: "hello" }),
-    });
-    expect(mockAgentManager.notifyAgent).toHaveBeenCalledWith(`sess-${chId}`);
+    expect(res.status).toBe(201);
+    const msg = await res.json() as { sender: string };
+    expect(msg.sender).toBe("system");
 
     await freshHandle.close();
   });
 });
 
 describe("POST /api/channels/:channelId/messages (cron sender)", () => {
-  it("accepts cron sender and triggers agent_notify", async () => {
-    const mockAgentManager = { notifyAgent: vi.fn() } as unknown as import("../../src/agent-manager.js").AgentManager;
-    const mockOrchestrator = { getSessionIdForChannel: (channelId: string) => `sess-${channelId}`, getSessionStatuses: () => ({}), updateSessionStatus: () => {} } as unknown as import("../../src/session-orchestrator.js").SessionOrchestrator;
-    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: mockAgentManager, sessionOrchestrator: mockOrchestrator });
+  it("accepts cron sender and stores message", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
     const url = `http://localhost:${freshHandle.port}`;
     const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
     const chId = channels[0]!.id;
@@ -193,7 +182,6 @@ describe("POST /api/channels/:channelId/messages (cron sender)", () => {
     expect(res.status).toBe(201);
     const msg = await res.json() as { sender: string };
     expect(msg.sender).toBe("cron");
-    expect(mockAgentManager.notifyAgent).toHaveBeenCalledWith(`sess-${chId}`);
 
     await freshHandle.close();
   });

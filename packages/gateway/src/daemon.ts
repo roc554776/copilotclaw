@@ -7,6 +7,7 @@ import { LogBuffer } from "./log-buffer.js";
 import { initOtel, shutdownOtel } from "./otel.js";
 import { initMetrics } from "./otel-metrics.js";
 import { startServer } from "./server.js";
+import { SessionController } from "./session-controller.js";
 import { SessionEventStore } from "./session-event-store.js";
 import { SessionOrchestrator } from "./session-orchestrator.js";
 import { Store } from "./store.js";
@@ -57,41 +58,39 @@ async function main(): Promise<void> {
   const promptConfig = getAgentPromptConfig();
 
   // Helper: resolve sessionId → channelId via orchestrator.
-  // Agent sends opaque sessionId; gateway looks up the bound channelId.
   const resolveChannelId = (sessionId: string): string | undefined => {
     return orchestrator.getSessionStatuses()[sessionId]?.channelId;
   };
 
-  // Reminder state per session: tracks context usage to decide when to inject
-  // systemReminder into onPostToolUse additionalContext.
-  const reminderStates = new Map<string, {
-    needsReminder: boolean;
-    lastReminderPercent: number;
-    currentUsagePercent: number;
-  }>();
-
-  const getReminderState = (sessionId: string) => {
-    let state = reminderStates.get(sessionId);
-    if (state === undefined) {
-      state = { needsReminder: false, lastReminderPercent: 0, currentUsagePercent: 0 };
-      reminderStates.set(sessionId, state);
-    }
-    return state;
-  };
-
-  // Model multiplier cache: model ID → billing multiplier.
-  // Updated from SDK models list when sessions start. Used to annotate assistant.usage events
-  // so that the multiplier at time of use is permanently recorded alongside token counts.
+  // Model multiplier cache for annotating assistant.usage events.
   const modelMultiplierCache = new Map<string, number>();
 
-  // Swallowed-message detection state per session.
-  // Tracks whether the previous wait returned user messages AND no
-  // copilotclaw_send_message was called since. If so, the agent swallowed
-  // the message (processed it but never replied to the user).
-  const pendingReplyExpected = new Map<string, boolean>();
-  // Tracks whether the most recent session.idle event for a session had backgroundTasks.
-  // Used by onLifecycle to distinguish subagent stop from true parent-agent idle.
-  const lastIdleHasBackgroundTasks = new Map<string, boolean>();
+  // Resolve model for a channel, updating multiplier cache as a side effect.
+  const resolveModelForChannel = async (channelId: string): Promise<string | undefined> => {
+    const modelsResponse = await agentManager.getModels();
+    const models = modelsResponse?.["models"] as Array<{ id: string; billing?: { multiplier?: number } }> | undefined;
+    if (Array.isArray(models)) {
+      for (const m of models) {
+        if (m.billing?.multiplier !== undefined) {
+          modelMultiplierCache.set(m.id, m.billing.multiplier);
+        }
+      }
+    }
+    const channel = store.getChannel(channelId);
+    const configModel = channel?.model ?? config.model ?? null;
+    return resolveModel(modelsResponse, configModel, config.zeroPremium ?? false);
+  };
+
+  // SessionController: centralizes session lifecycle and message delivery.
+  const sessionController = new SessionController({
+    orchestrator,
+    store,
+    agentManager,
+    resolveModelForChannel,
+  });
+
+  // Helper: get reminder state from SessionController's per-session context.
+  const getReminderState = (sessionId: string) => sessionController.getContext(sessionId).reminderState;
 
   const SWALLOWED_MESSAGE_INSTRUCTION =
     `[SYSTEM] CRITICAL: You received user message(s) but called copilotclaw_wait ` +
@@ -117,7 +116,7 @@ async function main(): Promise<void> {
             data: { sender: "agent", message },
           });
           // Clear swallowed-message flag — agent replied successfully
-          pendingReplyExpected.set(request.sessionId, false);
+          sessionController.onAgentReplied(request.sessionId);
           return { status: "sent" };
         }
         case "copilotclaw_list_messages": {
@@ -126,19 +125,15 @@ async function main(): Promise<void> {
           return { messages };
         }
         case "copilotclaw_wait": {
-          // Swallowed-message guard: if a previous wait returned user messages
-          // and no copilotclaw_send_message was called since, inject a reminder.
-          if (pendingReplyExpected.get(request.sessionId) === true) {
-            console.error(`[gateway] swallowed message detected for session ${request.sessionId.slice(0, 8)} — forcing reply reminder`);
-            pendingReplyExpected.set(request.sessionId, false);
+          // Swallowed-message guard
+          if (sessionController.checkSwallowedMessage(request.sessionId)) {
             return { userMessage: SWALLOWED_MESSAGE_INSTRUCTION };
           }
 
-          // Wait tool: check for pending messages.
-          // The full keepalive loop lives in agent (built-in fallback),
-          // but gateway can provide the drain+wait logic here.
+          // Drain pending messages for the channel
           const drained = store.drainPending(channelId);
           if (drained.length > 0) {
+            sessionController.onAgentDrainedMessages(request.sessionId, drained);
             const combined = drained.map((m) => {
               const sender = m.sender;
               const msg = m.message;
@@ -146,8 +141,6 @@ async function main(): Promise<void> {
               if (sender === "system") return `[SYSTEM EVENT] ${msg}`;
               return msg;
             }).join("\n\n");
-            // Mark that we returned user messages — next wait should check for reply
-            pendingReplyExpected.set(request.sessionId, true);
             return {
               userMessage: combined +
                 "\n\n---\n[SYSTEM] Required workflow: (A) Call copilotclaw_send_message with your complete reply, " +
@@ -165,32 +158,7 @@ async function main(): Promise<void> {
       }
     },
     onLifecycle: (request) => {
-      // Gateway-side lifecycle handler. Agent asks what to do on idle/error.
-      // Gateway decides: stop (destroy session), reinject (re-enter session loop), wait (keep alive).
-      // Changing this logic only requires gateway restart (no agent update).
-      if (request.event === "error") {
-        // Error: stop the session and clear copilotSessionId (don't try to resume a broken session)
-        return { action: "stop", clearCopilotSessionId: true };
-      }
-
-      // Idle exit: distinguish subagent stop from true parent-agent idle.
-      // If the most recent session.idle had backgroundTasks, a subagent just stopped
-      // and the parent agent is likely still running copilotclaw_wait.
-      if (lastIdleHasBackgroundTasks.get(request.sessionId) === true) {
-        console.error(`[gateway] session ${request.sessionId.slice(0, 8)} idle with backgroundTasks — waiting (subagent stop)`);
-        lastIdleHasBackgroundTasks.delete(request.sessionId);
-        return { action: "wait" };
-      }
-
-      // If copilotclaw_wait is still executing, the parent agent is active.
-      const sessionState = orchestrator.getSessionStatuses()[request.sessionId];
-      if (sessionState?.physicalSession?.currentState === "tool:copilotclaw_wait") {
-        console.error(`[gateway] session ${request.sessionId.slice(0, 8)} idle but copilotclaw_wait active — waiting`);
-        return { action: "wait" };
-      }
-
-      // True idle: LLM finished without calling copilotclaw_wait — stop the session
-      return { action: "stop" };
+      return sessionController.decideLifecycleAction(request.sessionId, request.event);
     },
     onHook: (request) => {
       // Gateway-side hook handler. All SDK hooks are forwarded here via RPC.
@@ -258,37 +226,21 @@ async function main(): Promise<void> {
         sessionEventStore.appendEvent(copilotSessionId, event);
       }
 
-      // Update orchestrator's physical session state from forwarded SDK events.
-      // This allows the gateway to maintain dashboard-visible state without
-      // relying on the agent's IPC status RPC.
-      // Use sessionId (opaque token = orchestrator session ID) directly.
+      // Route SDK events to SessionController for status tracking.
       const orchSessionId = sessionId;
       if (orchestrator.getSessionStatuses()[orchSessionId] !== undefined) {
         switch (eventType) {
           case "tool.execution_start": {
             const toolName = data["toolName"] as string ?? "unknown";
-            orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${toolName}`);
-            // Update abstract status based on tool type
-            if (toolName === "copilotclaw_wait") {
-              orchestrator.updateSessionStatus(orchSessionId, "waiting");
-            } else {
-              orchestrator.updateSessionStatus(orchSessionId, "processing");
-            }
+            sessionController.onToolExecutionStart(orchSessionId, toolName);
             break;
           }
           case "tool.execution_complete":
-            orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
+            sessionController.onToolExecutionComplete(orchSessionId);
             break;
           case "session.idle": {
             const bgTasks = data["backgroundTasks"];
-            lastIdleHasBackgroundTasks.set(orchSessionId, bgTasks != null);
-            // Only transition to "idle" when there are no background tasks.
-            // When backgroundTasks is present, a subagent stopped but the parent
-            // agent's tool (e.g. copilotclaw_wait) is still executing — preserve
-            // the current state so the onLifecycle fallback check can detect it.
-            if (bgTasks == null) {
-              orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
-            }
+            sessionController.onSessionIdle(orchSessionId, bgTasks != null);
             break;
           }
           case "session.usage_info": {
@@ -379,7 +331,9 @@ async function main(): Promise<void> {
     onDrainPending: (sessionId) => {
       const ch = resolveChannelId(sessionId);
       if (ch === undefined) return [];
-      return store.drainPending(ch);
+      const drained = store.drainPending(ch);
+      sessionController.onAgentDrainedMessages(sessionId, drained);
+      return drained;
     },
     onPeekPending: (sessionId) => {
       const ch = resolveChannelId(sessionId);
@@ -397,69 +351,14 @@ async function main(): Promise<void> {
       return store.listMessages(ch, limit);
     },
     onRunningSessionsReport: (sessions) => {
-      console.error(`[gateway] agent reports ${sessions.length} running session(s), reconciling with orchestrator`);
-      orchestrator.reconcileWithAgent(sessions);
-      // After reconciliation, check for pending messages on channels without active sessions
-      checkAllChannelsPending();
+      console.error(`[gateway] agent reports ${sessions.length} running session(s), reconciling`);
+      sessionController.onReconcile(sessions);
     },
     onPhysicalSessionStarted: (sessionId, copilotSessionId, model) => {
-      console.error(`[gateway] physical session started: session=${sessionId.slice(0, 8)}, copilot=${copilotSessionId.slice(0, 12)}, model=${model}`);
-      orchestrator.updateSessionStatus(sessionId, "waiting");
-      orchestrator.updatePhysicalSession(sessionId, {
-        sessionId: copilotSessionId,
-        model,
-        startedAt: new Date().toISOString(),
-        currentState: "idle",
-      });
-
+      sessionController.onPhysicalSessionStarted(sessionId, copilotSessionId, model);
     },
     onPhysicalSessionEnded: (sessionId, reason, _copilotSessionId, elapsedMs, error) => {
-      console.error(`[gateway] physical session ended: session=${sessionId.slice(0, 8)}, reason=${reason}, elapsed=${Math.round(elapsedMs / 1000)}s`);
-
-      // Clear per-session state on physical session boundary.
-      // Without this, a new physical session on the same abstract session would
-      // inherit stale state (e.g., swallowed-message flag from the previous session).
-      pendingReplyExpected.delete(sessionId);
-      reminderStates.delete(sessionId);
-      lastIdleHasBackgroundTasks.delete(sessionId);
-
-      // Check for rapid failure and record backoff
-      const session = orchestrator.getSessionStatuses()[sessionId];
-      const channelId = session?.channelId;
-      if (channelId !== undefined && elapsedMs < promptConfig.rapidFailureThresholdMs) {
-        orchestrator.recordBackoff(channelId, promptConfig.backoffDurationMs);
-        console.error(`[gateway] channel ${channelId.slice(0, 8)} entering ${promptConfig.backoffDurationMs / 1000}s backoff after rapid failure (${elapsedMs}ms)`);
-      }
-
-      // Token counts are already accumulated in real-time via assistant.usage events.
-      orchestrator.updatePhysicalSessionState(sessionId, "stopped");
-
-      // If the session was already transitioned by an API call (end-turn-run
-      // sets "idle", stop sets "suspended"), skip redundant state transition
-      // to avoid double token accumulation.
-      if (session?.status === "idle" || session?.status === "suspended") {
-        // no-op: API already transitioned the session
-      } else if (reason === "idle") {
-        // Turn run ended (true idle): keep physical session visible, set status to "idle"
-        orchestrator.idleSession(sessionId);
-      } else {
-        // Error or abort: full suspend (archive physical session)
-        orchestrator.suspendSession(sessionId);
-
-        // Notify channel about unexpected stop
-        if (channelId !== undefined) {
-          const detail = error !== undefined ? `: ${error}` : "";
-          store.addMessage(channelId, "system", `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`);
-        }
-      }
-
-      // Flush pending messages for the channel
-      if (channelId !== undefined) {
-        const flushed = store.flushPending(channelId);
-        if (flushed > 0) {
-          console.error(`[gateway] flushed ${flushed} pending message(s) for channel ${channelId.slice(0, 8)}`);
-        }
-      }
+      sessionController.onPhysicalSessionEnded(sessionId, reason, elapsedMs, error);
     },
   });
 
@@ -494,58 +393,9 @@ async function main(): Promise<void> {
   // Establish IPC stream connection to agent (after agent is ensured)
   agentManager.connectStream();
 
-  // Helper: start a session for a channel via orchestrator + agent manager.
-  // Resolves the model on gateway side so the selection algorithm can be updated
-  // by restarting gateway alone (without restarting agent).
-  const startSessionForChannel = async (channelId: string) => {
-    if (orchestrator.isChannelInBackoff(channelId)) {
-      console.error(`[gateway] skipping session start for channel ${channelId.slice(0, 8)} (in backoff)`);
-      return;
-    }
-    if (orchestrator.hasActiveSessionForChannel(channelId)) return;
-    const sessionId = orchestrator.startSession(channelId);
-    const session = orchestrator.getSessionStatuses()[sessionId];
-
-    // Resolve model on gateway side (channel model overrides global config)
-    let resolvedModelName: string | undefined;
-    try {
-      const modelsResponse = await agentManager.getModels();
-      // Update multiplier cache from models list (best-effort, non-blocking)
-      const models = modelsResponse?.["models"] as Array<{ id: string; billing?: { multiplier?: number } }> | undefined;
-      if (Array.isArray(models)) {
-        for (const m of models) {
-          if (m.billing?.multiplier !== undefined) {
-            modelMultiplierCache.set(m.id, m.billing.multiplier);
-          }
-        }
-      }
-      const channel = store.getChannel(channelId);
-      const configModel = channel?.model ?? config.model ?? null;
-      resolvedModelName = resolveModel(modelsResponse, configModel, config.zeroPremium ?? false);
-    } catch {
-      // Model resolution failed — agent will fall back to its own resolution
-    }
-
-    console.error(`[gateway] starting physical session for channel ${channelId.slice(0, 8)}, session=${sessionId.slice(0, 8)}, model=${resolvedModelName ?? "(agent-fallback)"}`);
-    agentManager.startPhysicalSession(sessionId, session?.copilotSessionId, resolvedModelName);
-  };
-
-  // Helper: check all channels for pending messages and start sessions via orchestrator
-  const checkAllChannelsPending = () => {
-    const channels = store.listChannels();
-    for (const channel of channels) {
-      const channelId = channel.id;
-      if (orchestrator.hasActiveSessionForChannel(channelId)) continue;
-      if (orchestrator.isChannelInBackoff(channelId)) continue;
-      const oldest = store.peekOldestPending(channelId);
-      if (oldest !== undefined) {
-        console.error(`[gateway] pending message found for channel ${channelId.slice(0, 8)}, starting session`);
-        startSessionForChannel(channelId).catch((err: unknown) => {
-          console.error(`[gateway] failed to start session for channel ${channelId.slice(0, 8)}:`, err);
-        });
-      }
-    }
-  };
+  // Session start and pending check are now handled by SessionController.
+  // startSessionForChannel → sessionController.ensureSessionForChannel
+  // checkAllChannelsPending → sessionController.checkAllChannelsPending
 
   // Cron scheduler: periodically send cron messages to channels.
   // Supports dynamic reload — existing timers for unchanged jobs are preserved.
@@ -584,20 +434,11 @@ async function main(): Promise<void> {
         console.error(`[gateway] cron ${job.id}: skipped (pending dedup)`);
         return;
       }
-      const msg = store.addMessage(job.channelId, "cron", `${prefix}${job.message}`);
-      if (msg !== undefined) {
-        startSessionForChannel(job.channelId).catch((err: unknown) => {
-          console.error(`[gateway] cron ${job.id}: failed to start session:`, err);
-        });
-        const cronSessionId = orchestrator.getSessionIdForChannel(job.channelId);
-        if (cronSessionId !== undefined) {
-          agentManager.notifyAgent(cronSessionId);
-          const cronSess = orchestrator.getSessionStatuses()[cronSessionId];
-          if (cronSess?.status === "waiting") {
-            orchestrator.updateSessionStatus(cronSessionId, "notified");
-          }
-        }
-      }
+      // Deliver cron message via SessionController (unified session start + notification).
+      // Dedup check was already done above (hasPendingCronMessage).
+      sessionController.deliverMessage(job.channelId, "cron", `${prefix}${job.message}`).catch((err: unknown) => {
+        console.error(`[gateway] cron ${job.id}: failed to deliver:`, err);
+      });
     }, job.intervalMs);
     timer.unref();
     console.error(`[gateway] cron job '${job.id}' scheduled for channel ${job.channelId.slice(0, 8)} every ${Math.round(job.intervalMs / 1000)}s`);
@@ -691,7 +532,11 @@ async function main(): Promise<void> {
     }
     saveConfig(fileConfig, getProfileName());
   };
-  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator, onCronReload, getCronJobStatuses: () => getCronJobStatuses(), saveCronJobs, saveChannelModel });
+  serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator, sessionController, onCronReload, getCronJobStatuses: () => getCronJobStatuses(), saveCronJobs, saveChannelModel });
+  // Wire SSE broadcaster to SessionController for status change broadcasts
+  if (serverHandle.sseBroadcaster !== undefined) {
+    sessionController.setSseBroadcast((event) => serverHandle!.sseBroadcaster!.broadcast(event));
+  }
 
   // Periodic agent process monitoring
   let consecutiveFailures = 0;
@@ -713,37 +558,22 @@ async function main(): Promise<void> {
   }, AGENT_MONITOR_INTERVAL_MS);
   monitor.unref();
 
-  // Periodic orchestrator check: pending messages and session max age
+  // Periodic safety-net check: pending messages and session max age.
+  // The primary message pickup is via deliverMessage → ensureSession.
+  // This interval is a backstop for edge cases (agent crash, missed notifications).
   const orchestratorCheck = setInterval(() => {
-    // Check all channels for pending messages
-    checkAllChannelsPending();
-
-    // Check all sessions for max age
-    const sessions = orchestrator.getSessionStatuses();
-    for (const [sessionId, session] of Object.entries(sessions)) {
-      if (session.status === "suspended") continue;
-      if (orchestrator.checkSessionMaxAge(sessionId, promptConfig.maxSessionAgeMs)) {
-        console.error(`[gateway] session ${sessionId.slice(0, 8)} exceeded max age, stopping`);
-        agentManager.stopPhysicalSession(sessionId);
-        orchestrator.suspendSession(sessionId);
-  
-      }
-    }
+    sessionController.checkAllChannelsPending();
+    sessionController.checkSessionMaxAge(promptConfig.maxSessionAgeMs);
   }, ORCHESTRATOR_CHECK_INTERVAL_MS);
   orchestratorCheck.unref();
 
-  // On stream "connected" event: do NOT check pending immediately.
-  // Wait for the agent's running_sessions report (sent automatically on stream connect)
-  // to reconcile orchestrator state before starting new sessions.
-  // checkAllChannelsPending() is called in onRunningSessionsReport handler.
   agentManager.onStreamConnected(() => {
     console.error("[gateway] stream connected, waiting for agent running_sessions report");
   });
 
-  // On stream "disconnected" event: suspend all active sessions (agent restart scenario)
   agentManager.onStreamDisconnected(() => {
     console.error("[gateway] stream disconnected, idling all active sessions");
-    orchestrator.idleAllActive();
+    sessionController.onStreamDisconnected();
   });
 
   // Graceful shutdown on process exit

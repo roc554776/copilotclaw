@@ -233,3 +233,79 @@ chat 画面のタブの channel ID クリックでチャンネル設定モーダ
 - `GET /api/cron`: cron ジョブ一覧
 - 物理セッション停止用の新規エンドポイントまたは既存の仕組み（`stop_physical_session` IPC）を利用
 
+### メッセージ消費とセッションステータス管理のバグ修正（未実現）
+
+メッセージ消費フローとセッションステータス管理に複数のバグが存在する。個別パッチではなく、構造的な設計整理で根本解決する。
+
+**実際に観測されている症状:**
+- processing になったまま、メッセージが消費されずにデッドロックすることがある
+- 抽象セッションに物理セッションが正しく結びつかなくなることがある
+
+**現状の構造問題:**
+
+- セッションステータスの変更が 14 箇所（daemon.ts / server.ts / session-orchestrator.ts）に分散しており、状態遷移の妥当性が検証されない
+- メッセージ到着時のセッション起動が 30秒ポーリング（`checkAllChannelsPending`）に依存しており、POST handler から直接起動できない
+- `notifyAgent` が fire-and-forget で配達保証がなく、通知が消えてもフォールバックがない
+- pending メッセージの drain パスが 2 系統（copilotclaw_wait tool RPC / drain_pending IPC）あり、swallowed-message 検出との連携が不整合
+- daemon.ts のクロージャー内に `pendingReplyExpected` / `lastIdleHasBackgroundTasks` / `reminderStates` 等のセッション単位状態が散在し、ライフサイクル管理がセッション本体と分離している
+
+**対応方針: SessionController の導入**
+
+セッションライフサイクルとメッセージ配達の責務を `SessionController`（新規クラス）に集約する。
+
+```
+責務の再配置:
+  session-controller.ts（新設）: セッション状態遷移、メッセージ配達、セッション単位の付随状態を一元管理
+  session-orchestrator.ts: 永続化層に特化（SQLite への保存・復元のみ。ビジネスロジックを持たない）
+  daemon.ts: 配線のみ（コンポーネント作成、IPC ハンドラ登録で SessionController に委譲。状態 Map を持たない）
+  server.ts: HTTP ルーティングのみ（メッセージ POST は SessionController.deliverMessage に委譲）
+  agent-manager.ts: IPC トランスポートのみ（送受信と配達結果の報告。ビジネスロジックを持たない）
+```
+
+**SessionController の主要メソッド:**
+
+- `deliverMessage(channelId, sender, message)` — メッセージ到着の単一エントリポイント。pending 追加 → セッション確保 → agent 通知を一貫して実行する。30秒ポーリングではなく、メッセージ到着が直接セッション起動のトリガーになる
+- `onPhysicalSessionStarted(sessionId, ...)` — 物理セッション起動完了時の遷移
+- `onPhysicalSessionEnded(sessionId, reason, ...)` — 物理セッション終了時の遷移
+- `onAgentDrainedMessages(sessionId)` — agent がメッセージを消費した時の処理（swallowed-message 追跡を含む）
+- `stopSession(sessionId)` / `idleSession(sessionId)` — API からの明示的操作
+- `reconcile(runningSessions)` — agent 再接続時の整合性回復
+
+**状態遷移の明示化:**
+
+現在の `updateSessionStatus(sessionId, status)` を廃止し、遷移メソッドに置き換える。各メソッドは遷移元の妥当性を検証し、不正な遷移はログに記録して拒否する。
+
+```
+有効な遷移:
+  new       → starting       （メッセージ到着時）
+  idle      → starting       （メッセージ到着時に revive）
+  starting  → waiting        （物理セッション起動完了）
+  waiting   → notified       （メッセージ到着）
+  waiting   → processing     （ツール実行開始、copilotclaw_wait 以外）
+  notified  → processing     （agent がメッセージを取得して処理開始）
+  processing → waiting       （copilotclaw_wait 呼び出し）
+
+  ANY       → idle           （turn run 正常終了）
+  ANY       → suspended      （エラー / 明示的停止 / max age）
+
+  suspended → starting       （明示的再起動のみ。自動 revive しない）
+```
+
+**個別バグへの対応（設計整理により解消）:**
+
+- POST handler のセッション未起動 → `deliverMessage` がセッション確保を一貫実行するため解消
+- pending 無条件 flush → `deliverMessage` がセッション確保を即時実行するため、flush しても新メッセージは即座に新セッションで処理される。flush の意図（状態リセット）は維持
+- lifecycle "wait" ゾンビ → 状態遷移の明示化により、ゾンビ状態を検出・回復可能に
+- notifyAgent の無駄打ち → `deliverMessage` 内で通知結果を確認し、失敗時はセッション起動にフォールバック
+- swallowed-message 誤発火 → `onAgentDrainedMessages` で sender を検査し、user メッセージ含有時のみフラグ設定
+- double drain バイパス → drain パスを `onAgentDrainedMessages` に統一
+- startPhysicalSession ack なし → SessionController がタイムアウト監視し、応答なければ idle 遷移
+- cron notify タイミング → `deliverMessage` 経由に統一すれば、セッション起動と通知が一貫する
+- SSE broadcast 欠落 → 状態遷移メソッド内で broadcast を実行
+- gateway 再起動 stale → `reconcile` で一括整合し、完了まで `deliverMessage` のセッション起動を抑制
+- IPC reconnect flush 順序 → `running_sessions` report 送信後に flush 実行
+
+**30秒ポーリングの位置づけ:**
+
+`checkAllChannelsPending` は一次メカニズムではなくセーフティネットに降格する。主経路は `deliverMessage → ensureSession → notify`。ポーリング間隔は 60〜120 秒に延長しても安全になる。
+

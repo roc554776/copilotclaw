@@ -184,6 +184,7 @@
 - トークン消費グラフ UI（`/token-usage` ページ、recharts による指数折れ線グラフ + モデル別積み上げ面グラフ、期間・MA 窓の切り替え）（v0.63.0）
 
 **未実現:**
+- メッセージ消費とセッションステータス管理のバグ修正 — SessionController 導入による設計整理。POST handler のセッション即時起動、pending flush の安全化、lifecycle "wait" ゾンビ修正、notifyAgent 死セッション対応、swallowed-message 誤発火修正、double drain バイパス修正、startPhysicalSession ack、cron notify タイミング、SSE broadcast 追加、gateway 再起動 stale 状態、IPC reconnect flush 順序
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
 **今後の課題:**
