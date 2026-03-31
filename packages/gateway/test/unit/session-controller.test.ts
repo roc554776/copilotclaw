@@ -247,3 +247,279 @@ describe("SessionController — SSE broadcast", () => {
     }));
   });
 });
+
+// --- Integration tests: full lifecycle flows ---
+
+describe("SessionController — full message delivery → session lifecycle flow", () => {
+  it("message arrival → session start → physical session → tool execution → wait → idle → new message restarts", async () => {
+    const { controller, orchestrator, agentManager, store, channelId } = makeController();
+    const am = agentManager as unknown as {
+      notifyAgent: ReturnType<typeof vi.fn>;
+      startPhysicalSession: ReturnType<typeof vi.fn>;
+      stopPhysicalSession: ReturnType<typeof vi.fn>;
+    };
+
+    // Step: user sends message → session starts
+    const { msg, delivery } = await controller.deliverMessage(channelId, "user", "hello");
+    expect(msg).toBeDefined();
+    expect(delivery).toBe("session-started");
+    expect(am.startPhysicalSession).toHaveBeenCalled();
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("starting");
+
+    // Step: physical session started
+    controller.onPhysicalSessionStarted(sessionId, "copilot-sess-1", "gpt-4.1");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("waiting");
+
+    // Step: agent executes a non-wait tool → processing
+    controller.onToolExecutionStart(sessionId, "bash");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("processing");
+
+    // Step: tool completes
+    controller.onToolExecutionComplete(sessionId);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("idle");
+
+    // Step: agent calls copilotclaw_wait → waiting
+    controller.onToolExecutionStart(sessionId, "copilotclaw_wait");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("waiting");
+
+    // Step: second message arrives while waiting → notified
+    const { delivery: d2 } = await controller.deliverMessage(channelId, "user", "second message");
+    expect(d2).toBe("delivered");
+    expect(am.notifyAgent).toHaveBeenCalledWith(sessionId);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("notified");
+
+    // Step: agent drains messages → swallowed message tracking
+    controller.onAgentDrainedMessages(sessionId, [
+      { id: "m1", channelId, sender: "user", message: "second message", createdAt: "" },
+    ]);
+    expect(controller.checkSwallowedMessage(sessionId)).toBe(true);
+
+    // Step: agent replies → clears swallowed flag
+    controller.onAgentReplied(sessionId);
+    expect(controller.checkSwallowedMessage(sessionId)).toBe(false);
+
+    // Step: agent starts processing the drained message → processing
+    controller.onToolExecutionStart(sessionId, "bash");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("processing");
+
+    // Step: agent calls copilotclaw_wait again → waiting
+    controller.onToolExecutionStart(sessionId, "copilotclaw_wait");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("waiting");
+
+    // Step: session goes idle (LLM stops calling tools)
+    controller.onSessionIdle(sessionId, false);
+    controller.onPhysicalSessionEnded(sessionId, "idle", 120000);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("idle");
+
+    // Step: new message arrives → new session starts from idle
+    am.startPhysicalSession.mockClear();
+    const { delivery: d3 } = await controller.deliverMessage(channelId, "user", "third message");
+    expect(d3).toBe("session-started");
+    expect(am.startPhysicalSession).toHaveBeenCalled();
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("starting");
+  });
+});
+
+describe("SessionController — backgroundTasks idle → notify → session continues", () => {
+  it("backgroundTasks idle does not change physical state, agent is notified on subsequent event", async () => {
+    const { controller, orchestrator, agentManager, channelId } = makeController();
+    const am = agentManager as unknown as { notifyAgent: ReturnType<typeof vi.fn> };
+
+    // Set up active session in waiting state
+    await controller.deliverMessage(channelId, "user", "start");
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+    controller.onToolExecutionStart(sessionId, "copilotclaw_wait");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("waiting");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+
+    // Step: subagent starts (task tool)
+    controller.onToolExecutionStart(sessionId, "task");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("processing");
+
+    // Step: session.idle with backgroundTasks — subagent stopped
+    controller.onSessionIdle(sessionId, true);
+    // Physical state should NOT change to idle
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("tool:task");
+    // Status should remain processing (not idle)
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("processing");
+
+    // Step: subagent completes, agent processes result
+    controller.onToolExecutionComplete(sessionId);
+    controller.onToolExecutionStart(sessionId, "copilotclaw_send_message");
+    controller.onToolExecutionComplete(sessionId);
+    controller.onToolExecutionStart(sessionId, "copilotclaw_wait");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("waiting");
+  });
+
+  it("multiple backgroundTasks idles followed by true idle", async () => {
+    const { controller, orchestrator, channelId } = makeController();
+
+    await controller.deliverMessage(channelId, "user", "start");
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+    controller.onToolExecutionStart(sessionId, "copilotclaw_wait");
+
+    // Multiple subagent idles — session continues
+    controller.onSessionIdle(sessionId, true);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+    controller.onSessionIdle(sessionId, true);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+
+    // True idle — physical state updates
+    controller.onSessionIdle(sessionId, false);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("idle");
+  });
+});
+
+describe("SessionController — reconcile + concurrent message arrival", () => {
+  it("reconcile idles stale sessions, pending message starts new session after reconcile", async () => {
+    const { controller, orchestrator, agentManager, store, channelId } = makeController();
+    const am = agentManager as unknown as { startPhysicalSession: ReturnType<typeof vi.fn> };
+
+    // Set up a session that is "starting" (stale — agent doesn't know about it)
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+
+    // Add a pending message
+    store.addMessage(channelId, "user", "pending message");
+
+    // Reconcile with empty running sessions — stale session gets idled,
+    // then checkAllChannelsPending detects pending message and starts a new session
+    controller.onReconcile([]);
+    // Wait a tick for the async ensureSessionForChannel
+    await new Promise((r) => setTimeout(r, 10));
+    // The session should have been revived (idle → starting) due to pending message
+    expect(am.startPhysicalSession).toHaveBeenCalled();
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("starting");
+  });
+
+  it("message arriving during reconcile is picked up", async () => {
+    const { controller, orchestrator, agentManager, store, channelId } = makeController();
+    const am = agentManager as unknown as {
+      startPhysicalSession: ReturnType<typeof vi.fn>;
+      notifyAgent: ReturnType<typeof vi.fn>;
+    };
+
+    // Reconcile with no sessions
+    controller.onReconcile([]);
+
+    // Message arrives right after reconcile
+    const { delivery } = await controller.deliverMessage(channelId, "user", "hello after reconcile");
+    expect(delivery).toBe("session-started");
+    expect(am.startPhysicalSession).toHaveBeenCalled();
+  });
+});
+
+describe("SessionController — error and edge cases", () => {
+  it("session error → suspended, new message starts fresh session", async () => {
+    const { controller, orchestrator, agentManager, store, channelId } = makeController();
+    const am = agentManager as unknown as { startPhysicalSession: ReturnType<typeof vi.fn> };
+
+    // Start session
+    await controller.deliverMessage(channelId, "user", "hello");
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+
+    // Session errors
+    controller.onPhysicalSessionEnded(sessionId, "error", 5000, "SDK crash");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("suspended");
+
+    // System message should be added
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs.some((m) => m.message.includes("[SYSTEM] Agent session stopped unexpectedly"))).toBe(true);
+
+    // New message starts a new session (suspended → starting via startSession revive)
+    am.startPhysicalSession.mockClear();
+    const { delivery } = await controller.deliverMessage(channelId, "user", "try again");
+    expect(delivery).toBe("session-started");
+  });
+
+  it("cron message triggers session start same as user message", async () => {
+    const { controller, orchestrator, agentManager, channelId } = makeController();
+    const am = agentManager as unknown as { startPhysicalSession: ReturnType<typeof vi.fn> };
+
+    const { msg, delivery } = await controller.deliverMessage(channelId, "cron", "[cron:test] do work");
+    expect(msg).toBeDefined();
+    expect(msg!.sender).toBe("cron");
+    expect(delivery).toBe("session-started");
+    expect(am.startPhysicalSession).toHaveBeenCalled();
+  });
+
+  it("system message triggers session start", async () => {
+    const { controller, orchestrator, agentManager, channelId } = makeController();
+    const am = agentManager as unknown as { startPhysicalSession: ReturnType<typeof vi.fn> };
+
+    const { delivery } = await controller.deliverMessage(channelId, "system", "[SUBAGENT COMPLETED] done");
+    expect(delivery).toBe("session-started");
+    expect(am.startPhysicalSession).toHaveBeenCalled();
+  });
+
+  it("agent message does NOT trigger session start", async () => {
+    const { controller, agentManager, channelId } = makeController();
+    const am = agentManager as unknown as { startPhysicalSession: ReturnType<typeof vi.fn> };
+
+    const { delivery } = await controller.deliverMessage(channelId, "agent", "agent reply");
+    expect(delivery).toBe("delivered");
+    expect(am.startPhysicalSession).not.toHaveBeenCalled();
+  });
+
+  it("swallowed message detection only fires for user messages, not cron/system", () => {
+    const { controller } = makeController();
+
+    // Drain only cron messages
+    controller.onAgentDrainedMessages("sess-1", [
+      { id: "1", channelId: "ch-1", sender: "cron", message: "[cron:x] task", createdAt: "" },
+      { id: "2", channelId: "ch-1", sender: "system", message: "[SUBAGENT] done", createdAt: "" },
+    ]);
+    expect(controller.checkSwallowedMessage("sess-1")).toBe(false);
+
+    // Drain with a user message included
+    controller.onAgentDrainedMessages("sess-1", [
+      { id: "3", channelId: "ch-1", sender: "cron", message: "[cron:x] task", createdAt: "" },
+      { id: "4", channelId: "ch-1", sender: "user", message: "hello", createdAt: "" },
+    ]);
+    expect(controller.checkSwallowedMessage("sess-1")).toBe(true);
+  });
+
+  it("stopSession via API transitions to suspended and clears context", async () => {
+    const { controller, orchestrator, agentManager, channelId } = makeController();
+    const am = agentManager as unknown as { stopPhysicalSession: ReturnType<typeof vi.fn> };
+
+    await controller.deliverMessage(channelId, "user", "hello");
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+
+    // Set some context
+    controller.onAgentDrainedMessages(sessionId, [
+      { id: "1", channelId, sender: "user", message: "hello", createdAt: "" },
+    ]);
+
+    controller.stopSession(sessionId);
+    expect(am.stopPhysicalSession).toHaveBeenCalledWith(sessionId);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("suspended");
+    // Context cleared
+    expect(controller.checkSwallowedMessage(sessionId)).toBe(false);
+  });
+
+  it("stream disconnect idles all active sessions", async () => {
+    const { controller, orchestrator, channelId, store } = makeController();
+    const ch2 = store.createChannel().id;
+
+    // Start sessions on two channels
+    await controller.deliverMessage(channelId, "user", "msg1");
+    await controller.deliverMessage(ch2, "user", "msg2");
+    const sid1 = orchestrator.getSessionIdForChannel(channelId)!;
+    const sid2 = orchestrator.getSessionIdForChannel(ch2)!;
+    controller.onPhysicalSessionStarted(sid1, "cs1", "gpt-4.1");
+    controller.onPhysicalSessionStarted(sid2, "cs2", "gpt-4.1");
+    expect(orchestrator.getSessionStatuses()[sid1]?.status).toBe("waiting");
+    expect(orchestrator.getSessionStatuses()[sid2]?.status).toBe("waiting");
+
+    // Stream disconnects
+    controller.onStreamDisconnected();
+    expect(orchestrator.getSessionStatuses()[sid1]?.status).toBe("idle");
+    expect(orchestrator.getSessionStatuses()[sid2]?.status).toBe("idle");
+  });
+});
