@@ -243,6 +243,13 @@ export async function stopSession(sessionId: string): Promise<void> {
   if (!res.ok) throw new Error(`stop session ${res.status}`);
 }
 
+export async function endTurnRun(sessionId: string): Promise<void> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/end-turn-run`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`end turn run ${res.status}`);
+}
+
 export interface CronJobStatus {
   id: string;
   channelId: string;

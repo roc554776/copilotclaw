@@ -10,6 +10,7 @@ import {
   fetchModels,
   fetchQuota,
   fetchStatus,
+  endTurnRun,
   reloadCron,
   saveCronJobs,
   sendMessage,
@@ -409,7 +410,13 @@ export function DashboardPage() {
   const handleStopPhysicalSession = useCallback(async (sessionId: string) => {
     try {
       await stopSession(sessionId);
-      // Refresh status to reflect the change
+      refreshStatusRef.current();
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleEndTurnRun = useCallback(async (sessionId: string) => {
+    try {
+      await endTurnRun(sessionId);
       refreshStatusRef.current();
     } catch { /* ignore */ }
   }, []);
@@ -625,6 +632,7 @@ export function DashboardPage() {
           onClose={closeChannelSettings}
           onModelChange={handleChannelModelChange}
           onStopSession={handleStopPhysicalSession}
+          onEndTurnRun={handleEndTurnRun}
           onRefreshStatus={refreshStatusRef.current}
         />
       )}
@@ -1297,6 +1305,7 @@ function ChannelSettingsModal({
   onClose,
   onModelChange,
   onStopSession,
+  onEndTurnRun,
   onRefreshStatus,
 }: {
   channelId: string;
@@ -1308,6 +1317,7 @@ function ChannelSettingsModal({
   onClose: () => void;
   onModelChange: (channelId: string, model: string | null) => Promise<void>;
   onStopSession: (sessionId: string) => Promise<void>;
+  onEndTurnRun: (sessionId: string) => Promise<void>;
   onRefreshStatus: () => void;
 }) {
   const [selectedModel, setSelectedModel] = useState<string>(channel?.model ?? "");
@@ -1329,6 +1339,12 @@ function ChannelSettingsModal({
   const handleArchiveSession = async () => {
     if (activeSessionId === undefined) return;
     await onStopSession(activeSessionId);
+    onRefreshStatus();
+  };
+
+  const handleEndTurnRunBtn = async () => {
+    if (activeSessionId === undefined) return;
+    await onEndTurnRun(activeSessionId);
     onRefreshStatus();
   };
 
@@ -1468,23 +1484,39 @@ function ChannelSettingsModal({
                 <span style={modalLabelStyle}>Model</span>
                 <span>{activeSession.model}</span>
               </div>
-              <button
-                onClick={handleArchiveSession}
-                style={{
-                  marginTop: "0.5rem",
-                  padding: "0.3rem 0.8rem",
-                  background: "#da3633",
-                  border: "none",
-                  borderRadius: "0.3rem",
-                  color: "#fff",
-                  cursor: "pointer",
-                  fontSize: "0.85rem",
-                }}
-              >
-                Archive physical session
-              </button>
+              <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+                <button
+                  onClick={handleEndTurnRunBtn}
+                  style={{
+                    padding: "0.3rem 0.8rem",
+                    background: "#21262d",
+                    border: "1px solid #30363d",
+                    borderRadius: "0.3rem",
+                    color: "#c9d1d9",
+                    cursor: "pointer",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  End turn run
+                </button>
+                <button
+                  onClick={handleArchiveSession}
+                  style={{
+                    padding: "0.3rem 0.8rem",
+                    background: "#da3633",
+                    border: "none",
+                    borderRadius: "0.3rem",
+                    color: "#fff",
+                    cursor: "pointer",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  Archive session
+                </button>
+              </div>
               <div style={{ fontSize: "0.75rem", color: "#8b949e", marginTop: "0.3rem" }}>
-                Stops the current session. A new one starts on next message.
+                End turn run: stops current turn, next message applies model setting.
+                Archive: fully removes the physical session.
               </div>
             </div>
           ) : (

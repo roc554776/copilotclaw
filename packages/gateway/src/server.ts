@@ -358,6 +358,20 @@ function createRequestHandler(
       return;
     }
 
+    // Turn run stop via API (end current turn run, keep physical session visible)
+    const turnRunStopMatch = /^\/api\/sessions\/([^/]+)\/end-turn-run$/.exec(fullPathname);
+    if (turnRunStopMatch !== null && method === "POST") {
+      if (agentManager === null || sessionOrchestrator === null) {
+        json(res, 503, { error: "agent not available" });
+        return;
+      }
+      const sessionId = decodeURIComponent(turnRunStopMatch[1]!);
+      agentManager.stopPhysicalSession(sessionId);
+      sessionOrchestrator.idleSession(sessionId);
+      json(res, 200, { status: "idle" });
+      return;
+    }
+
     // Channel management (core — provider-agnostic)
     if (fullPathname === "/api/channels" && method === "GET") {
       const includeArchived = params.get("includeArchived") === "true";
@@ -464,6 +478,11 @@ function createRequestHandler(
           const notifySessionId = sessionOrchestrator.getSessionIdForChannel(channelId);
           if (notifySessionId !== undefined) {
             agentManager.notifyAgent(notifySessionId);
+            // Transition to "notified" when a message arrives while waiting
+            const sess = sessionOrchestrator.getSessionStatuses()[notifySessionId];
+            if (sess?.status === "waiting") {
+              sessionOrchestrator.updateSessionStatus(notifySessionId, "notified");
+            }
           }
         }
         json(res, 201, msg);

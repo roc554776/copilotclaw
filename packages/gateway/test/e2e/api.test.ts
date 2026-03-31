@@ -130,7 +130,7 @@ describe("POST /api/channels/:channelId/messages (system message)", () => {
 
   it("system sender does NOT trigger agent_notify (only user/cron do)", async () => {
     const mockAgentManager = { notifyAgent: vi.fn() } as unknown as import("../../src/agent-manager.js").AgentManager;
-    const mockOrchestrator = { getSessionIdForChannel: (channelId: string) => `sess-${channelId}` } as unknown as import("../../src/session-orchestrator.js").SessionOrchestrator;
+    const mockOrchestrator = { getSessionIdForChannel: (channelId: string) => `sess-${channelId}`, getSessionStatuses: () => ({}), updateSessionStatus: () => {} } as unknown as import("../../src/session-orchestrator.js").SessionOrchestrator;
     const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: mockAgentManager, sessionOrchestrator: mockOrchestrator });
     const url = `http://localhost:${freshHandle.port}`;
     const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
@@ -159,7 +159,7 @@ describe("POST /api/channels/:channelId/messages (system message)", () => {
 describe("POST /api/channels/:channelId/messages (cron sender)", () => {
   it("accepts cron sender and triggers agent_notify", async () => {
     const mockAgentManager = { notifyAgent: vi.fn() } as unknown as import("../../src/agent-manager.js").AgentManager;
-    const mockOrchestrator = { getSessionIdForChannel: (channelId: string) => `sess-${channelId}` } as unknown as import("../../src/session-orchestrator.js").SessionOrchestrator;
+    const mockOrchestrator = { getSessionIdForChannel: (channelId: string) => `sess-${channelId}`, getSessionStatuses: () => ({}), updateSessionStatus: () => {} } as unknown as import("../../src/session-orchestrator.js").SessionOrchestrator;
     const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: mockAgentManager, sessionOrchestrator: mockOrchestrator });
     const url = `http://localhost:${freshHandle.port}`;
     const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
@@ -863,6 +863,13 @@ describe("PUT /api/cron", () => {
     });
     expect(res.status).toBe(400);
     await freshHandle.close();
+  });
+});
+
+describe("POST /api/sessions/:id/end-turn-run", () => {
+  it("returns 503 when no agent", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/test-session/end-turn-run`, { method: "POST" });
+    expect(res.status).toBe(503);
   });
 });
 

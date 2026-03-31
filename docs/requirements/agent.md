@@ -122,3 +122,31 @@ session.idle イベントが subagent の停止に起因するものか、親 ag
 - subagent が停止したときにも session.idle が発火するが、それと親 agent 自身の idle を分けて処理する
 - `backgroundTasks` が null でないときは、subagent が停止しただけである
 - `copilotclaw_wait` がまだ complete していないことも、親 agent がアクティブであるヒントになるかもしれない
+
+### Req: physical session の常時保持（未実現）
+
+chat 履歴があるチャンネルでは、current physical session が常に存在する状態を維持する。
+
+- chat 履歴があるのに current physical session がない状態を作らない
+- 最後に使った physical session を使い続ける
+- status 表示や cron の設定で physical session の情報が常に表示される必要がある
+
+### Req: 連続した turn 列の概念の導入（未実現）
+
+セッションの子として、連続した turn 列の概念を導入する。これがプレミアムリクエスト 1 回の消費に対応する。
+
+- プレミアムリクエストの消費は physical session 単位ではなく、idle になるまでの期間（turn の連番が終わるまで）単位
+- subagent でない agent の session.idle が来ると、turn の連番がリセットされる
+- この概念に適切で呼びやすく、内容と一致する名前をつけて明確化する
+- turn 列が停止したら、次に開始するときにプレミアムリクエストが消費される
+  - このタイミングでモデルの設定値を反映して切り替えるべき
+- channel に紐づく physical session の archive に加えて、turn 列の強制停止機能が必要（次の会話から設定したモデルが適用される）
+
+### Req: セッション status の細分化（未実現）
+
+抽象セッションの status をより細かく区別して表示する。
+
+- abstract session に physical session が 1 つも紐づいていない状態を区別する
+- 過去の physical session はあるが、現在は idle になっている状態を区別する
+- wait tool で待っている状態と、turn 列が途切れて idle になっている状態を区別する
+- wait で待っていたが新規 message が入ってきて、wait が解かれるまでの間を区別する（反応性の高い UI のため）

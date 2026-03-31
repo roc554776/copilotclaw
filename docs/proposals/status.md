@@ -160,6 +160,12 @@
 
 - session.idle での subagent 停止と親 agent idle の区別（backgroundTasks フィールドと copilotclaw_wait 実行状態で判定。subagent 停止時は action: "wait"、真の idle は action: "stop"。backgroundTasks 存在時は currentState を idle に上書きしない）（v0.57.0）
 
+- physical session の常時保持（idle 停止時に physicalSession をクリアせず currentState: "stopped" で保持。suspendSession は明示的 archive のみ）（v0.58.0）
+
+- turn run 概念の導入（idle で turn run 終了 → idleSession()。turn run 強制停止 API `POST /api/sessions/{{sessionId}}/end-turn-run`。次の turn run 開始時にモデル切り替え）（v0.58.0）
+
+- セッション status の細分化（new/starting/waiting/notified/processing/idle/suspended の 7 状態。tool.execution_start で processing/waiting を自動設定。message 到着時に waiting → notified 遷移）（v0.58.0）
+
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 

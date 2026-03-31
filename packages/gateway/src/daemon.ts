@@ -250,9 +250,17 @@ async function main(): Promise<void> {
       const orchSessionId = sessionId;
       if (orchestrator.getSessionStatuses()[orchSessionId] !== undefined) {
         switch (eventType) {
-          case "tool.execution_start":
-            orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${data["toolName"] as string ?? "unknown"}`);
+          case "tool.execution_start": {
+            const toolName = data["toolName"] as string ?? "unknown";
+            orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${toolName}`);
+            // Update abstract status based on tool type
+            if (toolName === "copilotclaw_wait") {
+              orchestrator.updateSessionStatus(orchSessionId, "waiting");
+            } else {
+              orchestrator.updateSessionStatus(orchSessionId, "processing");
+            }
             break;
+          }
           case "tool.execution_complete":
             orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
             break;
@@ -393,16 +401,21 @@ async function main(): Promise<void> {
         console.error(`[gateway] channel ${channelId.slice(0, 8)} entering ${promptConfig.backoffDurationMs / 1000}s backoff after rapid failure (${elapsedMs}ms)`);
       }
 
-      // Mark physical session as stopped, then suspend.
       // Token counts are already accumulated in real-time via assistant.usage events.
       orchestrator.updatePhysicalSessionState(sessionId, "stopped");
-      orchestrator.suspendSession(sessionId);
 
+      if (reason === "idle") {
+        // Turn run ended (true idle): keep physical session visible, set status to "idle"
+        orchestrator.idleSession(sessionId);
+      } else {
+        // Error or abort: full suspend (archive physical session)
+        orchestrator.suspendSession(sessionId);
 
-      // Notify channel about unexpected stop
-      if (channelId !== undefined && reason !== "idle") {
-        const detail = error !== undefined ? `: ${error}` : "";
-        store.addMessage(channelId, "system", `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`);
+        // Notify channel about unexpected stop
+        if (channelId !== undefined) {
+          const detail = error !== undefined ? `: ${error}` : "";
+          store.addMessage(channelId, "system", `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`);
+        }
       }
 
       // Flush pending messages for the channel
@@ -535,6 +548,10 @@ async function main(): Promise<void> {
         const cronSessionId = orchestrator.getSessionIdForChannel(job.channelId);
         if (cronSessionId !== undefined) {
           agentManager.notifyAgent(cronSessionId);
+          const cronSess = orchestrator.getSessionStatuses()[cronSessionId];
+          if (cronSess?.status === "waiting") {
+            orchestrator.updateSessionStatus(cronSessionId, "notified");
+          }
         }
       }
     }, job.intervalMs);

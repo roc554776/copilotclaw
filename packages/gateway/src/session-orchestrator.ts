@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 
 import type { PhysicalSessionSummary, SubagentInfo } from "./ipc-client.js";
 
-export type AbstractSessionStatus = "starting" | "waiting" | "processing" | "suspended";
+export type AbstractSessionStatus = "new" | "starting" | "waiting" | "notified" | "processing" | "idle" | "suspended";
 
 export interface AbstractSession {
   sessionId: string;
@@ -221,8 +221,8 @@ export class SessionOrchestrator {
     if (existingSessionId !== undefined) {
       const existing = this.sessions.get(existingSessionId);
       if (existing !== undefined) {
-        if (existing.status === "suspended") {
-          // Revive
+        if (existing.status === "suspended" || existing.status === "idle") {
+          // Revive from suspended or idle
           existing.status = "starting";
           existing.channelId = channelId;
           this.persistSession(existing);
@@ -236,7 +236,7 @@ export class SessionOrchestrator {
     const sessionId = randomUUID();
     const session: AbstractSession = {
       sessionId,
-      status: "starting",
+      status: "new",
       channelId,
       startedAt: new Date().toISOString(),
       cumulativeInputTokens: 0,
@@ -269,6 +269,26 @@ export class SessionOrchestrator {
     this.persistSession(session);
   }
 
+  /**
+   * Transition a session to idle (turn run ended).
+   * Unlike suspendSession, keeps the physical session info visible (not archived).
+   * Accumulates token counts but does NOT move physicalSession to history.
+   */
+  idleSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return;
+
+    if (session.physicalSession !== undefined) {
+      session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
+      session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
+      session.physicalSession.currentState = "stopped";
+    }
+    session.subagentSessions = undefined;
+    session.processingStartedAt = undefined;
+    session.status = "idle";
+    this.persistSession(session);
+  }
+
   /** Return a snapshot of all sessions keyed by sessionId. */
   getSessionStatuses(): Record<string, AbstractSession> {
     const result: Record<string, AbstractSession> = {};
@@ -288,7 +308,7 @@ export class SessionOrchestrator {
     const sessionId = this.channelBindings.get(channelId);
     if (sessionId === undefined) return false;
     const session = this.sessions.get(sessionId);
-    return session !== undefined && session.status !== "suspended";
+    return session !== undefined && session.status !== "suspended" && session.status !== "idle";
   }
 
   /** Whether the channel is currently in a backoff period. */
@@ -417,7 +437,7 @@ export class SessionOrchestrator {
    */
   suspendAllActive(): void {
     for (const [sessionId, session] of this.sessions) {
-      if (session.status !== "suspended") {
+      if (session.status !== "suspended" && session.status !== "idle") {
         this.suspendSession(sessionId);
       }
     }
@@ -440,7 +460,7 @@ export class SessionOrchestrator {
     // This handles: gateway restart → orchestrator loads stale "active" state from SQLite
     // → agent is a new process with no sessions → stale active sessions must be suspended.
     for (const [sessionId, session] of this.sessions) {
-      if (session.status !== "suspended" && !reportedIds.has(sessionId)) {
+      if (session.status !== "suspended" && session.status !== "idle" && !reportedIds.has(sessionId)) {
         console.error(`[orchestrator] reconciled: suspending stale session ${sessionId.slice(0, 8)} (not reported by agent)`);
         this.suspendSession(sessionId);
       }
@@ -450,7 +470,7 @@ export class SessionOrchestrator {
     for (const running of runningSessions) {
       const existing = this.sessions.get(running.sessionId);
       if (existing !== undefined) {
-        if (existing.status === "suspended") {
+        if (existing.status === "suspended" || existing.status === "idle") {
           existing.status = running.status === "waiting" ? "waiting" : running.status === "processing" ? "processing" : "starting";
           this.persistSession(existing);
           console.error(`[orchestrator] reconciled: revived session ${running.sessionId.slice(0, 8)}`);

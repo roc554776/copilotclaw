@@ -576,4 +576,104 @@ describe("SessionOrchestrator", () => {
       orch2.close();
     });
   });
+
+  describe("new status and idleSession", () => {
+    it("creates new session with status 'new'", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-new");
+      const statuses = orch.getSessionStatuses();
+      expect(statuses[sessionId]?.status).toBe("new");
+    });
+
+    it("idleSession keeps physicalSession visible with stopped state", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-idle");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession());
+      orch.updateSessionStatus(sessionId, "waiting");
+
+      orch.idleSession(sessionId);
+
+      const statuses = orch.getSessionStatuses();
+      const session = statuses[sessionId]!;
+      expect(session.status).toBe("idle");
+      expect(session.physicalSession).toBeDefined();
+      expect(session.physicalSession!.currentState).toBe("stopped");
+      expect(session.physicalSessionHistory).toHaveLength(0);
+    });
+
+    it("suspendSession archives physicalSession to history", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-suspend");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession());
+      orch.updateSessionStatus(sessionId, "waiting");
+
+      orch.suspendSession(sessionId);
+
+      const statuses = orch.getSessionStatuses();
+      const session = statuses[sessionId]!;
+      expect(session.status).toBe("suspended");
+      expect(session.physicalSession).toBeUndefined();
+      expect(session.physicalSessionHistory).toHaveLength(1);
+    });
+
+    it("revives from idle status on startSession", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-revive");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession());
+      orch.idleSession(sessionId);
+      expect(orch.hasActiveSessionForChannel("ch-revive")).toBe(false);
+
+      const revived = orch.startSession("ch-revive");
+      expect(revived).toBe(sessionId);
+      const statuses = orch.getSessionStatuses();
+      expect(statuses[sessionId]?.status).toBe("starting");
+    });
+
+    it("idle sessions are not active for hasActiveSessionForChannel", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-check");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession());
+      orch.idleSession(sessionId);
+      expect(orch.hasActiveSessionForChannel("ch-check")).toBe(false);
+    });
+
+    it("idleSession accumulates tokens from physicalSession", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-tokens");
+      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 500, totalOutputTokens: 300 }));
+
+      orch.idleSession(sessionId);
+
+      const session = orch.getSessionStatuses()[sessionId]!;
+      expect(session.cumulativeInputTokens).toBe(500);
+      expect(session.cumulativeOutputTokens).toBe(300);
+    });
+  });
+
+  describe("notified status", () => {
+    it("can transition from waiting to notified", () => {
+      const orch = new SessionOrchestrator();
+      const sessionId = orch.startSession("ch-notify");
+      orch.updateSessionStatus(sessionId, "waiting");
+      orch.updateSessionStatus(sessionId, "notified");
+      expect(orch.getSessionStatuses()[sessionId]?.status).toBe("notified");
+    });
+  });
+
+  describe("suspendAllActive skips idle sessions", () => {
+    it("does not suspend idle sessions", () => {
+      const orch = new SessionOrchestrator();
+      const s1 = orch.startSession("ch-active");
+      orch.updateSessionStatus(s1, "waiting");
+      const s2 = orch.startSession("ch-idle2");
+      orch.updatePhysicalSession(s2, makePhysicalSession());
+      orch.idleSession(s2);
+
+      orch.suspendAllActive();
+
+      const statuses = orch.getSessionStatuses();
+      expect(statuses[s1]?.status).toBe("suspended");
+      expect(statuses[s2]?.status).toBe("idle");
+    });
+  });
 });
