@@ -105,7 +105,7 @@ export function StatusPage() {
   const [quota, setQuota] = useState<QuotaResponse | null>(null);
   const [modelsData, setModelsData] = useState<ModelsResponse | null>(null);
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
-  const [promptsExpanded, setPromptsExpanded] = useState(false);
+  const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
 
   const toggleSession = (id: string) => {
     setExpandedSessions((prev) => {
@@ -325,42 +325,40 @@ export function StatusPage() {
 
       {/* Original System Prompts */}
       <div style={sectionStyle}>
-        <div style={titleStyle}>
-          Original System Prompts (from Copilot SDK){" "}
-          <a
-            href="#"
-            onClick={(e) => { e.preventDefault(); setPromptsExpanded((v) => !v); }}
-            style={{ fontWeight: "normal", textTransform: "none", cursor: "pointer" }}
-          >
-            {promptsExpanded ? "Hide \u25BE" : "View \u25B8"}
-          </a>
-        </div>
-        {promptsExpanded && (
-          originalPrompts.length === 0 ? (
-            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
-              No prompts captured yet. Prompts are captured when a physical session starts.
-            </div>
-          ) : (
-            <div style={{ maxHeight: 400, overflowY: "auto" }}>
-              {originalPrompts.map((p) => (
-                <div
-                  key={`${p.model}-${p.capturedAt}`}
-                  style={{ marginTop: "0.5rem" }}
-                >
-                  <div
-                    style={{
-                      fontSize: "0.8rem",
-                      color: "#8b949e",
-                      marginBottom: "0.3rem",
+        <div style={titleStyle}>Original System Prompts (from Copilot SDK)</div>
+        {originalPrompts.length === 0 ? (
+          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
+            No prompts captured yet. Prompts are captured when a physical session starts.
+          </div>
+        ) : (
+          originalPrompts.map((p) => {
+            const key = `${p.model}-${p.capturedAt}`;
+            const isExpanded = expandedPrompts.has(key);
+            return (
+              <div key={key} style={{ marginTop: "0.3rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "0.85rem", color: "#8b949e" }}>
+                    {p.model} <span style={{ fontSize: "0.75rem" }}>({p.capturedAt})</span>
+                  </span>
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setExpandedPrompts((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(key)) next.delete(key); else next.add(key);
+                        return next;
+                      });
                     }}
+                    style={{ fontSize: "0.75rem", cursor: "pointer" }}
                   >
-                    Model: {p.model} -- Captured: {p.capturedAt}
-                  </div>
-                  <pre style={preStyle}>{p.prompt}</pre>
+                    {isExpanded ? "Hide \u25BE" : "View \u25B8"}
+                  </a>
                 </div>
-              ))}
-            </div>
-          )
+                {isExpanded && <pre style={preStyle}>{p.prompt}</pre>}
+              </div>
+            );
+          })
         )}
       </div>
 

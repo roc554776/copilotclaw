@@ -1132,7 +1132,7 @@ function StatusModalContent({
   tokenUsage5h: TokenUsageEntry[];
 }) {
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
-  const [promptsExpanded, setPromptsExpanded] = useState(false);
+  const [expandedPrompts, setExpandedPrompts] = useState<Set<string>>(new Set());
 
   const toggleSession = (id: string) => {
     setExpandedSessions((prev) => {
@@ -1232,28 +1232,33 @@ function StatusModalContent({
 
       {/* Original System Prompts */}
       <div style={modalSectionStyle}>
-        <div style={modalTitleStyle}>
-          Original System Prompts{" "}
-          <a
-            href="#"
-            onClick={(e) => { e.preventDefault(); setPromptsExpanded((v) => !v); }}
-            style={{ fontWeight: "normal", cursor: "pointer" }}
-          >
-            {promptsExpanded ? "Hide \u25BE" : "View \u25B8"}
-          </a>
-        </div>
-        {promptsExpanded && (
-          originalPrompts.length === 0 ? (
-            <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>
-              No prompts captured yet.
-            </div>
-          ) : (
-            <div style={{ maxHeight: 300, overflowY: "auto" }}>
-              {originalPrompts.map((p) => (
-                <div key={`${p.model}-${p.capturedAt}`} style={{ marginTop: "0.5rem" }}>
-                  <div style={{ fontSize: "0.8rem", color: "#8b949e", marginBottom: "0.3rem" }}>
-                    Model: {p.model} -- Captured: {p.capturedAt}
-                  </div>
+        <div style={modalTitleStyle}>Original System Prompts</div>
+        {originalPrompts.length === 0 ? (
+          <div style={{ color: "#8b949e", fontSize: "0.85rem" }}>No prompts captured yet.</div>
+        ) : (
+          originalPrompts.map((p) => {
+            const key = `${p.model}-${p.capturedAt}`;
+            const isExpanded = expandedPrompts.has(key);
+            return (
+              <div key={key} style={{ marginTop: "0.3rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "0.8rem", color: "#8b949e" }}>{p.model}</span>
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setExpandedPrompts((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(key)) next.delete(key); else next.add(key);
+                        return next;
+                      });
+                    }}
+                    style={{ fontSize: "0.75rem", cursor: "pointer" }}
+                  >
+                    {isExpanded ? "Hide \u25BE" : "View \u25B8"}
+                  </a>
+                </div>
+                {isExpanded && (
                   <pre style={{
                     background: "#161b22",
                     padding: "0.75rem",
@@ -1262,13 +1267,14 @@ function StatusModalContent({
                     fontSize: "0.8rem",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-all",
-                    maxHeight: 200,
+                    maxHeight: 300,
                     overflowY: "auto",
+                    marginTop: "0.3rem",
                   }}>{p.prompt}</pre>
-                </div>
-              ))}
-            </div>
-          )
+                )}
+              </div>
+            );
+          })
         )}
       </div>
 
