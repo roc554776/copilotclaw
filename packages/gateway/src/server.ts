@@ -521,7 +521,7 @@ function createRequestHandler(
         return;
       }
 
-      if (action === "draft" && method === "PUT") {
+      if (action === "draft" && (method === "PUT" || method === "POST")) {
         const body = parseJson(await readBody(req));
         if (!isRecord(body)) {
           json(res, 400, { error: "invalid request body" });

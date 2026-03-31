@@ -116,12 +116,38 @@ export function DashboardPage() {
   messagesRef.current = messages;
   const activeChannelRef = useRef(activeChannelId);
 
-  // Clean up draft debounce timer on unmount
+  // Flush pending draft save on beforeunload (page reload/close) and clean up on unmount
+  const inputTextRef = useRef(inputText);
+  inputTextRef.current = inputText;
+  const activeChannelIdRef = useRef(activeChannelId);
+  activeChannelIdRef.current = activeChannelId;
   useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (draftTimerRef.current !== null && activeChannelIdRef.current) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+        // Use sendBeacon for reliable delivery during page unload
+        const url = `/api/channels/${encodeURIComponent(activeChannelIdRef.current)}/draft`;
+        const blob = new Blob([JSON.stringify({ draft: inputTextRef.current || null })], { type: "application/json" });
+        navigator.sendBeacon(url, blob);
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       if (draftTimerRef.current !== null) { clearTimeout(draftTimerRef.current); draftTimerRef.current = null; }
     };
   }, []);
+
+  // Restore draft on initial load (channels data arrives async after mount)
+  const initialDraftRestoredRef = useRef(false);
+  useEffect(() => {
+    if (!initialDraftRestoredRef.current && activeChannelId && channels.length > 0) {
+      initialDraftRestoredRef.current = true;
+      const ch = channels.find((c) => c.id === activeChannelId);
+      if (ch?.draft) setInputText(ch.draft);
+    }
+  }, [activeChannelId, channels]);
 
   // Reset messages and restore draft when channel changes
   useEffect(() => {
