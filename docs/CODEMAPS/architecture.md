@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.57.0 | Token estimate: ~2500 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-03-31 | Packages: 3 (cli, gateway, agent) | Version: 0.58.0 | Token estimate: ~2500 -->
 
 # Architecture
 
@@ -99,8 +99,14 @@ Environment variables:
 
 - **Responsibility Split (v0.49.0)**: Abstract session lifecycle (channel bindings, suspend/revive, backoff, max age, persistence) managed by gateway's SessionOrchestrator; agent only executes physical sessions (Copilot SDK sessions) on gateway command
 - **Abstract vs. Physical Sessions**: Abstract session (sessionId, bound to channel) is separate from physical session (Copilot SDK session). When physical session ends unexpectedly, abstract session transitions to "suspended" (not deleted), preserving channel binding.
-- **Session Status**: "starting" → "waiting" → "processing" → "suspended" or "stopped"
-  - "suspended": physical session stopped unexpectedly or max age reached; abstract session preserved for revival
+- **Session Status**: "new" → "starting" → "waiting" → "notified" → "processing" → "idle" → "suspended" or "stopped"
+  - "new": initial status on startSession creation (before physical session starts)
+  - "starting": physical session initializing
+  - "waiting": idle, awaiting user input (keepalive tool polling gateway)
+  - "notified": message arrived on a waiting session (set by cron scheduler, server.ts on message arrival)
+  - "processing": handling LLM requests or non-wait tool calls
+  - "idle": physical session ended normally (idleSession); abstract session preserved but not active; excluded from hasActiveSessionForChannel, suspendAllActive, reconcileWithAgent
+  - "suspended": physical session stopped unexpectedly or max age reached; abstract session preserved for revival (copilotSessionId retained)
   - "stopped": explicit stopSession() — fully removes abstract session and channel binding
 - **Gateway-Driven Session Commands (v0.49.0)**: Gateway sends start_physical_session (with sessionId, optional copilotSessionId, optional model; channelId removed v0.55.0) and stop_physical_session (with sessionId) to agent via IPC stream; agent sends physical_session_started (sessionId, copilotSessionId, model) and physical_session_ended (sessionId, reason, copilotSessionId, elapsedMs, tokens, error) back to gateway
 - **Suspension via daemon periodic check**: gateway daemon checks all sessions periodically (30s); maxAge check suspends sessions exceeding 2 days (default, configurable) by sending stop_physical_session to agent then calling orchestrator.suspendSession()
