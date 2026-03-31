@@ -1,7 +1,7 @@
 export interface SessionLoopCallbacks {
   onMessage: (content: string) => void;
   onError: (message: string) => void;
-  onIdle: () => void;
+  onIdle: (hasBackgroundTasks: boolean) => void;
 }
 
 export interface SessionLike {
@@ -44,12 +44,16 @@ export async function runSessionLoop(options: SessionLoopOptions): Promise<void>
         onError: (message) => {
           settle(() => { reject(new Error(message)); });
         },
-        onIdle: () => {
+        onIdle: (hasBackgroundTasks) => {
           if (settled) return;
-          // Session ended — LLM decided to stop calling tools.
+          if (hasBackgroundTasks) {
+            // Subagent stopped but parent agent's copilotclaw_wait is still running.
+            // Do NOT end the session loop — the SDK session is still active.
+            log("session idle with backgroundTasks — subagent stopped, session continues");
+            return;
+          }
+          // True idle — LLM decided to stop calling tools.
           // Do NOT send continuePrompt (session.send costs a premium request).
-          // The session will be suspended and revived when the next pending
-          // message arrives, costing zero premium requests.
           log("session idle — LLM stopped calling tools");
           settle(() => { resolve(); });
         },

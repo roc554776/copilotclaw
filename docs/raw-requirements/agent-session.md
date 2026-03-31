@@ -44,6 +44,9 @@
     - backgroundTasks が null でないときは、それは subagent が停止しただけのようです。
     - また wait_tool がまだ complete していない、ということもヒントになるかもしれません。
 
+<!-- 2026-04-01 -->
+- 上記が v0.57.0 で実現済みとマークされていたが、実際には壊れている。gateway 側で onLifecycle に "wait" を返すだけで、agent 側のセッションループ（session-loop.ts）は session.idle で無条件に終了するまま。backgroundTasks 付きの session.idle でセッションループが終了し、copilotclaw_wait が宙に浮いてゾンビ化する。実現済みマーカーを未実現に戻し、正しい修正方針を記載する必要がある。
+
 <!-- 2026-03-31 -->
 ## physical session の常時保持と連続 turn 列の概念
 

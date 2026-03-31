@@ -10,8 +10,9 @@ export function adaptCopilotSession(session: CopilotSession): SessionLike {
       session.on("session.error", (event) => {
         callbacks.onError(event.data.message);
       });
-      session.on("session.idle", () => {
-        callbacks.onIdle();
+      session.on("session.idle", (event) => {
+        const hasBackgroundTasks = event.data?.backgroundTasks != null;
+        callbacks.onIdle(hasBackgroundTasks);
       });
     },
     send: (options) => session.send(options),

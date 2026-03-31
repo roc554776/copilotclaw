@@ -33,14 +33,11 @@ describe("SessionController — state transitions", () => {
   it("rejects invalid transition and logs", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    // Put session in "waiting" state
-    orchestrator.updateSessionStatus(sessionId, "waiting");
+    // Put session in "idle" state
+    orchestrator.updateSessionStatus(sessionId, "idle");
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    // Try to transition waiting → waiting via onPhysicalSessionStarted (which does starting → waiting)
-    // But since we're already in "waiting", the transition from waiting → waiting is not in VALID_TRANSITIONS
+    // idle → waiting is not valid (must go through starting first)
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
-    // The transition should succeed because waiting → waiting... actually waiting is not in VALID_TRANSITIONS from waiting.
-    // Let's check: onPhysicalSessionStarted does transition(sessionId, "waiting") which is waiting → waiting — not valid
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("rejected transition"));
     consoleSpy.mockRestore();
   });

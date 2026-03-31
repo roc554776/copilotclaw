@@ -10,7 +10,7 @@ function createMockSession(): SessionLike & { callbacks: SessionLoopCallbacks | 
     },
     async send(options) {
       mock.sendCalls.push(options);
-      queueMicrotask(() => { mock.callbacks?.onIdle(); });
+      queueMicrotask(() => { mock.callbacks?.onIdle(false); });
       return "msg-id";
     },
     async disconnect() {},
@@ -121,5 +121,36 @@ describe("runSessionLoop", () => {
     });
 
     expect(logs.some((l) => l.includes("idle"))).toBe(true);
+  });
+
+  it("does not resolve on idle with backgroundTasks (subagent stop)", async () => {
+    const session = createMockSession();
+    // Override send: fire idle with backgroundTasks first, then true idle
+    let idleCount = 0;
+    session.send = async (options) => {
+      session.sendCalls.push(options);
+      queueMicrotask(() => {
+        idleCount++;
+        if (idleCount === 1) {
+          // First idle: subagent stopped (has backgroundTasks)
+          session.callbacks?.onIdle(true);
+          // Then true idle after a tick
+          queueMicrotask(() => { session.callbacks?.onIdle(false); });
+        }
+      });
+      return "msg-id";
+    };
+
+    const logs: string[] = [];
+    await runSessionLoop({
+      session,
+      initialPrompt: "init",
+      log: (msg) => { logs.push(msg); },
+    });
+
+    // Should have logged the backgroundTasks idle (not ending the loop)
+    expect(logs.some((l) => l.includes("backgroundTasks"))).toBe(true);
+    // And eventually ended on true idle
+    expect(logs.some((l) => l.includes("LLM stopped"))).toBe(true);
   });
 });
