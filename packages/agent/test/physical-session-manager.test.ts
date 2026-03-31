@@ -382,12 +382,12 @@ describe("PhysicalSessionManager — physical session lifecycle", () => {
   });
 });
 
-describe("PhysicalSessionManager — assistant.message to channel timeline", () => {
+describe("PhysicalSessionManager — assistant.message forwarding (gateway handles reflection)", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it("posts assistant.message content to the channel timeline", async () => {
+  it("does not send channel_message for assistant.message (gateway handles via session_event)", async () => {
     const mockSession = makeMockCopilotSession("idle");
     // Suppress automatic idle emit so we can emit assistant.message first, then idle manually.
     mockSession.send.mockImplementation(async () => "msg-id");
@@ -403,37 +403,17 @@ describe("PhysicalSessionManager — assistant.message to channel timeline", () 
     await wait(10);
 
     const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
-    const messageCalls = ipcSendSpy.mock.calls.filter(
-      ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
-    );
-    expect(messageCalls).toHaveLength(1);
-    expect(messageCalls[0]![0].sender).toBe("agent");
-    expect(messageCalls[0]![0].message).toBe("Hello from assistant");
-
-    mockSession.emit("session.idle");
-    await wait(30);
-  });
-
-  it("does not post empty assistant.message content", async () => {
-    const mockSession = makeMockCopilotSession("idle");
-    // Suppress automatic idle emit so we can emit assistant.message first, then idle manually.
-    mockSession.send.mockImplementation(async () => "msg-id");
-
-    installClientMock(vi.fn().mockResolvedValue(mockSession));
-
-    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
-
-    manager.startPhysicalSession({ sessionId: nextSessionId() });
-    await waitForSessionReady(manager);
-
-    mockSession.emit("assistant.message", { data: { content: "" } });
-    await wait(10);
-
-    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    // No channel_message should be sent — gateway handles reflection via session_event
     const messageCalls = ipcSendSpy.mock.calls.filter(
       ([msg]: [Record<string, unknown>]) => msg.type === "channel_message",
     );
     expect(messageCalls).toHaveLength(0);
+
+    // But the event should be forwarded as session_event via the catch-all handler
+    const eventCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "session_event" && msg.eventType === "assistant.message",
+    );
+    expect(eventCalls.length).toBeGreaterThanOrEqual(1);
 
     mockSession.emit("session.idle");
     await wait(30);

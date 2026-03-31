@@ -10,14 +10,29 @@
 import { describe, expect, it, vi } from "vitest";
 import { Store } from "../../src/store.js";
 
-/** Replicates the daemon's onSessionEvent handler logic for subagent events. */
+/** Replicates the daemon's onSessionEvent handler logic for assistant.message and subagent events. */
 function handleSessionEvent(
   store: Store,
   notifyAgent: (channelId: string) => void,
   channelId: string | undefined,
   eventType: string,
   data: Record<string, unknown>,
-): void {
+): { sseBroadcasts: Array<Record<string, unknown>> } {
+  const sseBroadcasts: Array<Record<string, unknown>> = [];
+
+  // Reflect assistant.message to channel timeline
+  if (channelId !== undefined && eventType === "assistant.message") {
+    const content = typeof data["content"] === "string" ? data["content"] : "";
+    if (content.length > 0) {
+      store.addMessage(channelId, "agent", content);
+      sseBroadcasts.push({
+        type: "new_message",
+        channelId,
+        data: { sender: "agent" as const, message: content },
+      });
+    }
+  }
+
   if (channelId !== undefined && (eventType === "subagent.completed" || eventType === "subagent.failed")) {
     if (data["parentToolCallId"] === undefined) {
       const agentName = data["agentName"] as string ?? "unknown";
@@ -28,7 +43,69 @@ function handleSessionEvent(
       notifyAgent(channelId);
     }
   }
+
+  return { sseBroadcasts };
 }
+
+describe("daemon onSessionEvent — assistant.message reflection", () => {
+  it("adds agent message to channel timeline on assistant.message", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+    const notifyAgent = vi.fn();
+
+    const { sseBroadcasts } = handleSessionEvent(store, notifyAgent, channelId, "assistant.message", {
+      content: "Hello from the assistant",
+    });
+
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.sender).toBe("agent");
+    expect(msgs[0]!.message).toBe("Hello from the assistant");
+    expect(sseBroadcasts).toHaveLength(1);
+    expect(sseBroadcasts[0]).toEqual({
+      type: "new_message",
+      channelId,
+      data: { sender: "agent", message: "Hello from the assistant" },
+    });
+  });
+
+  it("ignores assistant.message with empty content", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+    const notifyAgent = vi.fn();
+
+    const { sseBroadcasts } = handleSessionEvent(store, notifyAgent, channelId, "assistant.message", {
+      content: "",
+    });
+
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs).toHaveLength(0);
+    expect(sseBroadcasts).toHaveLength(0);
+  });
+
+  it("ignores assistant.message when content is not a string", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+    const notifyAgent = vi.fn();
+
+    const { sseBroadcasts } = handleSessionEvent(store, notifyAgent, channelId, "assistant.message", {});
+
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs).toHaveLength(0);
+    expect(sseBroadcasts).toHaveLength(0);
+  });
+
+  it("ignores assistant.message when channelId is undefined", () => {
+    const store = new Store();
+    const notifyAgent = vi.fn();
+
+    const { sseBroadcasts } = handleSessionEvent(store, notifyAgent, undefined, "assistant.message", {
+      content: "should not appear",
+    });
+
+    expect(sseBroadcasts).toHaveLength(0);
+  });
+});
 
 describe("daemon onSessionEvent — subagent completion", () => {
   it("inserts system message and calls notifyAgent on subagent.completed", () => {

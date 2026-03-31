@@ -79,6 +79,26 @@ describe("POST /api/channels/:channelId/messages (user message)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("returns 400 when sender is missing", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "no sender" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain("sender");
+  });
+
+  it("returns 400 when sender is invalid", async () => {
+    const res = await fetch(`${baseUrl}/api/channels/${defaultChannelId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "invalid", message: "bad sender" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("returns 404 for non-existent channel", async () => {
     const res = await fetch(`${baseUrl}/api/channels/nonexistent/messages`, {
       method: "POST",

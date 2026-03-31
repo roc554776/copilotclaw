@@ -459,7 +459,11 @@ function createRequestHandler(
           return;
         }
         const senderRaw = body["sender"];
-        const sender = senderRaw === "user" ? "user" as const : senderRaw === "cron" ? "cron" as const : senderRaw === "system" ? "system" as const : "agent" as const;
+        if (senderRaw !== "user" && senderRaw !== "agent" && senderRaw !== "cron" && senderRaw !== "system") {
+          json(res, 400, { error: "missing or invalid 'sender' field" });
+          return;
+        }
+        const sender = senderRaw;
         const msg = store.addMessage(channelId, sender, body["message"] as string);
         if (msg === undefined) {
           json(res, 404, { error: "channel not found" });

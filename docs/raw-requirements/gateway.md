@@ -17,3 +17,6 @@ vscode がそうであるように、copilotclaw も単一のプロセス (gatew
 
 <!-- 2026-03-26 -->
 - start/restart コマンドで gateway のバージョンが表示されてほしい
+
+<!-- 2026-03-31 -->
+- POST /api/channels/:channelId/messages の sender フィールドが required になっていないバグ。全ての正規の呼び出し元（フロントエンド sendMessage、e2e テスト）は sender を明示しており、省略時のフォールバック動作に依存しているコードは存在しない。sender が省略された場合は 400 エラーを返すべき。

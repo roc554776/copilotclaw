@@ -58,7 +58,8 @@
       "Bash(pnpm --filter @copilotclaw/gateway run typecheck)",
       "Bash(pnpm --filter @copilotclaw/gateway run test)",
       "Bash(pnpm vitest:*)",
-      "Bash(pnpm test:*)"
+      "Bash(pnpm test:*)",
+      "Bash(curl -s http://localhost:19743/api/status)"
     ]
   }
 }

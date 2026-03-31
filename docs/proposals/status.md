@@ -11,7 +11,7 @@
 - Gateway サーバー（インメモリ Store、API、チャット UI dashboard、冪等起動）
 - Channel 機能（gateway 経由の agent-user 対話、`copilotclaw_` プレフィクスのカスタムツール）
 - Channel ツール統廃合（`copilotclaw_send_message` / `copilotclaw_wait` / `copilotclaw_list_messages`）
-- `assistant.message` イベントの channel タイムライン自動反映（`copilotclaw_send_message` のフォールバック）
+- `assistant.message` イベントの channel タイムライン自動反映（`copilotclaw_send_message` のフォールバック）— gateway 側 `onSessionEvent` で処理（v0.62.0）
 - 抽象 Agent Session と物理 Copilot Session の分離（suspended 状態、channel binding 維持、reviveSession による自動復帰、`agent-bindings.json` 永続化）
 - 物理 Session 停止後の記憶保持（copilotSessionId を suspended entry に保持、resumeSession で復元）
 - Custom Agent 構成（channel-operator + worker の 2 agent 体制、`infer` フラグによる subagent 推論制御）
@@ -176,6 +176,8 @@
 - System Status UI 改善（モーダルと /status の内容統一: Gateway→Agent→Config→Quota→Models→Original Prompts→Token Consumption→Sessions。セッション/Original Prompts のアコーディオン折り畳み。Open in new tab リンク修正）（v0.60.0）
 
 - premium request クォータの正確な取得（GitHub API 使用量取得 + SDK fallback。モデル一覧も GitHub Models Catalog から取得し SDK 由来と区別して表示。gateway 側の github-api.ts で実装）（v0.61.0）
+
+- Messages API の sender フィールド必須化（`POST /api/channels/:channelId/messages` で `sender` 省略時に 400 エラーを返す）（v0.62.1）
 
 **未実現:**
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
