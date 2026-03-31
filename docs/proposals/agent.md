@@ -239,9 +239,9 @@ Agent session 起動（session.send を 1 回だけ使用）
 - `copilotclaw_send_message` は即時 return なので、作業を中断せずに状況報告できる
 - 新着 user message は `onPostToolUse` hook の `additionalContext` で LLM に通知される
 
-### session.idle での subagent 停止と親 agent idle の区別（未実現）
+### session.idle での subagent 停止と親 agent idle の区別
 
-session.idle イベントには、subagent が停止しただけで親 agent はまだ `copilotclaw_wait` で待機中というケースと、親 agent 自身が idle になったケースの 2 種類がある。現状は区別なく `action: "stop"` を返しており、subagent 停止時に物理セッション全体が停止してしまう。
+session.idle イベントには、subagent が停止しただけで親 agent はまだ `copilotclaw_wait` で待機中というケースと、親 agent 自身が idle になったケースの 2 種類がある。以下の判定ロジックで区別し、subagent 停止時は `action: "wait"` を返す。
 
 **判定ロジック:**
 

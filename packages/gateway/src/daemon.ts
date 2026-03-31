@@ -259,7 +259,13 @@ async function main(): Promise<void> {
           case "session.idle": {
             const bgTasks = data["backgroundTasks"];
             lastIdleHasBackgroundTasks.set(orchSessionId, bgTasks != null);
-            orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
+            // Only transition to "idle" when there are no background tasks.
+            // When backgroundTasks is present, a subagent stopped but the parent
+            // agent's tool (e.g. copilotclaw_wait) is still executing — preserve
+            // the current state so the onLifecycle fallback check can detect it.
+            if (bgTasks == null) {
+              orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
+            }
             break;
           }
           case "session.usage_info": {
