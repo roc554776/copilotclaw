@@ -53,7 +53,7 @@ export class SessionOrchestrator {
     this.loadFromDb();
   }
 
-  private static readonly LATEST_SCHEMA_VERSION = 2;
+  private static readonly LATEST_SCHEMA_VERSION = 3;
 
   private static readonly SCHEMA_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // v0 → v1: Convert legacy "suspended" sessions with channel binding + history to "idle".
@@ -74,6 +74,14 @@ export class SessionOrchestrator {
       // Sessions without history → new (no physical session info to restore)
       db.prepare(
         `UPDATE abstract_sessions SET status = 'new' WHERE status NOT IN ('idle', 'new') AND channelId IS NOT NULL AND physicalSessionHistory = '[]'`,
+      ).run();
+    },
+    // v2 → v3: Fix sessions left as "idle" without history (should be "new").
+    // v1→v2 migration set history=0 sessions to "new" but only ran on fresh installs.
+    // Existing DBs that already had version=2 need this cleanup.
+    2: (db) => {
+      db.prepare(
+        `UPDATE abstract_sessions SET status = 'new' WHERE status = 'idle' AND channelId IS NOT NULL AND physicalSessionHistory = '[]'`,
       ).run();
     },
   };
