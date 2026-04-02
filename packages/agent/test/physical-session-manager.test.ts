@@ -142,6 +142,7 @@ function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
     (this as Record<string, unknown>)["createSession"] = createSession;
     (this as Record<string, unknown>)["resumeSession"] = createSession; // reuse same mock for resume
     (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+    (this as Record<string, unknown>)["forceStop"] = vi.fn().mockResolvedValue(undefined);
     (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
     (this as Record<string, unknown>)["rpc"] = {
       models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
@@ -199,8 +200,29 @@ describe("PhysicalSessionManager — physical session lifecycle", () => {
     // Fully removed — not just suspended
     expect(manager.getPhysicalSessionStatuses()[sessionId]).toBeUndefined();
 
+    // client.stop() should have been called to kill the SDK CLI process
+    const clientInstances = (CopilotClient as ReturnType<typeof vi.fn>).mock.instances;
+    const lastClient = clientInstances[clientInstances.length - 1] as Record<string, ReturnType<typeof vi.fn>>;
+    expect(lastClient["stop"]).toHaveBeenCalled();
+
     mockSession.emit("session.idle", { data: {} });
     await wait(30);
+  });
+
+  it("stopAllPhysicalSessions calls client.stop on all clients", async () => {
+    installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
+    await wait(50); // Let session start and idle
+
+    await manager.stopAllPhysicalSessions();
+
+    // client.stop() should have been called
+    const clientInstances = (CopilotClient as ReturnType<typeof vi.fn>).mock.instances;
+    const lastClient = clientInstances[clientInstances.length - 1] as Record<string, ReturnType<typeof vi.fn>>;
+    expect(lastClient["stop"]).toHaveBeenCalled();
   });
 
   it("does not post channel message when session is aborted via stopSession", async () => {
@@ -905,6 +927,7 @@ describe("PhysicalSessionManager — session status tracking via onStatusChange"
       (this as Record<string, unknown>)["createSession"] = createSessionMock;
       (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
       (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["forceStop"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["rpc"] = {
         models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
@@ -971,6 +994,7 @@ describe("PhysicalSessionManager — generic hook RPC dispatch", () => {
       (this as Record<string, unknown>)["createSession"] = createSessionMock;
       (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
       (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["forceStop"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["rpc"] = {
         models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
@@ -1042,6 +1066,7 @@ describe("PhysicalSessionManager — generic hook RPC dispatch", () => {
       (this as Record<string, unknown>)["createSession"] = createSessionMock;
       (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
       (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["forceStop"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["rpc"] = {
         models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },

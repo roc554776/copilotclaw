@@ -530,28 +530,44 @@ export class PhysicalSessionManager {
     this.suspendPhysicalSessionState(entry);
   }
 
-  /** Explicitly stop a session — fully removes the physical session. */
+  /** Explicitly stop a session — fully removes the physical session and stops the SDK CLI process. */
   stopPhysicalSession(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return;
     entry.abortController.abort();
+    // Stop the CopilotClient's CLI process. Without this, the CLI process
+    // becomes an orphan zombie consuming premium requests.
+    entry.client.stop().catch(() => {
+      entry.client.forceStop().catch(() => {});
+    });
     this.sessions.delete(sessionId);
   }
 
   async stopAllPhysicalSessions(): Promise<void> {
-    const promises: Promise<void>[] = [];
     const entries = [...this.sessions.entries()];
+    const clients: CopilotClient[] = [];
+    const promises: Promise<void>[] = [];
     for (const [sessionId, entry] of entries) {
       entry.abortController.abort();
       promises.push(entry.sessionPromise);
+      clients.push(entry.client);
       this.sessions.delete(sessionId);
     }
+    // Wait for session promises to settle (5s timeout)
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((r) => { timeoutHandle = setTimeout(r, 5000); });
     await Promise.race([
       Promise.allSettled(promises).finally(() => { clearTimeout(timeoutHandle); }),
       timeout,
     ]);
+    // Stop all CopilotClient CLI processes. Try graceful stop first,
+    // then forceStop as fallback to ensure no zombie CLI processes remain.
+    if (this.pooledClient !== undefined && this.pooledClientStarted) {
+      clients.push(this.pooledClient);
+    }
+    await Promise.allSettled(
+      clients.map((client) => client.stop().catch(() => client.forceStop())),
+    );
   }
 
   /** Ask gateway what to do when a session goes idle or errors.
