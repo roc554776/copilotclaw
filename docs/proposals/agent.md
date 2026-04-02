@@ -180,7 +180,7 @@ Gateway 常時監視（定期ポーリング）:
     → リトライアウト → エラーログ出力（agent process がエラー状態）
 ```
 
-### SDK CLI 子プロセスのゾンビ化（未実現）
+### SDK CLI 子プロセスのゾンビ化（v0.66.0 で実現済み）
 
 agent プロセス停止時に、SDK が spawn した CLI 子プロセス（`@github/copilot/index.js`）がゾンビとして残る。
 
