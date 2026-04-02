@@ -98,12 +98,14 @@ export function TokenUsagePage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Auto-refresh
+  // Auto-refresh: use ref to always call the latest load without restarting the timer
+  const loadRef = useRef(load);
+  loadRef.current = load;
   useEffect(() => {
     if (!autoRefresh) return;
-    const timer = setInterval(() => { load(); }, AUTO_REFRESH_INTERVAL_MS);
+    const timer = setInterval(() => { loadRef.current(); }, AUTO_REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [autoRefresh, load]);
+  }, [autoRefresh]);
 
   const allModels = useMemo(() => {
     const set = new Set<string>();
