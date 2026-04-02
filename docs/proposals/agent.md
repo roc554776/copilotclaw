@@ -186,14 +186,17 @@ agent プロセス停止時に、SDK が spawn した CLI 子プロセス（`@gi
 
 **現状の問題:**
 
-- `stopAllPhysicalSessions()` は abort + 5秒タイムアウトで打ち切る。SDK の `session.disconnect()` が完了する前に agent プロセスが終了すると、SDK CLI プロセスが orphan として残る
-- gateway の agent 再起動時は IPC `stop` コマンドを送るだけで、プロセスを直接 kill しない。stop コマンドが正常処理されなかった場合（agent がハング中等）、古い agent プロセスとその子プロセスが全て残る
-- `spawnAgent()` は `detached: true` + `child.unref()` で子プロセスを切り離しており、gateway はプロセス参照を保持しない
+- agent 停止時（`stopAllPhysicalSessions` / `stopPhysicalSession`）に `CopilotClient.stop()` / `forceStop()` を呼んでいない。これがゾンビの直接原因（通常の lifecycle "stop" パスでは `client.stop()` を呼んでいる）
+- `CopilotClient.start()` が CLI プロセスを spawn し、`stop()` / `forceStop()` が kill する責務を持つ
+- `session.disconnect()` はセッションの切断であって CLI プロセスの終了ではない
+- `stopAllPhysicalSessions()` は abort + 5秒タイムアウトで打ち切るが、`client.stop()` を呼ばないため CLI プロセスが残る
+- gateway の agent 再起動時は IPC `stop` コマンドを送るだけで、プロセスを直接 kill しない
 - 実測で 89 個のゾンビ SDK CLI プロセスが残っていた。プレミアムリクエストを無駄に消費し続ける
 
 **対応方針:**
 
-調査が必要。SDK CLI プロセスは SDK（CopilotClient）が spawn しており、agent は PID を直接管理していない可能性がある。`session.disconnect()` が子プロセスを kill する責務を持つが、タイムアウトで打ち切られた場合に残る。SDK 側の disconnect 実装の挙動と、agent が SDK CLI プロセスの PID を取得・管理できるかを調査した上で対応方針を決定する。
+- agent 停止時に `client.stop()` を呼び、タイムアウト後は `client.forceStop()` で CLI プロセスを強制終了する
+- `CopilotSession` は `Symbol.asyncDispose` を実装している（SDK README に記載）。`await using session = ...` 構文を使い、スコープ離脱時の `disconnect()` 漏れを防ぐ
 
 ### IPC Socket パス
 
