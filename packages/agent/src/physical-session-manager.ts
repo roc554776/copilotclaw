@@ -562,7 +562,7 @@ export class PhysicalSessionManager {
     ]);
     // Stop all CopilotClient CLI processes. Try graceful stop first,
     // then forceStop as fallback to ensure no zombie CLI processes remain.
-    if (this.pooledClient !== undefined && this.pooledClientStarted) {
+    if (this.pooledClient !== undefined) {
       clients.push(this.pooledClient);
     }
     await Promise.allSettled(
@@ -646,7 +646,7 @@ export class PhysicalSessionManager {
         case "stop":
           this.sendPhysicalSessionEnded(entry, event, elapsed, error);
           this.suspendPhysicalSession(entry);
-          clientToStop.stop().catch(() => {});
+          clientToStop.stop().catch(() => { clientToStop.forceStop().catch(() => {}); });
           break;
         case "reinject":
           // Re-enter the session loop with a new send() call.
