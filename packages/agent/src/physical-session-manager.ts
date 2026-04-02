@@ -128,28 +128,28 @@ export class PhysicalSessionManager {
   /** Singleton CopilotClient for the entire agent process.
    *  One client = one CLI process. Sessions are created/resumed on this single client. */
   private client: CopilotClient | undefined;
-  private clientStarted = false;
+  private clientStartPromise: Promise<void> | undefined;
 
   /** Get or create the singleton CopilotClient. */
-  getClient(): CopilotClient {
+  private getClient(): CopilotClient {
     if (this.client === undefined) {
       const opts: Record<string, unknown> = { ...this.clientOptions };
       if (this.githubToken !== undefined) {
         opts["githubToken"] = this.githubToken;
       }
       this.client = new CopilotClient(opts as ConstructorParameters<typeof CopilotClient>[0]);
-      this.clientStarted = false;
+      this.clientStartPromise = undefined;
     }
     return this.client;
   }
 
   /** Ensure the singleton client is started (needed for RPCs like quota/models
-   *  when no session has been created yet). */
-  private async ensureClientStarted(): Promise<void> {
+   *  when no session has been created yet). Uses a stored promise to prevent
+   *  concurrent callers from double-starting the client. */
+  private ensureClientStarted(): Promise<void> {
     const client = this.getClient();
-    if (this.clientStarted) return;
-    await client.start();
-    this.clientStarted = true;
+    this.clientStartPromise ??= client.start();
+    return this.clientStartPromise;
   }
 
   async getQuota(): Promise<Record<string, unknown> | null> {
@@ -466,10 +466,8 @@ export class PhysicalSessionManager {
    * Queries available models via SDK and picks the cheapest. */
   private async resolveModel(client: CopilotClient): Promise<string> {
     try {
-      // Ensure the CLI process is started before accessing client.rpc.
-      // createSession calls start() automatically via autoStart, but
-      // resolveModel runs before createSession to determine the model.
-      await client.start();
+      // Ensure the singleton client is started before accessing client.rpc.
+      await this.ensureClientStarted();
       const { models } = await client.rpc.models.list();
       if (models.length === 0) {
         this.logError("no models available from SDK, falling back to gpt-4.1");
