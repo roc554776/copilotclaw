@@ -206,11 +206,12 @@ async function main(): Promise<void> {
   // Gateway-driven physical session commands (Phase 3)
   const startPhysicalSessionHandler = (msg: Record<string, unknown>) => {
     const sessionId = msg["sessionId"] as string;
-    const copilotSessionId = msg["copilotSessionId"] as string | undefined;
+    // Accept both "physicalSessionId" (new) and "copilotSessionId" (legacy) from gateway
+    const physicalSessionId = (msg["physicalSessionId"] ?? msg["copilotSessionId"]) as string | undefined;
     const resolvedModel = msg["model"] as string | undefined;
-    log(`start_physical_session: session=${sessionId.slice(0, 8)}, copilotSession=${copilotSessionId ?? "(new)"}, model=${resolvedModel ?? "(auto)"}`);
+    log(`start_physical_session: session=${sessionId.slice(0, 8)}, physicalSession=${physicalSessionId ?? "(new)"}, model=${resolvedModel ?? "(auto)"}`);
     const opts: import("./physical-session-manager.js").StartPhysicalSessionOptions = { sessionId };
-    if (copilotSessionId !== undefined) opts.copilotSessionId = copilotSessionId;
+    if (physicalSessionId !== undefined) opts.physicalSessionId = physicalSessionId;
     if (resolvedModel !== undefined) opts.resolvedModel = resolvedModel;
     sessionManager!.startPhysicalSession(opts);
   };

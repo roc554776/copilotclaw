@@ -296,10 +296,10 @@ export class AgentManager {
   }
 
   /** Send a start_physical_session command to the agent via the stream. */
-  startPhysicalSession(sessionId: string, copilotSessionId?: string, model?: string): void {
+  startPhysicalSession(sessionId: string, physicalSessionId?: string, model?: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
     const msg: Record<string, unknown> = { type: "start_physical_session", sessionId };
-    if (copilotSessionId !== undefined) msg["copilotSessionId"] = copilotSessionId;
+    if (physicalSessionId !== undefined) msg["physicalSessionId"] = physicalSessionId;
     if (model !== undefined) msg["model"] = model;
     this.stream.send(msg);
   }

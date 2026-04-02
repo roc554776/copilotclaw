@@ -53,6 +53,16 @@
 
 - agent プロセス停止時に SDK CLI 子プロセス（@github/copilot/index.js）がゾンビとして残る問題。agent の stopAllPhysicalSessions は 5秒タイムアウトで打ち切り、SDK の disconnect() が完了する前に agent プロセスが終了する可能性がある。SDK CLI プロセスは orphan として残り、プレミアムリクエストを無駄に消費し続ける。gateway の agent 再起動時も IPC stop コマンドを送るだけでプロセスを直接 kill しない。実測で 89 個のゾンビ SDK CLI プロセスが残っていた。
 
+<!-- 2026-04-02 -->
+## CopilotClient とセッション管理の設計問題
+
+- CopilotClient は agent process 全体で 1 つでいい。現状はセッションごとに新しいクライアントを作っている（CLI プロセスが増殖する根本原因）
+- physical session id を自分で生成して SDK の createSession / resumeSession に渡す。これが唯一のセッション識別子。copilotSessionId という別名で管理する必要はない
+- copilotSessionId という表現は捨てて、physical session id に統一する
+- client.stop() 後でも physical session id があれば新しいクライアント（または再起動したクライアント）で resumeSession できる
+- end-turn-run: session.disconnect() でセッション切断。クライアントは止めない。physical session id 保持。次回 resumeSession で再開
+- archive session: session.disconnect() + physical session id を破棄（コンテキストを捨てる）
+
 ## agent プロセスの責務（既存）
 
 - agent プロセスの責務

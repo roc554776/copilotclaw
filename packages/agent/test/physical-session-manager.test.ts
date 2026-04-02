@@ -199,11 +199,7 @@ describe("PhysicalSessionManager — physical session lifecycle", () => {
 
     // Fully removed — not just suspended
     expect(manager.getPhysicalSessionStatuses()[sessionId]).toBeUndefined();
-
-    // client.stop() should have been called to kill the SDK CLI process
-    const clientInstances = (CopilotClient as ReturnType<typeof vi.fn>).mock.instances;
-    const lastClient = clientInstances[clientInstances.length - 1] as Record<string, ReturnType<typeof vi.fn>>;
-    expect(lastClient["stop"]).toHaveBeenCalled();
+    // Singleton client is NOT stopped (other sessions may use it)
 
     mockSession.emit("session.idle", { data: {} });
     await wait(30);
@@ -219,7 +215,7 @@ describe("PhysicalSessionManager — physical session lifecycle", () => {
 
     await manager.stopAllPhysicalSessions();
 
-    // client.stop() should have been called
+    // Singleton client should have been stopped on full shutdown
     const clientInstances = (CopilotClient as ReturnType<typeof vi.fn>).mock.instances;
     const lastClient = clientInstances[clientInstances.length - 1] as Record<string, ReturnType<typeof vi.fn>>;
     expect(lastClient["stop"]).toHaveBeenCalled();

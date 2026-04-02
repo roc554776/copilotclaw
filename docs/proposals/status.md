@@ -185,7 +185,7 @@
 
 - メッセージ消費とセッションステータス管理の設計整理 — SessionController 導入（v0.64.0）。POST handler のセッション即時起動、pending flush の安全化、lifecycle "wait" ゾンビ修正、notifyAgent 死セッション対応、swallowed-message 誤発火修正、double drain バイパス修正、cron notify タイミング、SSE broadcast 追加、gateway 再起動 stale 状態
 
-- SDK CLI 子プロセスのゾンビ化修正（全 stop パスで client.stop()/forceStop() を呼ぶ。pooled client も含む）（v0.66.0）
+- SDK CLI 子プロセスのゾンビ化修正（v0.66.0 で部分対応: 全 stop パスで client.stop()/forceStop()。根本原因のクライアント多重生成は未修正）
 
 - キャッシュトークンの記録と消費量計算（cacheReadTokens / cacheWriteTokens の保存、consumedTokens ベースの指数計算）（v0.67.0）
 - トークン消費グラフ UI の改善（1分自動更新 toggle、query パラメータ反映、MA 5h、Token Usage by Model を線グラフ化：実値=実線、MA=破線、同モデル同色）（v0.67.0）
@@ -193,7 +193,8 @@
 - Token Usage の MA デフォルトを 5h に変更（v0.67.1）
 
 **未実現:**
-- end turn run の disconnect 方式 — 物理セッションを stop ではなく disconnect し、copilotSessionId を保持して次回 resume。現状は stopPhysicalSession を呼んでいる
+- CopilotClient シングルトン化と copilotSessionId → physical session id 統一 — クライアントをセッションごとに作らず process 全体で 1 つに。copilotSessionId を廃止し physical session id に統一
+- end turn run の disconnect 方式 — session.disconnect() で切断（クライアントは止めない）。physical session id 保持して次回 resume。現状は stopPhysicalSession を呼んでいる
 - モデル切り替えの動作修正 — apply ボタンは設定値変更のみで turn run を停止しない。次回 turn run 開始時にモデル適用。現状はセッションが捨てられている
 - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）

@@ -23,11 +23,10 @@ export interface PhysicalSessionInfo {
 
 interface PhysicalSessionEntry {
   sessionId: string;
-  copilotSessionId?: string | undefined; // SDK session ID for resumeSession
+  physicalSessionId?: string | undefined; // Self-generated session ID for SDK createSession/resumeSession
   copilotSession?: CopilotSession | undefined; // Live SDK session for getMessages()
   resolvedModel?: string | undefined; // Model resolved by gateway
   info: PhysicalSessionInfo;
-  client: CopilotClient;
   abortController: AbortController;
   sessionPromise: Promise<void>;
   generation: number;
@@ -69,8 +68,8 @@ export interface StartPhysicalSessionOptions {
   /** Opaque session token assigned by gateway. Agent uses this for all IPC communication.
    *  Agent does not interpret this token — gateway owns its meaning. */
   sessionId: string;
-  /** SDK session ID to resume instead of creating a new one. Used by deferred resume. */
-  copilotSessionId?: string;
+  /** Physical session ID to resume instead of creating a new one. */
+  physicalSessionId?: string;
   /** Resolved model name from gateway. When set, agent uses this model directly
    *  instead of running its own model selection algorithm. */
   resolvedModel?: string;
@@ -126,48 +125,37 @@ export class PhysicalSessionManager {
     this.logError = options.logError ?? defaultLogError;
   }
 
-  /** Create a CopilotClient with gateway-provided options (passthrough). */
-  private createClient(): CopilotClient {
-    const opts: Record<string, unknown> = { ...this.clientOptions };
-    if (this.githubToken !== undefined) {
-      opts["githubToken"] = this.githubToken;
+  /** Singleton CopilotClient for the entire agent process.
+   *  One client = one CLI process. Sessions are created/resumed on this single client. */
+  private client: CopilotClient | undefined;
+  private clientStarted = false;
+
+  /** Get or create the singleton CopilotClient. */
+  getClient(): CopilotClient {
+    if (this.client === undefined) {
+      const opts: Record<string, unknown> = { ...this.clientOptions };
+      if (this.githubToken !== undefined) {
+        opts["githubToken"] = this.githubToken;
+      }
+      this.client = new CopilotClient(opts as ConstructorParameters<typeof CopilotClient>[0]);
+      this.clientStarted = false;
     }
-    return new CopilotClient(opts as ConstructorParameters<typeof CopilotClient>[0]);
+    return this.client;
   }
 
-  private pooledClient: CopilotClient | undefined;
-  private pooledClientStarted = false;
-
-  /** Get any CopilotClient (for server-level RPCs like quota/models).
-   *  Prefers active sessions, falls back to suspended, uses pooled client if none exist.
-   *  The pooled client is created eagerly and started on first use. */
-  private getAnyClient(): CopilotClient {
-    for (const [, entry] of this.sessions) {
-      if (entry.info.status !== "suspended") return entry.client;
-    }
-    for (const [, entry] of this.sessions) {
-      return entry.client;
-    }
-    if (this.pooledClient === undefined) {
-      this.pooledClient = this.createClient();
-      this.pooledClientStarted = false;
-    }
-    return this.pooledClient;
-  }
-
-  /** Ensure the pooled client is started before use.
-   *  Session clients are started by createSession/resumeSession, but the pooled
-   *  client needs explicit start() since it's only used for RPCs like quota/models. */
-  private async ensurePooledClientStarted(client: CopilotClient): Promise<void> {
-    if (client !== this.pooledClient || this.pooledClientStarted) return;
+  /** Ensure the singleton client is started (needed for RPCs like quota/models
+   *  when no session has been created yet). */
+  private async ensureClientStarted(): Promise<void> {
+    const client = this.getClient();
+    if (this.clientStarted) return;
     await client.start();
-    this.pooledClientStarted = true;
+    this.clientStarted = true;
   }
 
   async getQuota(): Promise<Record<string, unknown> | null> {
     try {
-      const client = this.getAnyClient();
-      await this.ensurePooledClientStarted(client);
+      const client = this.getClient();
+      await this.ensureClientStarted();
       return await client.rpc.account.getQuota() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
       this.logError(`getQuota error: ${err instanceof Error ? err.message : String(err)}`);
@@ -177,8 +165,8 @@ export class PhysicalSessionManager {
 
   async getModels(): Promise<Record<string, unknown> | null> {
     try {
-      const client = this.getAnyClient();
-      await this.ensurePooledClientStarted(client);
+      const client = this.getClient();
+      await this.ensureClientStarted();
       return await client.rpc.models.list() as unknown as Record<string, unknown>;
     } catch (err: unknown) {
       this.logError(`getModels error: ${err instanceof Error ? err.message : String(err)}`);
@@ -187,9 +175,9 @@ export class PhysicalSessionManager {
   }
 
   /** Get session messages (conversation history) from the SDK for a given copilot session ID. */
-  async getPhysicalSessionMessages(copilotSessionId: string): Promise<unknown[] | null> {
+  async getPhysicalSessionMessages(physicalSessionId: string): Promise<unknown[] | null> {
     for (const [, entry] of this.sessions) {
-      if (entry.copilotSessionId === copilotSessionId && entry.copilotSession !== undefined) {
+      if (entry.physicalSessionId === physicalSessionId && entry.copilotSession !== undefined) {
         try {
           return await entry.copilotSession.getMessages();
         } catch (err: unknown) {
@@ -228,10 +216,9 @@ export class PhysicalSessionManager {
   }
 
   startPhysicalSession(options: StartPhysicalSessionOptions): string {
-    const { sessionId, copilotSessionId, resolvedModel } = options;
+    const { sessionId, physicalSessionId, resolvedModel } = options;
 
     const abortController = new AbortController();
-    const client = this.createClient();
     const generation = ++this.generationCounter;
     const entry: PhysicalSessionEntry = {
       sessionId,
@@ -239,16 +226,15 @@ export class PhysicalSessionManager {
         status: "starting",
         startedAt: new Date().toISOString(),
       },
-      client,
       abortController,
       sessionPromise: Promise.resolve(),
       generation,
       reinjectCount: 0,
     };
 
-    // Propagate SDK session ID for resume before runSession reads it
-    if (copilotSessionId !== undefined) {
-      entry.copilotSessionId = copilotSessionId;
+    // Propagate physical session ID for resume before runSession reads it
+    if (physicalSessionId !== undefined) {
+      entry.physicalSessionId = physicalSessionId;
     }
 
     // Store resolved model from gateway for use in runSession
@@ -256,7 +242,7 @@ export class PhysicalSessionManager {
       entry.resolvedModel = resolvedModel;
     }
 
-    entry.sessionPromise = this.attachSessionLifecycle(entry, client);
+    entry.sessionPromise = this.attachSessionLifecycle(entry);
     this.sessions.set(sessionId, entry);
     return sessionId;
   }
@@ -333,7 +319,7 @@ export class PhysicalSessionManager {
     };
 
     // Use gateway-resolved model if available, otherwise fall back to local resolution
-    const resolvedModel = entry.resolvedModel ?? await this.resolveModel(entry.client);
+    const resolvedModel = entry.resolvedModel ?? await this.resolveModel(this.getClient());
 
     // Build systemMessage with transform callbacks to capture original system prompt.
     // Each known section gets a pass-through callback that captures the content and
@@ -370,16 +356,16 @@ export class PhysicalSessionManager {
       ...this.sessionConfigOverrides,
     };
     let session: CopilotSession;
-    if (entry.copilotSessionId !== undefined) {
+    if (entry.physicalSessionId !== undefined) {
       try {
-        session = await entry.client.resumeSession(entry.copilotSessionId, baseConfig);
+        session = await this.getClient().resumeSession(entry.physicalSessionId, baseConfig);
       } catch (resumeErr: unknown) {
-        this.log(`resumeSession failed for ${entry.copilotSessionId.slice(0, 12)}, creating new session: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
-        entry.copilotSessionId = undefined;
-        session = await entry.client.createSession(baseConfig);
+        this.log(`resumeSession failed for ${entry.physicalSessionId.slice(0, 12)}, creating new session: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
+        entry.physicalSessionId = undefined;
+        session = await this.getClient().createSession(baseConfig);
       }
     } else {
-      session = await entry.client.createSession(baseConfig);
+      session = await this.getClient().createSession(baseConfig);
     }
 
     // After session creation, the CLI will call systemMessage.transform RPC for each
@@ -423,7 +409,7 @@ export class PhysicalSessionManager {
       postCapturedPrompt();
     });
 
-    entry.copilotSessionId = session.sessionId;
+    entry.physicalSessionId = session.sessionId;
     entry.copilotSession = session;
     entry.info.status = "waiting";
 
@@ -523,7 +509,7 @@ export class PhysicalSessionManager {
   suspendPhysicalSessionState(entry: PhysicalSessionEntry): void {
     entry.info.status = "suspended";
     entry.copilotSession = undefined;
-    // copilotSessionId is preserved for resumeSession on revival
+    // physicalSessionId is preserved for resumeSession on revival
   }
 
   private suspendPhysicalSession(entry: PhysicalSessionEntry): void {
@@ -532,7 +518,7 @@ export class PhysicalSessionManager {
 
   /** Disconnect a session without stopping the CLI process.
    *  Used by end-turn-run: the session loop is aborted and session.disconnect() is called,
-   *  but copilotSessionId is preserved and the CopilotClient stays alive so that
+   *  but physicalSessionId is preserved so that
    *  the next message can resumeSession with the same context. */
   disconnectPhysicalSession(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
@@ -542,31 +528,26 @@ export class PhysicalSessionManager {
     if (entry.copilotSession !== undefined) {
       entry.copilotSession.disconnect().catch(() => {});
     }
-    // Keep the entry with copilotSessionId for resume, but clear live session ref
+    // Keep the entry with physicalSessionId for resume, but clear live session ref
     this.suspendPhysicalSessionState(entry);
   }
 
-  /** Explicitly stop a session — fully removes the physical session and stops the SDK CLI process. */
+  /** Archive a session — disconnect and fully remove (physical session id discarded, context lost). */
   stopPhysicalSession(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return;
     entry.abortController.abort();
-    // Stop the CopilotClient's CLI process. Without this, the CLI process
-    // becomes an orphan zombie consuming premium requests.
-    entry.client.stop().catch(() => {
-      entry.client.forceStop().catch(() => {});
-    });
+    if (entry.copilotSession !== undefined) {
+      entry.copilotSession.disconnect().catch(() => {});
+    }
     this.sessions.delete(sessionId);
   }
 
   async stopAllPhysicalSessions(): Promise<void> {
-    const entries = [...this.sessions.entries()];
-    const clients: CopilotClient[] = [];
     const promises: Promise<void>[] = [];
-    for (const [sessionId, entry] of entries) {
+    for (const [sessionId, entry] of this.sessions) {
       entry.abortController.abort();
       promises.push(entry.sessionPromise);
-      clients.push(entry.client);
       this.sessions.delete(sessionId);
     }
     // Wait for session promises to settle (5s timeout)
@@ -576,14 +557,10 @@ export class PhysicalSessionManager {
       Promise.allSettled(promises).finally(() => { clearTimeout(timeoutHandle); }),
       timeout,
     ]);
-    // Stop all CopilotClient CLI processes. Try graceful stop first,
-    // then forceStop as fallback to ensure no zombie CLI processes remain.
-    if (this.pooledClient !== undefined) {
-      clients.push(this.pooledClient);
+    // Stop the singleton CopilotClient CLI process.
+    if (this.client !== undefined) {
+      await this.client.stop().catch(() => this.client!.forceStop()).catch(() => {});
     }
-    await Promise.allSettled(
-      clients.map((client) => client.stop().catch(() => client.forceStop())),
-    );
   }
 
   /** Ask gateway what to do when a session goes idle or errors.
@@ -621,7 +598,7 @@ export class PhysicalSessionManager {
   /** Attach lifecycle handlers to a session's runSession promise.
    *  On idle/error, asks gateway what to do (stop/reinject/wait).
    *  Default (gateway offline): keep session alive (don't destroy). */
-  private attachSessionLifecycle(entry: PhysicalSessionEntry, clientToStop: CopilotClient): Promise<void> {
+  private attachSessionLifecycle(entry: PhysicalSessionEntry): Promise<void> {
     const startTime = Date.now();
     const sessionId = entry.sessionId;
 
@@ -643,9 +620,9 @@ export class PhysicalSessionManager {
 
       this.log(`session ${sessionId.slice(0, 8)} lifecycle decision: ${decision.action}`);
 
-      if (decision.clearCopilotSessionId && entry.copilotSessionId !== undefined) {
-        this.log(`clearing copilotSessionId ${entry.copilotSessionId.slice(0, 12)}`);
-        entry.copilotSessionId = undefined;
+      if (decision.clearCopilotSessionId && entry.physicalSessionId !== undefined) {
+        this.log(`clearing physicalSessionId ${entry.physicalSessionId.slice(0, 12)}`);
+        entry.physicalSessionId = undefined;
       }
 
       // Cap reinject depth to prevent unbounded recursion when gateway persistently
@@ -662,14 +639,13 @@ export class PhysicalSessionManager {
         case "stop":
           this.sendPhysicalSessionEnded(entry, event, elapsed, error);
           this.suspendPhysicalSession(entry);
-          clientToStop.stop().catch(() => { clientToStop.forceStop().catch(() => {}); });
           break;
         case "reinject":
           // Re-enter the session loop with a new send() call.
           // This keeps the physical session alive by sending a new prompt.
           entry.reinjectCount += 1;
           this.log(`session ${sessionId.slice(0, 8)} reinjecting (count: ${entry.reinjectCount})`);
-          entry.sessionPromise = this.attachSessionLifecycle(entry, clientToStop);
+          entry.sessionPromise = this.attachSessionLifecycle(entry);
           break;
         case "wait":
           // Keep session alive — don't stop the client.
@@ -699,7 +675,7 @@ export class PhysicalSessionManager {
       type: "physical_session_ended",
       sessionId: entry.sessionId,
       reason,
-      copilotSessionId: entry.copilotSessionId ?? "",
+      copilotSessionId: entry.physicalSessionId ?? "",
       elapsedMs,
     };
     if (error !== undefined) msg["error"] = error;
