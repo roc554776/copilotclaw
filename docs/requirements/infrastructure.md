@@ -86,11 +86,11 @@ API で時系列データを出せるようにする。
 
 時系列データをグラフで表示する UI を新規ページに作る。
 
-### Req: キャッシュトークンの記録と消費量計算（未実現）
+### Req: キャッシュトークンの記録と消費量計算（v0.67.0 で実現済み）
 
 `assistant.usage` に `cacheReadTokens` と `cacheWriteTokens` も記録する。消費トークン数は `(inputTokens - cacheReadTokens) + (outputTokens - cacheWriteTokens)` で計算する。消費トークン指数も同様にキャッシュを考慮して計算する。
 
-### Req: トークン消費グラフ UI の改善（未実現）
+### Req: トークン消費グラフ UI の改善（v0.67.0 で実現済み）
 
 - 1分間隔の自動更新（on/off toggle、デフォルト on）
 - 設定（時間間隔、MA 幅、自動更新）を query パラメータに反映
