@@ -50,9 +50,6 @@ function findPeriod(hours: number) {
   return PERIOD_OPTIONS.find((p) => p.hours === hours) ?? PERIOD_OPTIONS[2]!;
 }
 
-function findMaWindow(value: number | null) {
-  return MA_WINDOW_OPTIONS.find((o) => o.value === value) ?? MA_WINDOW_OPTIONS[0]!;
-}
 
 export function TokenUsagePage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -60,7 +57,7 @@ export function TokenUsagePage() {
   // Restore state from query params
   const initialPeriod = findPeriod(Number(searchParams.get("hours")) || 24);
   const initialMaRaw = searchParams.get("ma");
-  const initialMa = initialMaRaw === null ? 3600 : initialMaRaw === "none" ? null : Number(initialMaRaw) || null;
+  const initialMa = initialMaRaw === null ? 18000 : initialMaRaw === "none" ? null : Number(initialMaRaw) || null;
   const initialAutoRefresh = searchParams.get("autoRefresh") !== "off";
 
   const [data, setData] = useState<TimeseriesPoint[]>([]);
@@ -224,7 +221,7 @@ export function TokenUsagePage() {
                 <Tooltip
                   contentStyle={{ background: cardBg, border: `1px solid ${border}`, color: text, fontSize: "0.8rem" }}
                   labelStyle={{ color: textMuted }}
-                  formatter={(v: number) => v.toLocaleString()}
+                  formatter={(v) => typeof v === "number" ? v.toLocaleString() : String(v ?? "")}
                 />
                 <Line type="monotone" dataKey="index" stroke="#58a6ff" strokeWidth={2} dot={false} name="Index" />
                 {maWindow !== null && (
@@ -246,7 +243,7 @@ export function TokenUsagePage() {
                 <Tooltip
                   contentStyle={{ background: cardBg, border: `1px solid ${border}`, color: text, fontSize: "0.8rem" }}
                   labelStyle={{ color: textMuted }}
-                  formatter={(v: number) => v.toLocaleString()}
+                  formatter={(v) => typeof v === "number" ? v.toLocaleString() : String(v ?? "")}
                 />
                 {allModels.map((model, i) => (
                   <Line

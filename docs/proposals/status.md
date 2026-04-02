@@ -190,6 +190,8 @@
 - キャッシュトークンの記録と消費量計算（cacheReadTokens / cacheWriteTokens の保存、consumedTokens ベースの指数計算）（v0.67.0）
 - トークン消費グラフ UI の改善（1分自動更新 toggle、query パラメータ反映、MA 5h、Token Usage by Model を線グラフ化：実値=実線、MA=破線、同モデル同色）（v0.67.0）
 
+- Token Usage の MA デフォルトを 5h に変更（v0.67.1）
+
 **未実現:**
 - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
