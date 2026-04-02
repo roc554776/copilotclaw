@@ -180,6 +180,21 @@ Gateway 常時監視（定期ポーリング）:
     → リトライアウト → エラーログ出力（agent process がエラー状態）
 ```
 
+### SDK CLI 子プロセスのゾンビ化（未実現）
+
+agent プロセス停止時に、SDK が spawn した CLI 子プロセス（`@github/copilot/index.js`）がゾンビとして残る。
+
+**現状の問題:**
+
+- `stopAllPhysicalSessions()` は abort + 5秒タイムアウトで打ち切る。SDK の `session.disconnect()` が完了する前に agent プロセスが終了すると、SDK CLI プロセスが orphan として残る
+- gateway の agent 再起動時は IPC `stop` コマンドを送るだけで、プロセスを直接 kill しない。stop コマンドが正常処理されなかった場合（agent がハング中等）、古い agent プロセスとその子プロセスが全て残る
+- `spawnAgent()` は `detached: true` + `child.unref()` で子プロセスを切り離しており、gateway はプロセス参照を保持しない
+- 実測で 89 個のゾンビ SDK CLI プロセスが残っていた。プレミアムリクエストを無駄に消費し続ける
+
+**対応方針:**
+
+調査が必要。SDK CLI プロセスは SDK（CopilotClient）が spawn しており、agent は PID を直接管理していない可能性がある。`session.disconnect()` が子プロセスを kill する責務を持つが、タイムアウトで打ち切られた場合に残る。SDK 側の disconnect 実装の挙動と、agent が SDK CLI プロセスの PID を取得・管理できるかを調査した上で対応方針を決定する。
+
 ### IPC Socket パス
 
 `{{tmpdir}}/copilotclaw-agent.sock` を使用する（プロセス単位、チャンネルごとではない）。

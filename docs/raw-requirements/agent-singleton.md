@@ -48,6 +48,11 @@
 
 - gateway を stop している状態でも、 agent process は適切に物理セッションを延命し続ける必要がある。（gateway が停止したことにより agent process が（高価な）物理セッションを壊してしまうような設計は常に許されない）
 
+<!-- 2026-04-02 -->
+## SDK CLI 子プロセスのゾンビ化
+
+- agent プロセス停止時に SDK CLI 子プロセス（@github/copilot/index.js）がゾンビとして残る問題。agent の stopAllPhysicalSessions は 5秒タイムアウトで打ち切り、SDK の disconnect() が完了する前に agent プロセスが終了する可能性がある。SDK CLI プロセスは orphan として残り、プレミアムリクエストを無駄に消費し続ける。gateway の agent 再起動時も IPC stop コマンドを送るだけでプロセスを直接 kill しない。実測で 89 個のゾンビ SDK CLI プロセスが残っていた。
+
 ## agent プロセスの責務（既存）
 
 - agent プロセスの責務
