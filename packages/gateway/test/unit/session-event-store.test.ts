@@ -282,6 +282,30 @@ describe("SessionEventStore", () => {
       expect(mini?.multiplier).toBe(0.25);
     });
 
+    it("includes cacheReadTokens and cacheWriteTokens in results", () => {
+      store.appendEvent("sess-cache", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-4.1", inputTokens: 1000, outputTokens: 100, cacheReadTokens: 200, cacheWriteTokens: 50, multiplier: 1 },
+      });
+
+      const usage = store.getTokenUsage("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z");
+      expect(usage[0]?.cacheReadTokens).toBe(200);
+      expect(usage[0]?.cacheWriteTokens).toBe(50);
+    });
+
+    it("defaults cacheReadTokens/cacheWriteTokens to 0 when not stored", () => {
+      store.appendEvent("sess-no-cache", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 10 },
+      });
+
+      const usage = store.getTokenUsage("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z");
+      expect(usage[0]?.cacheReadTokens).toBe(0);
+      expect(usage[0]?.cacheWriteTokens).toBe(0);
+    });
+
     it("defaults multiplier to 0 when not stored", () => {
       store.appendEvent("sess-no-mult", {
         type: "assistant.usage",
@@ -343,15 +367,28 @@ describe("SessionEventStore", () => {
       expect(ts[1]!.models[0]!.model).toBe("gpt-5-mini");
     });
 
-    it("computes index as SUM(MAX(multiplier, 0.1) * totalTokens)", () => {
+    it("computes index using consumedTokens = (input - cacheRead) + (output - cacheWrite)", () => {
       store.appendEvent("sess-idx", {
         type: "assistant.usage",
         timestamp: "2026-03-30T10:00:00Z",
-        data: { model: "gpt-4.1", inputTokens: 1000, outputTokens: 0, multiplier: 2 },
+        data: { model: "gpt-4.1", inputTokens: 1000, outputTokens: 200, cacheReadTokens: 300, cacheWriteTokens: 50, multiplier: 2 },
       });
 
       const ts = store.getTokenUsageTimeseries("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z", 1);
-      expect(ts[0]!.index).toBe(2000); // MAX(2, 0.1) * 1000
+      // consumed = (1000-300) + (200-50) = 850. index = MAX(2, 0.1) * 850 = 1700
+      expect(ts[0]!.index).toBe(1700);
+    });
+
+    it("includes cacheReadTokens/cacheWriteTokens in timeseries model data", () => {
+      store.appendEvent("sess-ts-cache", {
+        type: "assistant.usage",
+        timestamp: "2026-03-30T10:00:00Z",
+        data: { model: "gpt-4.1", inputTokens: 500, outputTokens: 50, cacheReadTokens: 100, cacheWriteTokens: 10, multiplier: 1 },
+      });
+
+      const ts = store.getTokenUsageTimeseries("2026-03-30T09:00:00Z", "2026-03-30T11:00:00Z", 1);
+      expect(ts[0]!.models[0]!.cacheReadTokens).toBe(100);
+      expect(ts[0]!.models[0]!.cacheWriteTokens).toBe(10);
     });
 
     it("computes moving average when window is specified", () => {

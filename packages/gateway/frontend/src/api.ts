@@ -238,6 +238,8 @@ export interface TokenUsageEntry {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   multiplier: number;
 }
 
@@ -253,7 +255,7 @@ export async function fetchTokenUsage(hours?: number, from?: string, to?: string
 
 export interface TimeseriesPoint {
   timestamp: string;
-  models: Array<{ model: string; inputTokens: number; outputTokens: number; multiplier: number }>;
+  models: Array<{ model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; multiplier: number }>;
   index: number;
   movingAverage?: number;
 }
