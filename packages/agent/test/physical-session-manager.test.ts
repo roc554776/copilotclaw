@@ -42,7 +42,7 @@ import { CopilotClient } from "@github/copilot-sdk";
 import { sendToGateway, requestFromGateway } from "../src/ipc-server.js";
 
 /** Builds a fake CopilotSession that fires idle or error after send(). */
-function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit: (event: string, ...args: unknown[]) => void; sessionId: string; getMessages: ReturnType<typeof vi.fn>; registerTransformCallbacks: ReturnType<typeof vi.fn> } {
+function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit: (event: string, ...args: unknown[]) => void; sessionId: string; getMessages: ReturnType<typeof vi.fn>; registerTransformCallbacks: ReturnType<typeof vi.fn>; setModel: ReturnType<typeof vi.fn> } {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
   // Catch-all handlers (called with the full event object for every event)
   const catchAllHandlers: Array<(event: unknown) => void> = [];
@@ -83,7 +83,9 @@ function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<ty
   const getMessages = vi.fn().mockResolvedValue([]);
   const registerTransformCallbacks = vi.fn();
 
-  return { on, send, disconnect, emit, sessionId: "mock-sdk-session", getMessages, registerTransformCallbacks };
+  const setModel = vi.fn().mockResolvedValue(undefined);
+
+  return { on, send, disconnect, emit, sessionId: "mock-sdk-session", getMessages, registerTransformCallbacks, setModel };
 }
 
 const TEST_PROMPTS = {

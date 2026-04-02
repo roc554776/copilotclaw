@@ -445,6 +445,10 @@ export class PhysicalSessionManager {
     // onSessionEvent handler (via the catch-all session_event forwarding above).
     // No agent-side channel_message sending needed.
 
+    // Set model before session.send — ensures the correct model is used for this turn run.
+    // For resumed sessions, this applies the latest model setting from gateway.
+    await session.setModel(resolvedModel);
+
     const logPrefix = entry.sessionId.slice(0, 8);
     await runSessionLoop({
       session: adaptCopilotSession(session),
