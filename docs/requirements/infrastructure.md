@@ -86,6 +86,17 @@ API で時系列データを出せるようにする。
 
 時系列データをグラフで表示する UI を新規ページに作る。
 
+### Req: キャッシュトークンの記録と消費量計算（v0.67.0 で実現済み）
+
+`assistant.usage` に `cacheReadTokens` と `cacheWriteTokens` も記録する。消費トークン数は `(inputTokens - cacheReadTokens) + (outputTokens - cacheWriteTokens)` で計算する。消費トークン指数も同様にキャッシュを考慮して計算する。
+
+### Req: トークン消費グラフ UI の改善（v0.67.0 で実現済み）
+
+- 1分間隔の自動更新（on/off toggle、デフォルト on）
+- 設定（時間間隔、MA 幅、自動更新）を query パラメータに反映
+- MA の選択肢に 5h を追加。MA のデフォルトは 5h（v0.67.1 で実現済み）
+- Token Usage by Model グラフは塗り潰しなしで線のみ。実値が実線、移動平均が破線、同じモデルの実値と移動平均は色を揃える
+
 ### Req: Copilot 物理セッションの状態可視化
 
 API およびダッシュボードで、agent session（論理）と Copilot SDK session（物理）の両方の状態をリアルタイムに確認できるようにする。

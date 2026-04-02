@@ -42,7 +42,7 @@ import { CopilotClient } from "@github/copilot-sdk";
 import { sendToGateway, requestFromGateway } from "../src/ipc-server.js";
 
 /** Builds a fake CopilotSession that fires idle or error after send(). */
-function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit: (event: string, ...args: unknown[]) => void; sessionId: string; getMessages: ReturnType<typeof vi.fn>; registerTransformCallbacks: ReturnType<typeof vi.fn> } {
+function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; emit: (event: string, ...args: unknown[]) => void; sessionId: string; getMessages: ReturnType<typeof vi.fn>; registerTransformCallbacks: ReturnType<typeof vi.fn>; setModel: ReturnType<typeof vi.fn> } {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
   // Catch-all handlers (called with the full event object for every event)
   const catchAllHandlers: Array<(event: unknown) => void> = [];
@@ -83,7 +83,9 @@ function makeMockCopilotSession(behavior: "idle" | "error"): { on: ReturnType<ty
   const getMessages = vi.fn().mockResolvedValue([]);
   const registerTransformCallbacks = vi.fn();
 
-  return { on, send, disconnect, emit, sessionId: "mock-sdk-session", getMessages, registerTransformCallbacks };
+  const setModel = vi.fn().mockResolvedValue(undefined);
+
+  return { on, send, disconnect, emit, sessionId: "mock-sdk-session", getMessages, registerTransformCallbacks, setModel };
 }
 
 const TEST_PROMPTS = {
@@ -142,6 +144,7 @@ function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
     (this as Record<string, unknown>)["createSession"] = createSession;
     (this as Record<string, unknown>)["resumeSession"] = createSession; // reuse same mock for resume
     (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+    (this as Record<string, unknown>)["forceStop"] = vi.fn().mockResolvedValue(undefined);
     (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
     (this as Record<string, unknown>)["rpc"] = {
       models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
@@ -198,9 +201,26 @@ describe("PhysicalSessionManager — physical session lifecycle", () => {
 
     // Fully removed — not just suspended
     expect(manager.getPhysicalSessionStatuses()[sessionId]).toBeUndefined();
+    // Singleton client is NOT stopped (other sessions may use it)
 
     mockSession.emit("session.idle", { data: {} });
     await wait(30);
+  });
+
+  it("stopAllPhysicalSessions calls client.stop on all clients", async () => {
+    installClientMock(vi.fn().mockResolvedValue(makeMockCopilotSession("idle")));
+
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
+    await wait(50); // Let session start and idle
+
+    await manager.stopAllPhysicalSessions();
+
+    // Singleton client should have been stopped on full shutdown
+    const clientInstances = (CopilotClient as ReturnType<typeof vi.fn>).mock.instances;
+    const lastClient = clientInstances[clientInstances.length - 1] as Record<string, ReturnType<typeof vi.fn>>;
+    expect(lastClient["stop"]).toHaveBeenCalled();
   });
 
   it("does not post channel message when session is aborted via stopSession", async () => {
@@ -417,6 +437,51 @@ describe("PhysicalSessionManager — assistant.message forwarding (gateway handl
 
     mockSession.emit("session.idle", { data: {} });
     await wait(30);
+  });
+});
+
+describe("PhysicalSessionManager — session.idle with backgroundTasks", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not end session on idle with backgroundTasks (subagent stop)", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    // Suppress automatic idle so we control it manually
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    installClientMock(vi.fn().mockResolvedValue(mockSession));
+
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+    const sid = nextSessionId();
+    manager.startPhysicalSession({ sessionId: sid });
+    await waitForSessionReady(manager);
+
+    // Emit idle with backgroundTasks — session should NOT end
+    mockSession.emit("session.idle", { data: { backgroundTasks: { agents: [{ agentId: "worker-1", agentType: "worker" }], shells: [] } } });
+    await wait(50);
+
+    const ipcSendSpy = sendToGateway as ReturnType<typeof vi.fn>;
+    // physical_session_ended should NOT have been sent
+    const endedCalls = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "physical_session_ended",
+    );
+    expect(endedCalls).toHaveLength(0);
+
+    // The session.idle event should still be forwarded as session_event
+    const idleEvents = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "session_event" && msg.eventType === "session.idle",
+    );
+    expect(idleEvents.length).toBeGreaterThanOrEqual(1);
+
+    // Now emit true idle to end the session
+    mockSession.emit("session.idle", { data: {} });
+    await wait(50);
+
+    const endedCallsAfter = ipcSendSpy.mock.calls.filter(
+      ([msg]: [Record<string, unknown>]) => msg.type === "physical_session_ended",
+    );
+    expect(endedCallsAfter.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -860,6 +925,7 @@ describe("PhysicalSessionManager — session status tracking via onStatusChange"
       (this as Record<string, unknown>)["createSession"] = createSessionMock;
       (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
       (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["forceStop"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["rpc"] = {
         models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
@@ -926,6 +992,7 @@ describe("PhysicalSessionManager — generic hook RPC dispatch", () => {
       (this as Record<string, unknown>)["createSession"] = createSessionMock;
       (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
       (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["forceStop"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["rpc"] = {
         models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
@@ -997,6 +1064,7 @@ describe("PhysicalSessionManager — generic hook RPC dispatch", () => {
       (this as Record<string, unknown>)["createSession"] = createSessionMock;
       (this as Record<string, unknown>)["resumeSession"] = createSessionMock;
       (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["forceStop"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
       (this as Record<string, unknown>)["rpc"] = {
         models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },

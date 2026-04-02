@@ -191,6 +191,44 @@ token_consumption_index(period) = SUM over models { MAX(model.billing.multiplier
 **開発 hint:**
 - グラフライブラリとして recharts（https://github.com/recharts/recharts）等を検討
 
+### キャッシュトークンの記録と消費量計算（v0.67.0 で実現済み）
+
+`assistant.usage` イベントの保存時に `cacheReadTokens` と `cacheWriteTokens` も記録する。SDK の `assistant.usage` イベントにはこれらのフィールドが含まれている（`docs/references/session-events-analysis/session-events-and-hooks.md` で確認済み）。
+
+**消費トークン数の定義:**
+```
+consumedTokens = (inputTokens - cacheReadTokens) + (outputTokens - cacheWriteTokens)
+```
+
+**消費トークン指数の定義:**
+```
+index = SUM over models { MAX(multiplier, 0.1) * consumedTokens(model) }
+```
+
+**変更箇所:**
+- `daemon.ts`: `onSessionEvent` で `assistant.usage` イベントに `cacheReadTokens` / `cacheWriteTokens` を保存（既存の `multiplier` 付加と同様）
+- `session-event-store.ts`: `getTokenUsage` / `getTokenUsageTimeseries` の集計で `cacheReadTokens` / `cacheWriteTokens` を含めて返す。index 計算を consumedTokens ベースに変更
+- フロントエンド: `TokenUsageEntry` / `TimeseriesPoint` に `cacheReadTokens` / `cacheWriteTokens` を追加。グラフ表示を consumedTokens ベースに変更
+
+### トークン消費グラフ UI の改善（v0.67.0 で実現済み）
+
+**自動更新:**
+- 1分間隔で自動的にデータを再取得。デフォルト on
+- on/off を toggle ボタンで切り替え可能
+
+**設定の query パラメータ反映:**
+- 時間間隔（period）、MA 幅（maWindow）、自動更新（autoRefresh）を URL query に反映
+- ページロード時に query パラメータから復元
+
+**MA 選択肢:**
+- 既存の None / 30min / 1h / 3h / 6h に 5h を追加
+
+**Token Usage by Model グラフの改善:**
+- 現在のスタック型 AreaChart を LineChart に変更（塗り潰しなし）
+- 実値: 実線
+- 移動平均: 破線
+- 同じモデルの実値と移動平均は同じ色
+
 ### Dashboard のモバイル対応（v0.45.0 で実現済み）
 
 Dashboard の web app をモバイル端末で快適に操作できるようにレスポンシブ対応する。

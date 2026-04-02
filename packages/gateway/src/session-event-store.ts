@@ -199,19 +199,21 @@ export class SessionEventStore {
   }
 
   /** Aggregate token usage from assistant.usage events within a time range, grouped by model. */
-  getTokenUsage(from: string, to: string): Array<{ model: string; inputTokens: number; outputTokens: number; multiplier: number }> {
+  getTokenUsage(from: string, to: string): Array<{ model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; multiplier: number }> {
     const rows = this.db.prepare(
       "SELECT data FROM session_events WHERE type = 'assistant.usage' AND timestamp >= ? AND timestamp <= ? ORDER BY id ASC",
     ).all(from, to) as Array<{ data: string }>;
 
-    const byModel = new Map<string, { inputTokens: number; outputTokens: number; multiplier: number }>();
+    const byModel = new Map<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; multiplier: number }>();
     for (const row of rows) {
       try {
-        const d = JSON.parse(row.data) as { model?: string; inputTokens?: number; outputTokens?: number; multiplier?: number };
+        const d = JSON.parse(row.data) as { model?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; multiplier?: number };
         const model = d.model ?? "unknown";
-        const entry = byModel.get(model) ?? { inputTokens: 0, outputTokens: 0, multiplier: d.multiplier ?? 0 };
+        const entry = byModel.get(model) ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, multiplier: d.multiplier ?? 0 };
         entry.inputTokens += d.inputTokens ?? 0;
         entry.outputTokens += d.outputTokens ?? 0;
+        entry.cacheReadTokens += d.cacheReadTokens ?? 0;
+        entry.cacheWriteTokens += d.cacheWriteTokens ?? 0;
         if (d.multiplier !== undefined) entry.multiplier = d.multiplier;
         byModel.set(model, entry);
       } catch {
@@ -229,7 +231,7 @@ export class SessionEventStore {
     movingAverageWindowSec?: number,
   ): Array<{
     timestamp: string;
-    models: Array<{ model: string; inputTokens: number; outputTokens: number; multiplier: number }>;
+    models: Array<{ model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; multiplier: number }>;
     index: number;
     movingAverage?: number;
   }> {
@@ -248,7 +250,7 @@ export class SessionEventStore {
     // Initialize buckets
     const buckets: Array<{
       timestamp: string;
-      byModel: Map<string, { inputTokens: number; outputTokens: number; multiplier: number }>;
+      byModel: Map<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; multiplier: number }>;
     }> = [];
     for (let i = 0; i < safePoints; i++) {
       buckets.push({
@@ -263,22 +265,25 @@ export class SessionEventStore {
         const ts = new Date(row.timestamp).getTime();
         const bucketIdx = Math.min(Math.floor((ts - fromMs) / bucketMs), safePoints - 1);
         if (bucketIdx < 0) continue;
-        const d = JSON.parse(row.data) as { model?: string; inputTokens?: number; outputTokens?: number; multiplier?: number };
+        const d = JSON.parse(row.data) as { model?: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; multiplier?: number };
         const model = d.model ?? "unknown";
         const bucket = buckets[bucketIdx]!;
-        const entry = bucket.byModel.get(model) ?? { inputTokens: 0, outputTokens: 0, multiplier: d.multiplier ?? 0 };
+        const entry = bucket.byModel.get(model) ?? { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, multiplier: d.multiplier ?? 0 };
         entry.inputTokens += d.inputTokens ?? 0;
         entry.outputTokens += d.outputTokens ?? 0;
+        entry.cacheReadTokens += d.cacheReadTokens ?? 0;
+        entry.cacheWriteTokens += d.cacheWriteTokens ?? 0;
         if (d.multiplier !== undefined) entry.multiplier = d.multiplier;
         bucket.byModel.set(model, entry);
       } catch { /* skip malformed */ }
     }
 
-    // Compute index per bucket
-    const computeIndex = (byModel: Map<string, { inputTokens: number; outputTokens: number; multiplier: number }>): number => {
+    // Compute index per bucket using consumedTokens = (input - cacheRead) + (output - cacheWrite)
+    const computeIndex = (byModel: Map<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; multiplier: number }>): number => {
       let idx = 0;
       for (const [, v] of byModel) {
-        idx += Math.max(v.multiplier, 0.1) * (v.inputTokens + v.outputTokens);
+        const consumed = (v.inputTokens - v.cacheReadTokens) + (v.outputTokens - v.cacheWriteTokens);
+        idx += Math.max(v.multiplier, 0.1) * consumed;
       }
       return idx;
     };
@@ -305,7 +310,7 @@ export class SessionEventStore {
 
     return result as Array<{
       timestamp: string;
-      models: Array<{ model: string; inputTokens: number; outputTokens: number; multiplier: number }>;
+      models: Array<{ model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; multiplier: number }>;
       index: number;
       movingAverage?: number;
     }>;

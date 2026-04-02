@@ -75,3 +75,21 @@
 
 これは要望ではなく開発hint
 グラフには https://github.com/recharts/recharts 等を使うこともできそう。
+
+<!-- 2026-04-02 -->
+- 利用トークン数の記録
+  - `assistant.usage` は inputTokens だけでなく cacheReadTokens も記録する
+  - `assistant.usage` は outputTokens だけでなく cacheWriteTokens も記録する
+  - 消費トークン数は (inputTokens - cacheReadTokens) + (outputTokens - cacheWriteTokens) でグラフが表示されるようにする
+    - 消費トークン指数も同様に、 cacheReadTokens と cacheWriteTokens を考慮して計算する
+- グラフのページ
+  - 1m 間隔で自動更新（自動更新 on/off を toggle できるようにする。自動更新 on がデフォルト）
+  - 時間間隔と MA の幅、自動更新などの設定は、 query パラメータに反映させる
+  - 選べる MA の幅には 5h も追加
+  - Token Usage by Model グラフは、塗り潰しなしで線のみ
+    - 実値が実線
+    - 移動平均が破線
+    - 同じモデルの実値と移動平均は色を揃える
+
+<!-- 2026-04-02 -->
+- Token Usage の MA のデフォルトは 5h

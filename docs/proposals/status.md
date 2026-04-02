@@ -171,7 +171,7 @@
 - chat 入力の UX 改善（Alt/Cmd+Enter のみ送信、textarea 高さ自動調整 40vh 上限、下書き保存 debounce 1s + チャンネル切替復元）（v0.59.0）
 - 下書き保存のゾンビ復活バグ修正（チャンネル切替時・unmount 時に pending の draft save を flush するように修正。テキストを空にして 1 秒以内にチャンネルを切り替えた場合、空の状態が保存されず古い下書きが復活する問題を修正）（v0.61.1）
 
-- end turn run の物理セッション非 archive（SDK セッション停止 + copilotSessionId 保持 + resumeSession で再開。idleSession で physicalSession を visible に維持）（v0.60.0）
+- end turn run の物理セッション非 archive（v0.60.0）— ただし disconnect ではなく stopPhysicalSession を使用しており、正しい end turn run にならない（未実現: disconnect 方式への修正が必要）
 
 - System Status UI 改善（モーダルと /status の内容統一: Gateway→Agent→Config→Quota→Models→Original Prompts→Token Consumption→Sessions。セッション/Original Prompts のアコーディオン折り畳み。Open in new tab リンク修正）（v0.60.0）
 
@@ -185,7 +185,20 @@
 
 - メッセージ消費とセッションステータス管理の設計整理 — SessionController 導入（v0.64.0）。POST handler のセッション即時起動、pending flush の安全化、lifecycle "wait" ゾンビ修正、notifyAgent 死セッション対応、swallowed-message 誤発火修正、double drain バイパス修正、cron notify タイミング、SSE broadcast 追加、gateway 再起動 stale 状態
 
+- SDK CLI 子プロセスのゾンビ化修正（v0.66.0 で部分対応: 全 stop パスで client.stop()/forceStop()。根本原因のクライアント多重生成は未修正）
+
+- キャッシュトークンの記録と消費量計算（cacheReadTokens / cacheWriteTokens の保存、consumedTokens ベースの指数計算）（v0.67.0）
+- トークン消費グラフ UI の改善（1分自動更新 toggle、query パラメータ反映、MA 5h、Token Usage by Model を線グラフ化：実値=実線、MA=破線、同モデル同色）（v0.67.0）
+
+- Token Usage の MA デフォルトを 5h に変更（v0.67.1）
+
+- CopilotClient シングルトン化（agent 側 — セッションごとのクライアント作成を廃止、process 全体で 1 つ）（v0.68.0）
+- agent 内部で copilotSessionId → physicalSessionId にリネーム（v0.68.0）
+- session.setModel を session.send 前に呼ぶことでモデル切り替えを実現（v0.68.0）
+
 **未実現:**
+- gateway 側の copilotSessionId → physicalSessionId 統一（DB スキーマ migration 含む）
+- end turn run の disconnect 方式 — session.disconnect() で切断（クライアントは止めない）。physical session id 保持して次回 resume。現状は stopPhysicalSession を呼んでいる
 - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 

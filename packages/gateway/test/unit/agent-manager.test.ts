@@ -406,7 +406,7 @@ describe("AgentManager — physical session IPC", () => {
     expect(streamSend).toHaveBeenCalledWith({
       type: "start_physical_session",
       sessionId: "ps-1",
-      copilotSessionId: "cs-1",
+      physicalSessionId: "cs-1",
       model: "gpt-4.1",
     });
   });

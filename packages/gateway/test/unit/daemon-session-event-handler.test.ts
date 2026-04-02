@@ -33,6 +33,18 @@ function handleSessionEvent(
     }
   }
 
+  // session.idle with backgroundTasks: notify agent about subagent stop
+  if (channelId !== undefined && eventType === "session.idle") {
+    const bgTasks = data["backgroundTasks"] as { agents?: Array<{ agentId: string; agentType: string }> } | undefined;
+    if (bgTasks?.agents !== undefined && bgTasks.agents.length > 0) {
+      for (const agent of bgTasks.agents) {
+        const msg = `[SUBAGENT IDLE] ${agent.agentId} (${agent.agentType}) stopped`;
+        store.addMessage(channelId, "system", msg);
+      }
+      notifyAgent(channelId);
+    }
+  }
+
   if (channelId !== undefined && (eventType === "subagent.completed" || eventType === "subagent.failed")) {
     if (data["parentToolCallId"] === undefined) {
       const agentName = data["agentName"] as string ?? "unknown";
@@ -104,6 +116,58 @@ describe("daemon onSessionEvent — assistant.message reflection", () => {
     });
 
     expect(sseBroadcasts).toHaveLength(0);
+  });
+});
+
+describe("daemon onSessionEvent — session.idle with backgroundTasks", () => {
+  it("inserts system message and notifies agent for each background agent", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+    const notifyAgent = vi.fn();
+
+    handleSessionEvent(store, notifyAgent, channelId, "session.idle", {
+      backgroundTasks: {
+        agents: [
+          { agentId: "worker-1", agentType: "worker" },
+          { agentId: "explorer-1", agentType: "explore" },
+        ],
+        shells: [],
+      },
+    });
+
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]!.sender).toBe("system");
+    expect(msgs[0]!.message).toContain("[SUBAGENT IDLE]");
+    expect(msgs[0]!.message).toContain("explorer-1");
+    expect(msgs[1]!.message).toContain("worker-1");
+    expect(notifyAgent).toHaveBeenCalledWith(channelId);
+  });
+
+  it("does not notify on session.idle without backgroundTasks", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+    const notifyAgent = vi.fn();
+
+    handleSessionEvent(store, notifyAgent, channelId, "session.idle", {});
+
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs).toHaveLength(0);
+    expect(notifyAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not notify on session.idle with empty agents list", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+    const notifyAgent = vi.fn();
+
+    handleSessionEvent(store, notifyAgent, channelId, "session.idle", {
+      backgroundTasks: { agents: [], shells: [] },
+    });
+
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs).toHaveLength(0);
+    expect(notifyAgent).not.toHaveBeenCalled();
   });
 });
 
