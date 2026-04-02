@@ -192,10 +192,13 @@
 
 - Token Usage の MA デフォルトを 5h に変更（v0.67.1）
 
+- CopilotClient シングルトン化（agent 側 — セッションごとのクライアント作成を廃止、process 全体で 1 つ）（v0.68.0）
+- agent 内部で copilotSessionId → physicalSessionId にリネーム（v0.68.0）
+- session.setModel を session.send 前に呼ぶことでモデル切り替えを実現（v0.68.0）
+
 **未実現:**
-- CopilotClient シングルトン化と copilotSessionId → physical session id 統一 — クライアントをセッションごとに作らず process 全体で 1 つに。copilotSessionId を廃止し physical session id に統一
+- gateway 側の copilotSessionId → physicalSessionId 統一（DB スキーマ migration 含む）
 - end turn run の disconnect 方式 — session.disconnect() で切断（クライアントは止めない）。physical session id 保持して次回 resume。現状は stopPhysicalSession を呼んでいる
-- モデル切り替えの動作修正 — apply ボタンは設定値変更のみで turn run を停止しない。次回 turn run 開始時にモデル適用。現状はセッションが捨てられている
 - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 
