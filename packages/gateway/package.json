@@ -1,6 +1,6 @@
 {
   "name": "@copilotclaw/gateway",
-  "version": "0.67.1",
+  "version": "0.68.0",
   "description": "Central gateway server for copilotclaw",
   "type": "module",
   "main": "dist/index.js",

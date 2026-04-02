@@ -312,8 +312,11 @@ export class SessionController {
     this.clearContext(sessionId);
   }
 
+  /** End turn run: disconnect (not stop) the physical session.
+   *  The SDK session is disconnected but copilotSessionId is preserved
+   *  so that the next message can resumeSession with the same context. */
   idleSession(sessionId: string): void {
-    this.agentManager.stopPhysicalSession(sessionId);
+    this.agentManager.disconnectPhysicalSession(sessionId);
     this.orchestrator.idleSession(sessionId);
     this.clearContext(sessionId);
     this.broadcastStatusChange(sessionId, "idle");

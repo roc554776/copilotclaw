@@ -143,6 +143,22 @@
   - 次回メッセージからは、その物理セッションで再開します。
   - ※ Archive Physical Session は、物理セッションを Archive します。
 
+<!-- 2026-04-02 -->
+## end turn run と物理セッション disconnect
+
+- end turn run したら物理セッションを即時 disconnect して、次のメッセージではそれを resume して使う
+  - そうしないと end turn run にならない。
+  - （disconnect したセッションを捨ててしまうと、コンテキストが消えて、会話がレジュームできない）
+  - （Archive session の機能は、 disconnect して、セッションを本当に捨てることになります。）
+
+## モデル切り替えの動作修正
+
+- モデル切り替え（チャンネルごとのモデルの apply ボタン） を押したらなぜか即時セッションが捨てられてしまっているようです。要望と違う。殺す
+  - モデル切り替えはあくまで設定値を変えるだけでいい
+    - turn run を強制停止もしない。ただアプリ上の設定値を変えるだけでok
+    - turn run が終わるまでは今動いているモデルのままが正しい
+    - 次回、新しい turn run が始まる時に、現在の設定値のモデルを設定すべき
+
 ## System Status UI 改善
 
 - Original System Prompts の表示も、 Effective Prompt と同様に、 view/hide で折り畳む方式（というか普通にアコーディオンで OK）にしてください。（内部的にスクロールできる仕様はそのまま）

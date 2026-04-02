@@ -171,7 +171,7 @@
 - chat 入力の UX 改善（Alt/Cmd+Enter のみ送信、textarea 高さ自動調整 40vh 上限、下書き保存 debounce 1s + チャンネル切替復元）（v0.59.0）
 - 下書き保存のゾンビ復活バグ修正（チャンネル切替時・unmount 時に pending の draft save を flush するように修正。テキストを空にして 1 秒以内にチャンネルを切り替えた場合、空の状態が保存されず古い下書きが復活する問題を修正）（v0.61.1）
 
-- end turn run の物理セッション非 archive（SDK セッション停止 + copilotSessionId 保持 + resumeSession で再開。idleSession で physicalSession を visible に維持）（v0.60.0）
+- end turn run の物理セッション非 archive（v0.60.0）— ただし disconnect ではなく stopPhysicalSession を使用しており、正しい end turn run にならない（未実現: disconnect 方式への修正が必要）
 
 - System Status UI 改善（モーダルと /status の内容統一: Gateway→Agent→Config→Quota→Models→Original Prompts→Token Consumption→Sessions。セッション/Original Prompts のアコーディオン折り畳み。Open in new tab リンク修正）（v0.60.0）
 
@@ -193,6 +193,8 @@
 - Token Usage の MA デフォルトを 5h に変更（v0.67.1）
 
 **未実現:**
+- end turn run の disconnect 方式 — 物理セッションを stop ではなく disconnect し、copilotSessionId を保持して次回 resume。現状は stopPhysicalSession を呼んでいる
+- モデル切り替えの動作修正 — apply ボタンは設定値変更のみで turn run を停止しない。次回 turn run 開始時にモデル適用。現状はセッションが捨てられている
 - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序
 - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
 

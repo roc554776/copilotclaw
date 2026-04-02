@@ -219,7 +219,6 @@ async function main(): Promise<void> {
   const stopPhysicalSessionHandler = (msg: Record<string, unknown>) => {
     const sessionId = msg["sessionId"] as string;
     log(`stop_physical_session: session=${sessionId.slice(0, 8)}`);
-    // Find session by sessionId and stop it
     const status = sessionManager!.getPhysicalSessionStatus(sessionId);
     if (status !== undefined) {
       sessionManager!.stopPhysicalSession(sessionId);
@@ -228,6 +227,18 @@ async function main(): Promise<void> {
     }
   };
   streamEvents.on("stop_physical_session", stopPhysicalSessionHandler);
+
+  const disconnectPhysicalSessionHandler = (msg: Record<string, unknown>) => {
+    const sessionId = msg["sessionId"] as string;
+    log(`disconnect_physical_session: session=${sessionId.slice(0, 8)}`);
+    const status = sessionManager!.getPhysicalSessionStatus(sessionId);
+    if (status !== undefined) {
+      sessionManager!.disconnectPhysicalSession(sessionId);
+    } else {
+      log(`disconnect_physical_session: session ${sessionId.slice(0, 8)} not found, ignoring`);
+    }
+  };
+  streamEvents.on("disconnect_physical_session", disconnectPhysicalSessionHandler);
 
   // Wait for stop signal
   await new Promise<void>((resolve) => {
@@ -245,6 +256,7 @@ async function main(): Promise<void> {
   streamEvents.removeListener("stream_connected", streamConnectedHandler);
   streamEvents.removeListener("start_physical_session", startPhysicalSessionHandler);
   streamEvents.removeListener("stop_physical_session", stopPhysicalSessionHandler);
+  streamEvents.removeListener("disconnect_physical_session", disconnectPhysicalSessionHandler);
   await sessionManager!.stopAllPhysicalSessions();
   await ipc.close();
   await shutdownOtel();

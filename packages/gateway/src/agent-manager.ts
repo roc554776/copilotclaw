@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.66.0";
+export const MIN_AGENT_VERSION = "0.68.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -308,6 +308,12 @@ export class AgentManager {
   stopPhysicalSession(sessionId: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
     this.stream.send({ type: "stop_physical_session", sessionId });
+  }
+
+  /** Send a disconnect_physical_session command (end-turn-run: disconnect but keep CLI alive for resume). */
+  disconnectPhysicalSession(sessionId: string): void {
+    if (this.stream === null || !this.stream.isConnected()) return;
+    this.stream.send({ type: "disconnect_physical_session", sessionId });
   }
 
   /** Ensure agent process is running and compatible.

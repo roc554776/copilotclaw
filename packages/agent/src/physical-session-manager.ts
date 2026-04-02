@@ -530,6 +530,22 @@ export class PhysicalSessionManager {
     this.suspendPhysicalSessionState(entry);
   }
 
+  /** Disconnect a session without stopping the CLI process.
+   *  Used by end-turn-run: the session loop is aborted and session.disconnect() is called,
+   *  but copilotSessionId is preserved and the CopilotClient stays alive so that
+   *  the next message can resumeSession with the same context. */
+  disconnectPhysicalSession(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (entry === undefined) return;
+    entry.abortController.abort();
+    // Disconnect the SDK session (NOT client.stop — CLI process stays alive for resume)
+    if (entry.copilotSession !== undefined) {
+      entry.copilotSession.disconnect().catch(() => {});
+    }
+    // Keep the entry with copilotSessionId for resume, but clear live session ref
+    this.suspendPhysicalSessionState(entry);
+  }
+
   /** Explicitly stop a session — fully removes the physical session and stops the SDK CLI process. */
   stopPhysicalSession(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
