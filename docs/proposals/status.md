@@ -196,6 +196,8 @@
 - agent 内部で copilotSessionId → physicalSessionId にリネーム（v0.68.0）
 - session.setModel を session.send 前に呼ぶことでモデル切り替えを実現（v0.68.0）
 
+- Orchestrator skill フレームワーク（`/orchestrator` スラッシュコマンド、worker subagent の呼び出し、レビューループ付きデフォルト workflow）（v未定 — feat/stability ブランチで実装中、バージョン番号は main マージ時に確定）（skill ファイル作成済み。実動作は未検証）
+
 **未実現:**
 - gateway 側の copilotSessionId → physicalSessionId 統一（DB スキーマ migration 含む）
 - end turn run の disconnect 方式 — session.disconnect() で切断（クライアントは止めない）。physical session id 保持して次回 resume。現状は stopPhysicalSession を呼んでいる

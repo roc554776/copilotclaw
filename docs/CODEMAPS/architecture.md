@@ -143,6 +143,7 @@ Environment variables:
 
 - `.claude/skills/implement/` — skill for feature implementation, bug fixes, and debugging workflow
 - `.claude/skills/process-requirements/` — skill for processing raw requirements into documentation
+- `.claude/skills/orchestrator/` — subagent を組み合わせて複雑なタスクを自律的に遂行する Orchestrator フレームワーク（slash command として呼び出す）; サブディレクトリ: `agents/worker.md`（worker subagent 向けルール）, `assets/workflows/default.md`（デフォルト workflow 定義）, `assets/workflows/process-requirements.md`（要望を3層ドキュメントに整理・反映する専用 workflow）, `assets/workflows/implement.md`（機能実装・バグ修正の全 phase を実行する専用 workflow）
 
 ## Key Constraints
 
