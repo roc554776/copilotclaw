@@ -8,6 +8,7 @@ function makeMockAgentManager() {
     notifyAgent: vi.fn(),
     startPhysicalSession: vi.fn(),
     stopPhysicalSession: vi.fn(),
+    disconnectPhysicalSession: vi.fn(),
     getModels: vi.fn().mockResolvedValue(null),
   } as unknown as import("../../src/agent-manager.js").AgentManager;
 }
@@ -266,13 +267,13 @@ describe("SessionController — SSE broadcast", () => {
     expect(typeof evt.data["derivedStatus"]).toBe("string");
   });
 
-  it("derivedStatus reflects no-physical-session-initial for brand-new session (physicalSession not yet set)", () => {
+  it("derivedStatus reflects idle-no-trigger for brand-new session at waiting transition (physicalSession is set before broadcast)", () => {
     const { controller, orchestrator, sseBroadcast, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
     orchestrator.updateSessionStatus(sessionId, "starting");
 
-    // onPhysicalSessionStarted broadcasts BEFORE updatePhysicalSession is called,
-    // so at broadcast time physicalSession is still undefined → no-physical-session-initial
+    // onPhysicalSessionStarted calls updatePhysicalSession before transition, so at broadcast
+    // time physicalSession is already set → derivedStatus is idle-no-trigger (not no-physical-session-initial)
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
 
     const calls = (sseBroadcast as ReturnType<typeof vi.fn>).mock.calls;
@@ -283,8 +284,8 @@ describe("SessionController — SSE broadcast", () => {
     expect(statusChangeCalls.length).toBeGreaterThan(0);
     const lastCall = statusChangeCalls[statusChangeCalls.length - 1]!;
     const evt = lastCall[0] as { type: string; data: Record<string, unknown> };
-    // At broadcast time, physicalSession is not yet set, history is empty → no-physical-session-initial
-    expect(evt.data["derivedStatus"]).toBe("no-physical-session-initial");
+    // physicalSession is set before broadcast → idle-no-trigger (no pending messages)
+    expect(evt.data["derivedStatus"]).toBe("idle-no-trigger");
   });
 
   it("derivedStatus reflects running after physicalSession is set and non-wait tool starts", () => {

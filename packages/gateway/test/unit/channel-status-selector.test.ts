@@ -26,9 +26,10 @@ describe("selectDerivedChannelStatus", () => {
     expect(result).toBe("client-not-started");
   });
 
-  it('returns "no-physical-session-initial" when no copilotSessionId, no physicalSession, and no history', () => {
+  it('returns "no-physical-session-initial" when status is "new", no physicalSession, and no history', () => {
     const result = selectDerivedChannelStatus({
       session: makeSession({
+        status: "new",
         copilotSessionId: undefined,
         physicalSession: undefined,
         physicalSessionHistory: [],
@@ -38,9 +39,38 @@ describe("selectDerivedChannelStatus", () => {
     expect(result).toBe("no-physical-session-initial");
   });
 
-  it('returns "no-physical-session-after-stop" when no copilotSessionId, no physicalSession, but has history', () => {
+  it('returns "no-physical-session-initial" when status is "starting", no physicalSession, and no history', () => {
     const result = selectDerivedChannelStatus({
       session: makeSession({
+        status: "starting",
+        copilotSessionId: undefined,
+        physicalSession: undefined,
+        physicalSessionHistory: [],
+      }),
+      hasPending: false,
+    });
+    expect(result).toBe("no-physical-session-initial");
+  });
+
+  it('returns "no-physical-session-after-stop" when status is "new", no physicalSession, but has history', () => {
+    const result = selectDerivedChannelStatus({
+      session: makeSession({
+        status: "new",
+        copilotSessionId: undefined,
+        physicalSession: undefined,
+        physicalSessionHistory: [
+          { sessionId: "prev-session", model: "gpt-4.1", startedAt: "2026-01-01T00:00:00Z", currentState: "stopped" },
+        ],
+      }),
+      hasPending: false,
+    });
+    expect(result).toBe("no-physical-session-after-stop");
+  });
+
+  it('returns "no-physical-session-after-stop" when status is "suspended", no physicalSession, but has history', () => {
+    const result = selectDerivedChannelStatus({
+      session: makeSession({
+        status: "suspended",
         copilotSessionId: undefined,
         physicalSession: undefined,
         physicalSessionHistory: [

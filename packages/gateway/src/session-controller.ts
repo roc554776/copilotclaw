@@ -185,13 +185,15 @@ export class SessionController {
   /** Called when agent reports physical session started. */
   onPhysicalSessionStarted(sessionId: string, copilotSessionId: string, model: string): void {
     console.error(`[session-controller] physical session started: session=${sessionId.slice(0, 8)}, copilot=${copilotSessionId.slice(0, 12)}, model=${model}`);
-    this.transition(sessionId, "waiting");
+    // updatePhysicalSession must be called before transition so that broadcastStatusChange
+    // reads a fully-populated physicalSession and derives the correct DerivedChannelStatus.
     this.orchestrator.updatePhysicalSession(sessionId, {
       sessionId: copilotSessionId,
       model,
       startedAt: new Date().toISOString(),
       currentState: "idle",
     });
+    this.transition(sessionId, "waiting");
   }
 
   /** Called when agent reports physical session ended. */

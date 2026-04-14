@@ -26,8 +26,15 @@ export function selectDerivedChannelStatus(
   // client-not-started は scope 外（観測経路未実装）
   if (!clientStarted) return "client-not-started";
 
-  // physical session がない場合は initial か after-stop
-  if (session.copilotSessionId === undefined && session.physicalSession === undefined) {
+  // physical session がない場合は initial か after-stop。
+  // ただし status が waiting/notified/processing/idle のいずれかであれば physical session は
+  // 存在しているはずなので（broadcast タイミング競合で physicalSession がまだ set されていない
+  // 瞬間がありえる）、absent と誤判定しない。
+  const physicalSessionAbsent =
+    session.physicalSession === undefined &&
+    session.copilotSessionId === undefined &&
+    (session.status === "new" || session.status === "starting" || session.status === "suspended");
+  if (physicalSessionAbsent) {
     if (session.physicalSessionHistory.length > 0) return "no-physical-session-after-stop";
     return "no-physical-session-initial";
   }
