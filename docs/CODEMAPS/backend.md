@@ -290,11 +290,11 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (639 total: 631 vitest + 8 Playwright)
+### Test Suites (648 total: 640 vitest + 8 Playwright)
 
 ```
-Gateway vitest (456 tests)   — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store, store, session-orchestrator, agent-manager, daemon-session-event-handler, daemon-lifecycle-handler tests); E2E tests use SessionEventStore for /api/token-usage endpoint coverage; session-orchestrator tests cover start/suspend/idle/stop/revive, SQLite persistence, schema migrations (v0→v1→v2→v3), legacy migration, backoff, maxAge, idleAllActive
-Agent vitest (141 tests)     — unit tests with mock Copilot SDK session + IPC stream tests (includes structured-logger, token-resolver, ipc-stream tests; currentState tracking via onStatusChange, postToolUse log session ID tests); physical_session_started/ended notification tests
+Gateway vitest (500 tests)   — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store, store, session-orchestrator, agent-manager, daemon-session-event-handler, daemon-lifecycle-handler tests); E2E tests use SessionEventStore for /api/token-usage endpoint coverage; session-orchestrator tests cover start/suspend/idle/stop/revive, SQLite persistence, schema migrations (v0→v1→v2→v3), legacy migration, backoff, maxAge, idleAllActive
+Agent vitest (104 tests)     — unit tests with mock Copilot SDK session + IPC stream tests (includes structured-logger, token-resolver, ipc-stream tests; currentState tracking via onStatusChange, postToolUse log session ID tests); physical_session_started/ended notification tests
 Frontend vitest (36 tests)   — React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll) via jsdom + @testing-library/react; DashboardPage tests include draft flush on channel switch and page load draft safety (v0.61.1); session_status_change SSE event handling (v0.68.1)
 Browser Playwright (8 tests) — test/browser/dashboard.spec.ts: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
 ```

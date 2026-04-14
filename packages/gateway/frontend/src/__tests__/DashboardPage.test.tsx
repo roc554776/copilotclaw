@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +63,7 @@ class MockEventSource {
 
 describe("DashboardPage", () => {
   beforeEach(() => {
+    cleanup();
     lastMockEventSource = null;
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
@@ -375,9 +376,11 @@ describe("DashboardPage", () => {
       }),
     });
 
-    // sessionStatus should remain "idle" since no status was provided
+    // sessionStatus should remain "idle" and "processing" must NOT appear in the status bar
     await waitFor(() => {
-      expect(screen.getAllByText(/idle/).length).toBeGreaterThanOrEqual(1);
+      const statusBar = screen.getByText(/gateway: v/);
+      expect(statusBar).toHaveTextContent(/idle/);
+      expect(statusBar).not.toHaveTextContent(/processing/);
     });
   });
 });
