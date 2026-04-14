@@ -37,6 +37,14 @@ a:hover {
   display: inline-block;
 }
 
+#processing-indicator {
+  display: none;
+}
+
+#processing-indicator.visible {
+  display: flex;
+}
+
 @keyframes typing {
   0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-4px); }

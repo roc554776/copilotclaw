@@ -75,6 +75,8 @@ export function DashboardPage() {
   }, []);
   const [sseConnected, setSseConnected] = useState(false);
   const [sessionStatus, setSessionStatus] = useState("--");
+  const [agentReplyCount, setAgentReplyCount] = useState(0);
+  const [gatewayStatus, setGatewayStatus] = useState("running");
   const [gatewayVersion, setGatewayVersion] = useState("--");
   const [agentVersion, setAgentVersion] = useState("--");
   const [compatibility, setCompatibility] = useState("");
@@ -295,6 +297,9 @@ export function DashboardPage() {
             data?: Record<string, unknown>;
           };
           if (event.type === "new_message") {
+            if (event.data?.["sender"] === "agent") {
+              setAgentReplyCount((c) => c + 1);
+            }
             refreshMessages();
             refreshStatusRef.current();
           } else if (event.type === "status_update") {
@@ -351,6 +356,7 @@ export function DashboardPage() {
   const refreshStatus = useCallback(async () => {
     try {
       const data = await fetchStatus();
+      setGatewayStatus(data.gateway.status ?? "running");
       setGatewayVersion(data.gateway.version);
       if (data.agent) {
         setAgentVersion(data.agent.version ?? "--");
@@ -458,6 +464,21 @@ export function DashboardPage() {
     };
   }, []);
 
+  // Escape key: close logs panel and status modal
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        if (showModal) {
+          closeModal();
+        } else if (logsVisible) {
+          setLogsVisible(false);
+        }
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [showModal, logsVisible, closeModal]);
+
   const handleArchiveChannel = useCallback(async (channelId: string) => {
     try {
       const updated = await archiveChannel(channelId);
@@ -538,6 +559,7 @@ export function DashboardPage() {
     <div style={{ height: "100dvh", display: "flex", flexDirection: "column", maxWidth: "100vw", overflow: "hidden" }}>
       {/* Status Bar */}
       <div
+        id="status-bar"
         style={{
           padding: "0.3rem 1rem",
           background: "#161b22",
@@ -553,10 +575,11 @@ export function DashboardPage() {
         }}
         onClick={openModal}
       >
-        <span>
+        <span id="status-text">
           <span
             role="status"
             aria-label={sseConnected ? "SSE connected" : "SSE disconnected"}
+            className={sseConnected ? "ws-connected" : undefined}
             style={{
               display: "inline-block",
               width: 6,
@@ -567,7 +590,7 @@ export function DashboardPage() {
               background: sseConnected ? "#3fb950" : "#f85149",
             }}
           />
-          gateway: v{gatewayVersion} | agent: v{agentVersion}
+          gateway: {gatewayStatus} | v{gatewayVersion} | agent: v{agentVersion}
           {compatLabel} | session: {sessionStatus}
         </span>
         <div style={{ display: "flex", gap: "0.4rem" }}>
@@ -592,6 +615,7 @@ export function DashboardPage() {
             Token Usage
           </a>
           <button
+            id="logs-btn"
             onClick={(e) => {
               e.stopPropagation();
               setLogsVisible((v) => !v);
@@ -614,127 +638,127 @@ export function DashboardPage() {
       </div>
 
       {/* Logs Panel */}
-      {logsVisible && (
-        <div
-          style={{
-            maxHeight: "40vh",
-            background: "#0d1117",
-            borderBottom: "1px solid #30363d",
-            overflowY: "auto",
-            fontFamily: "monospace",
-            fontSize: "0.75rem",
-            padding: "0.5rem",
-          }}
-        >
-          {logs.map((entry, i) => (
-            <div
-              key={`${entry.timestamp}-${entry.source}-${i}`}
-              style={{
-                padding: "0.1rem 0",
-                color: entry.level === "error" ? "#f85149" : "#8b949e",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-              }}
-            >
-              <span style={{ color: "#484f58", marginRight: "0.5rem" }}>
-                {entry.timestamp?.slice(11, 19)}
-              </span>
-              <span style={{ color: "#58a6ff", marginRight: "0.5rem" }}>
-                [{entry.source}]
-              </span>
-              {entry.message}
-            </div>
-          ))}
-        </div>
-      )}
+      <div
+        id="logs-panel"
+        style={{
+          maxHeight: "40vh",
+          background: "#0d1117",
+          borderBottom: "1px solid #30363d",
+          overflowY: "auto",
+          fontFamily: "monospace",
+          fontSize: "0.75rem",
+          padding: "0.5rem",
+          display: logsVisible ? undefined : "none",
+        }}
+      >
+        {logs.map((entry, i) => (
+          <div
+            key={`${entry.timestamp}-${entry.source}-${i}`}
+            style={{
+              padding: "0.1rem 0",
+              color: entry.level === "error" ? "#f85149" : "#8b949e",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+            }}
+          >
+            <span style={{ color: "#484f58", marginRight: "0.5rem" }}>
+              {entry.timestamp?.slice(11, 19)}
+            </span>
+            <span style={{ color: "#58a6ff", marginRight: "0.5rem" }}>
+              [{entry.source}]
+            </span>
+            {entry.message}
+          </div>
+        ))}
+      </div>
 
       {/* Status Modal — L-3: role="dialog" and aria-modal="true" */}
       {showModal && (
-        <>
-          <div
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            background: "rgba(0,0,0,0.6)",
+            zIndex: 100,
+          }}
+          onClick={closeModal}
+        />
+      )}
+      <div
+        id="status-modal"
+        role="dialog"
+        aria-modal="true"
+        style={{
+          display: showModal ? undefined : "none",
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%,-50%)",
+          background: "#161b22",
+          border: "1px solid #30363d",
+          borderRadius: "0.75rem",
+          padding: "1.5rem",
+          minWidth: "min(400px, 90vw)",
+          maxWidth: "min(600px, 95vw)",
+          maxHeight: "80vh",
+          overflowY: "auto",
+          zIndex: 101,
+          color: "#c9d1d9",
+          fontSize: "0.85rem",
+        }}
+      >
+        <button
+          onClick={closeModal}
+          aria-label="Close"
+          style={{
+            position: "absolute",
+            top: "0.75rem",
+            right: "1rem",
+            background: "none",
+            border: "none",
+            color: "#8b949e",
+            cursor: "pointer",
+            fontSize: "1.2rem",
+          }}
+        >
+          &times;
+        </button>
+        <h3
+          style={{
+            marginBottom: "1rem",
+            fontSize: "1rem",
+            color: "#58a6ff",
+          }}
+        >
+          System Status{" "}
+          <a
+            href="/status"
+            target="_blank"
+            rel="noreferrer"
             style={{
-              position: "fixed",
-              top: 0,
-              left: 0,
-              width: "100%",
-              height: "100%",
-              background: "rgba(0,0,0,0.6)",
-              zIndex: 100,
-            }}
-            onClick={closeModal}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            style={{
-              position: "fixed",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%,-50%)",
-              background: "#161b22",
-              border: "1px solid #30363d",
-              borderRadius: "0.75rem",
-              padding: "1.5rem",
-              minWidth: "min(400px, 90vw)",
-              maxWidth: "min(600px, 95vw)",
-              maxHeight: "80vh",
-              overflowY: "auto",
-              zIndex: 101,
-              color: "#c9d1d9",
-              fontSize: "0.85rem",
+              fontSize: "0.8rem",
+              fontWeight: "normal",
+              marginLeft: "0.5rem",
             }}
           >
-            <button
-              onClick={closeModal}
-              aria-label="Close"
-              style={{
-                position: "absolute",
-                top: "0.75rem",
-                right: "1rem",
-                background: "none",
-                border: "none",
-                color: "#8b949e",
-                cursor: "pointer",
-                fontSize: "1.2rem",
-              }}
-            >
-              &times;
-            </button>
-            <h3
-              style={{
-                marginBottom: "1rem",
-                fontSize: "1rem",
-                color: "#58a6ff",
-              }}
-            >
-              System Status{" "}
-              <a
-                href="/status"
-                target="_blank"
-                rel="noreferrer"
-                style={{
-                  fontSize: "0.8rem",
-                  fontWeight: "normal",
-                  marginLeft: "0.5rem",
-                }}
-              >
-                Open in new tab &rarr;
-              </a>
-            </h3>
-            {modalStatus ? (
-              <StatusModalContent
-                status={modalStatus}
-                quota={modalQuota}
-                models={modalModels}
-                originalPrompts={modalOriginalPrompts}
-                tokenUsage5h={modalTokenUsage5h}
-              />
-            ) : (
-              <div>Loading...</div>
-            )}
-          </div>
-        </>
-      )}
+            Open in new tab &rarr;
+          </a>
+        </h3>
+        {showModal && (modalStatus ? (
+          <StatusModalContent
+            status={modalStatus}
+            quota={modalQuota}
+            models={modalModels}
+            originalPrompts={modalOriginalPrompts}
+            tokenUsage5h={modalTokenUsage5h}
+          />
+        ) : (
+          <div>Loading...</div>
+        ))}
+      </div>
 
       {/* Channel Settings Modal */}
       {channelSettingsId !== null && (
@@ -887,6 +911,7 @@ export function DashboardPage() {
 
       {/* Chat Messages — M-8: loading/error states */}
       <div
+        id="chat"
         ref={chatRef}
         onScroll={(e) => {
           handleChatScroll();
@@ -983,30 +1008,29 @@ export function DashboardPage() {
             </div>
           );
         })}
-        {isProcessing && (
-          <div
-            style={{
-              alignSelf: "flex-start",
-              display: "flex",
-              gap: "0.3rem",
-              padding: "0.6rem 1rem",
-              background: "#21262d",
-              borderRadius: "1rem",
-              borderBottomLeftRadius: "0.25rem",
-              alignItems: "center",
-            }}
-          >
-            <span className="typing-dot" style={{ animationDelay: "0s" }} />
-            <span
-              className="typing-dot"
-              style={{ animationDelay: "0.2s" }}
-            />
-            <span
-              className="typing-dot"
-              style={{ animationDelay: "0.4s" }}
-            />
-          </div>
-        )}
+        <div
+          id="processing-indicator"
+          className={isProcessing ? "visible" : agentReplyCount > 0 ? "" : undefined}
+          style={{
+            alignSelf: "flex-start",
+            gap: "0.3rem",
+            padding: "0.6rem 1rem",
+            background: "#21262d",
+            borderRadius: "1rem",
+            borderBottomLeftRadius: "0.25rem",
+            alignItems: "center",
+          }}
+        >
+          <span className="typing-dot" style={{ animationDelay: "0s" }} />
+          <span
+            className="typing-dot"
+            style={{ animationDelay: "0.2s" }}
+          />
+          <span
+            className="typing-dot"
+            style={{ animationDelay: "0.4s" }}
+          />
+        </div>
       </div>
 
       {/* Input Area */}
