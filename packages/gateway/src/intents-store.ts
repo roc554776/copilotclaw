@@ -5,6 +5,15 @@
  * this without changing the recording interface.
  */
 
+/**
+ * An intent entry recorded via copilotclaw_intent tool.
+ *
+ * Note: toolCallId is declared as optional for future use. As of v0.70.0,
+ * the ToolCallRequest interface in agent-manager.ts does not carry
+ * toolCallId through to handlers, so it is not currently recorded.
+ * When ToolCallRequest is extended to include toolCallId (for tracing/
+ * correlation), the daemon handler should populate this field.
+ */
 export interface IntentEntry {
   sessionId: string;
   intent: string;

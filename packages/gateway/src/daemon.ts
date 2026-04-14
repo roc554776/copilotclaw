@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { getAgentPromptConfig, resolveModel } from "./agent-config.js";
 import { AgentManager } from "./agent-manager.js";
 import { type CronJobConfig, getProfileName, getStateDir, loadConfig, loadFileConfig, resolvePort, saveConfig } from "./config.js";
-import { intentsStore } from "./intents-store.js";
+import { IntentsStore, intentsStore } from "./intents-store.js";
 import { LogBuffer } from "./log-buffer.js";
 import { initOtel, shutdownOtel } from "./otel.js";
 import { initMetrics } from "./otel-metrics.js";
@@ -17,6 +17,27 @@ import { ensureWorkspace, getDataDir, getStoreDbPath, getStoreFilePath, getWorks
 const AGENT_MONITOR_INTERVAL_MS = 30_000; // 30 seconds
 const AGENT_MONITOR_ERROR_THRESHOLD = 3;
 const ORCHESTRATOR_CHECK_INTERVAL_MS = 30_000; // 30 seconds
+
+export interface IntentToolCallRequest {
+  sessionId: string;
+  args?: Record<string, unknown>;
+}
+
+export function handleIntentToolCall(
+  request: IntentToolCallRequest,
+  store: IntentsStore,
+): { acknowledged: true } {
+  const args = (request.args ?? {}) as Record<string, unknown>;
+  const intent = typeof args["intent"] === "string" ? args["intent"] : "";
+  if (intent.length > 0) {
+    store.recordIntent({
+      sessionId: request.sessionId,
+      intent,
+      timestamp: new Date().toISOString(),
+    });
+  }
+  return { acknowledged: true };
+}
 
 async function main(): Promise<void> {
   const forceAgentRestart = process.env["COPILOTCLAW_FORCE_AGENT_RESTART"] === "1";
@@ -125,18 +146,8 @@ async function main(): Promise<void> {
           const messages = store.listMessages(channelId, limit);
           return { messages };
         }
-        case "copilotclaw_intent": {
-          const args = (request.args ?? {}) as Record<string, unknown>;
-          const intent = typeof args["intent"] === "string" ? args["intent"] : "";
-          if (intent.length > 0) {
-            intentsStore.recordIntent({
-              sessionId: request.sessionId,
-              intent,
-              timestamp: new Date().toISOString(),
-            });
-          }
-          return { acknowledged: true };
-        }
+        case "copilotclaw_intent":
+          return handleIntentToolCall(request, intentsStore);
         case "copilotclaw_wait": {
           // Swallowed-message guard
           if (sessionController.checkSwallowedMessage(request.sessionId)) {

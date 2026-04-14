@@ -1,31 +1,12 @@
 /**
- * Tests for the daemon's onToolCall handler logic for copilotclaw_intent.
+ * Tests for the daemon's copilotclaw_intent tool call handler.
  *
- * The handler lives inline in daemon.ts main(), so these tests replicate
- * its behavior using IntentsStore directly to verify:
- *  - copilotclaw_intent records the intent and returns { acknowledged: true }
- *  - empty intent string is not recorded
- *  - non-string intent is treated as empty and not recorded
+ * Tests import handleIntentToolCall directly from daemon.ts to ensure
+ * no divergence between the test and the actual production handler.
  */
 import { describe, expect, it, beforeEach } from "vitest";
+import { handleIntentToolCall } from "../../src/daemon.js";
 import { IntentsStore } from "../../src/intents-store.js";
-
-/** Replicates the daemon's onToolCall handler logic for copilotclaw_intent. */
-function handleCopilotclawIntent(
-  store: IntentsStore,
-  sessionId: string,
-  args: Record<string, unknown>,
-): { acknowledged: boolean } | { error: string } {
-  const intent = typeof args["intent"] === "string" ? args["intent"] : "";
-  if (intent.length > 0) {
-    store.recordIntent({
-      sessionId,
-      intent,
-      timestamp: new Date().toISOString(),
-    });
-  }
-  return { acknowledged: true };
-}
 
 describe("daemon onToolCall — copilotclaw_intent", () => {
   let store: IntentsStore;
@@ -35,12 +16,12 @@ describe("daemon onToolCall — copilotclaw_intent", () => {
   });
 
   it("returns { acknowledged: true } for a valid intent", () => {
-    const result = handleCopilotclawIntent(store, "session-1", { intent: "about to read a file" });
+    const result = handleIntentToolCall({ sessionId: "session-1", args: { intent: "about to read a file" } }, store);
     expect(result).toEqual({ acknowledged: true });
   });
 
   it("records the intent in the store", () => {
-    handleCopilotclawIntent(store, "session-1", { intent: "about to read a file" });
+    handleIntentToolCall({ sessionId: "session-1", args: { intent: "about to read a file" } }, store);
     const entries = store.getIntentsBySession("session-1");
     expect(entries).toHaveLength(1);
     expect(entries[0]!.intent).toBe("about to read a file");
@@ -49,28 +30,28 @@ describe("daemon onToolCall — copilotclaw_intent", () => {
   });
 
   it("does not record when intent is empty string", () => {
-    handleCopilotclawIntent(store, "session-1", { intent: "" });
+    handleIntentToolCall({ sessionId: "session-1", args: { intent: "" } }, store);
     expect(store.getIntentsBySession("session-1")).toHaveLength(0);
   });
 
   it("does not record when intent is missing from args", () => {
-    handleCopilotclawIntent(store, "session-1", {});
+    handleIntentToolCall({ sessionId: "session-1", args: {} }, store);
     expect(store.getIntentsBySession("session-1")).toHaveLength(0);
   });
 
   it("does not record when intent is not a string (number)", () => {
-    handleCopilotclawIntent(store, "session-1", { intent: 42 });
+    handleIntentToolCall({ sessionId: "session-1", args: { intent: 42 } }, store);
     expect(store.getIntentsBySession("session-1")).toHaveLength(0);
   });
 
   it("still returns { acknowledged: true } even when intent is empty", () => {
-    const result = handleCopilotclawIntent(store, "session-1", { intent: "" });
+    const result = handleIntentToolCall({ sessionId: "session-1", args: { intent: "" } }, store);
     expect(result).toEqual({ acknowledged: true });
   });
 
   it("records multiple intents for the same session in order", () => {
-    handleCopilotclawIntent(store, "session-1", { intent: "first" });
-    handleCopilotclawIntent(store, "session-1", { intent: "second" });
+    handleIntentToolCall({ sessionId: "session-1", args: { intent: "first" } }, store);
+    handleIntentToolCall({ sessionId: "session-1", args: { intent: "second" } }, store);
     const entries = store.getIntentsBySession("session-1");
     expect(entries).toHaveLength(2);
     expect(entries[0]!.intent).toBe("first");
@@ -78,8 +59,8 @@ describe("daemon onToolCall — copilotclaw_intent", () => {
   });
 
   it("records intents for different sessions independently", () => {
-    handleCopilotclawIntent(store, "session-A", { intent: "intent-A" });
-    handleCopilotclawIntent(store, "session-B", { intent: "intent-B" });
+    handleIntentToolCall({ sessionId: "session-A", args: { intent: "intent-A" } }, store);
+    handleIntentToolCall({ sessionId: "session-B", args: { intent: "intent-B" } }, store);
     expect(store.getIntentsBySession("session-A")).toHaveLength(1);
     expect(store.getIntentsBySession("session-B")).toHaveLength(1);
     expect(store.getIntentsBySession("session-A")[0]!.intent).toBe("intent-A");
