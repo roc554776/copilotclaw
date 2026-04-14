@@ -307,8 +307,15 @@ export function DashboardPage() {
             }
           } else if (event.type === "session_status_change") {
             const d = event.data;
-            if (d && typeof d["status"] === "string") {
-              setSessionStatus(String(d["status"]));
+            if (d && typeof d === "object") {
+              const derived = typeof (d as Record<string, unknown>)["derivedStatus"] === "string"
+                ? String((d as Record<string, unknown>)["derivedStatus"])
+                : null;
+              const raw = typeof (d as Record<string, unknown>)["status"] === "string"
+                ? String((d as Record<string, unknown>)["status"])
+                : null;
+              const next = derived ?? raw;
+              if (next !== null) setSessionStatus(next);
             }
           }
         } catch {

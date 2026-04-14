@@ -63,7 +63,9 @@
       "Bash(pnpm --filter gateway run test *)",
       "Bash(pnpm vitest:*)",
       "Bash(pnpm test:*)",
-      "Bash(curl -s http://localhost:19743/api/status)"
+      "Bash(curl -s http://localhost:19743/api/status)",
+      "Bash(pnpm --filter gateway run test:frontend)",
+      "Bash(pnpm --filter @copilotclaw/gateway test:browser)"
     ]
   }
 }

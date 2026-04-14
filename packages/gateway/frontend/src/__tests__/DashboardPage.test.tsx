@@ -383,4 +383,57 @@ describe("DashboardPage", () => {
       expect(statusBar).not.toHaveTextContent(/processing/);
     });
   });
+
+  it("uses derivedStatus over raw status when both are present in session_status_change", async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(lastMockEventSource).not.toBeNull();
+    });
+
+    const src = lastMockEventSource!;
+
+    // Dispatch a session_status_change event with both status and derivedStatus
+    src.onmessage?.({
+      data: JSON.stringify({
+        type: "session_status_change",
+        data: { sessionId: "sess-001", status: "processing", derivedStatus: "running" },
+      }),
+    });
+
+    await waitFor(() => {
+      // derivedStatus "running" should be displayed, not raw "processing"
+      expect(screen.getAllByText(/running/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("falls back to raw status when derivedStatus is absent in session_status_change", async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(lastMockEventSource).not.toBeNull();
+    });
+
+    const src = lastMockEventSource!;
+
+    // Dispatch without derivedStatus — should fall back to raw status
+    src.onmessage?.({
+      data: JSON.stringify({
+        type: "session_status_change",
+        data: { sessionId: "sess-001", status: "waiting" },
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/waiting/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
 });

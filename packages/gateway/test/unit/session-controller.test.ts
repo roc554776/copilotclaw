@@ -246,6 +246,86 @@ describe("SessionController — SSE broadcast", () => {
       type: "session_status_change",
     }));
   });
+
+  it("includes derivedStatus in session_status_change event data", () => {
+    const { controller, orchestrator, sseBroadcast, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+
+    controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
+
+    const calls = (sseBroadcast as ReturnType<typeof vi.fn>).mock.calls;
+    const statusChangeCalls = calls.filter((c: unknown[]) => {
+      const evt = c[0] as { type: string };
+      return evt.type === "session_status_change";
+    });
+    expect(statusChangeCalls.length).toBeGreaterThan(0);
+    const lastCall = statusChangeCalls[statusChangeCalls.length - 1]!;
+    const evt = lastCall[0] as { type: string; data: Record<string, unknown> };
+    expect(evt.data).toHaveProperty("derivedStatus");
+    expect(typeof evt.data["derivedStatus"]).toBe("string");
+  });
+
+  it("derivedStatus reflects no-physical-session-initial for brand-new session (physicalSession not yet set)", () => {
+    const { controller, orchestrator, sseBroadcast, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+
+    // onPhysicalSessionStarted broadcasts BEFORE updatePhysicalSession is called,
+    // so at broadcast time physicalSession is still undefined → no-physical-session-initial
+    controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
+
+    const calls = (sseBroadcast as ReturnType<typeof vi.fn>).mock.calls;
+    const statusChangeCalls = calls.filter((c: unknown[]) => {
+      const evt = c[0] as { type: string; data: Record<string, unknown> };
+      return evt.type === "session_status_change" && evt.data["status"] === "waiting";
+    });
+    expect(statusChangeCalls.length).toBeGreaterThan(0);
+    const lastCall = statusChangeCalls[statusChangeCalls.length - 1]!;
+    const evt = lastCall[0] as { type: string; data: Record<string, unknown> };
+    // At broadcast time, physicalSession is not yet set, history is empty → no-physical-session-initial
+    expect(evt.data["derivedStatus"]).toBe("no-physical-session-initial");
+  });
+
+  it("derivedStatus reflects running after physicalSession is set and non-wait tool starts", () => {
+    const { controller, orchestrator, sseBroadcast, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+    controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
+
+    // physicalSession is now set; start a non-wait tool → processing
+    controller.onToolExecutionStart(sessionId, "bash");
+
+    const calls = (sseBroadcast as ReturnType<typeof vi.fn>).mock.calls;
+    const processingCalls = calls.filter((c: unknown[]) => {
+      const evt = c[0] as { type: string; data: Record<string, unknown> };
+      return evt.type === "session_status_change" && evt.data["status"] === "processing";
+    });
+    expect(processingCalls.length).toBeGreaterThan(0);
+    const lastCall = processingCalls[processingCalls.length - 1]!;
+    const evt = lastCall[0] as { type: string; data: Record<string, unknown> };
+    // physicalSession is set, status is "processing" → running
+    expect(evt.data["derivedStatus"]).toBe("running");
+  });
+
+  it("derivedStatus reflects running for processing status", () => {
+    const { controller, orchestrator, sseBroadcast, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+    controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
+    // Tool execution → processing
+    controller.onToolExecutionStart(sessionId, "bash");
+
+    const calls = (sseBroadcast as ReturnType<typeof vi.fn>).mock.calls;
+    const processingCalls = calls.filter((c: unknown[]) => {
+      const evt = c[0] as { type: string; data: Record<string, unknown> };
+      return evt.type === "session_status_change" && evt.data["status"] === "processing";
+    });
+    expect(processingCalls.length).toBeGreaterThan(0);
+    const lastCall = processingCalls[processingCalls.length - 1]!;
+    const evt = lastCall[0] as { type: string; data: Record<string, unknown> };
+    expect(evt.data["derivedStatus"]).toBe("running");
+  });
 });
 
 // --- Integration tests: full lifecycle flows ---

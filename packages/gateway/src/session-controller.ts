@@ -11,6 +11,7 @@
 import type { AgentManager } from "./agent-manager.js";
 import type { SessionOrchestrator, AbstractSessionStatus } from "./session-orchestrator.js";
 import type { Store, Message } from "./store.js";
+import { selectDerivedChannelStatus } from "./channel-status-selector.js";
 
 export interface SseBroadcastFn {
   (event: { type: string; channelId?: string; data?: unknown }): void;
@@ -92,11 +93,14 @@ export class SessionController {
     if (this.sseBroadcast === undefined) return;
     const session = this.orchestrator.getSessionStatuses()[sessionId];
     if (session === undefined) return;
+    const channelId = session.channelId;
+    const hasPending = channelId !== undefined ? this.store.hasPending(channelId) : false;
+    const derivedStatus = selectDerivedChannelStatus({ session, hasPending });
     const evt: { type: string; channelId?: string; data?: unknown } = {
       type: "session_status_change",
-      data: { sessionId, status },
+      data: { sessionId, status, derivedStatus },
     };
-    if (session.channelId !== undefined) evt.channelId = session.channelId;
+    if (channelId !== undefined) evt.channelId = channelId;
     this.sseBroadcast(evt);
   }
 
