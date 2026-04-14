@@ -203,7 +203,6 @@
 - SSE エンドポイントの分離（channel-scoped / global-scoped）:
   - `/api/channels/{channelId}/events` — channel-scoped SSE（チャンネル別メッセージ・ステータス・タイムラインイベント）
   - `/api/global-events` — global SSE（gateway/agent バージョン、compatibility、channel list、config 等）
-  - `session_status_change` を frontend が受信・処理する実装（現状は broadcast されているが frontend が無視している — バグ）
   - `status_update` SSE event の廃止（frontend に handler があるが backend に送信側が存在しない dead sink。新設計では `gateway_status_change` / `agent_status_change` 等に置き換える）
   - `broadcastAll()` の削除（現状呼び出し箇所なし — dead code）
   - ポーリング置換（全置換対象の網羅リストと置換先 SSE の設計判断は `docs/proposals/state-management-architecture.md` の「ポーリング置換対象（網羅リスト）」節を参照）:

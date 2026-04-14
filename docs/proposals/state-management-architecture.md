@@ -437,7 +437,7 @@ type PendingQueueCommand =
 
 実際に SSE 送信されている event 型:
 - `new_message` — channel-scoped
-- `session_status_change` — channel-scoped（broadcast されているが frontend が処理していない。dead event）
+- `session_status_change` — channel-scoped（v0.68.1 で frontend 受信・処理を実装済み。`event.data.status` で `setSessionStatus` を更新する）
 
 `status_update` event は frontend が handler を持つが、backend に送信側が存在しない（dead sink）。
 
@@ -546,7 +546,7 @@ type SseBroadcasterCommand =
 - `ChannelEventPublished` 時に `channels[channelId].recentEvents` に追記し、上限超過時に古いものを削除
 - `GlobalEventPublished` 時に `GlobalSseState.recentEvents` に追記し、上限超過時に古いものを削除
 - channel-scoped と global のそれぞれで replay buffer を独立管理する
-- `session_status_change` は frontend が未処理（dead event）のため、新設計では `channel_status_change` として再定義し frontend 側の処理を実装する
+- `session_status_change` は v0.68.1 で frontend 受信・処理を実装済み。新設計では `channel_status_change` として再定義する（エンドポイント分離の際に移行する）
 - `status_update`（frontend handler はあるが backend 送信側なし）は廃止し、`gateway_status_change` / `agent_status_change` 等の global event に置き換える
 
 process state（実際の SSE ソケット）は effect runtime が管理し、world state には含めない。
