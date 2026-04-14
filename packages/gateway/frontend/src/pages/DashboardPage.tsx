@@ -305,6 +305,11 @@ export function DashboardPage() {
               setSessionStatus(String(d["sessionStatus"] ?? "--"));
               setCompatibility(String(d["compatibility"] ?? ""));
             }
+          } else if (event.type === "session_status_change") {
+            const d = event.data;
+            if (d && typeof d["status"] === "string") {
+              setSessionStatus(String(d["status"]));
+            }
           }
         } catch {
           /* ignore parse errors */

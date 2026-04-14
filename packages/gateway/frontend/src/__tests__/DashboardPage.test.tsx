@@ -42,11 +42,17 @@ const mockStatus = {
 };
 
 // Mock EventSource — must be set on globalThis before component mounts
+let lastMockEventSource: MockEventSource | null = null;
+
 class MockEventSource {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   readyState = 1;
+  constructor(_url: string) {
+    // Track last created instance so tests can dispatch events
+    lastMockEventSource = this;
+  }
   close() {
     this.readyState = 2;
   }
@@ -57,6 +63,7 @@ class MockEventSource {
 
 describe("DashboardPage", () => {
   beforeEach(() => {
+    lastMockEventSource = null;
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
@@ -299,6 +306,78 @@ describe("DashboardPage", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText(/gateway: v0\.30\.0/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("updates sessionStatus via session_status_change SSE event", async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    // Wait for initial render and status to be populated from /api/status poll
+    await waitFor(() => {
+      expect(lastMockEventSource).not.toBeNull();
+    });
+
+    const src = lastMockEventSource!;
+
+    // Dispatch a session_status_change event with status "processing"
+    src.onmessage?.({
+      data: JSON.stringify({
+        type: "session_status_change",
+        data: { sessionId: "sess-001", status: "processing" },
+      }),
+    });
+
+    await waitFor(() => {
+      // The session status should be reflected in the status bar
+      expect(screen.getAllByText(/processing/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("ignores session_status_change SSE event when data.status is missing", async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(lastMockEventSource).not.toBeNull();
+    });
+
+    const src = lastMockEventSource!;
+
+    // First establish a known status via status_update
+    src.onmessage?.({
+      data: JSON.stringify({
+        type: "status_update",
+        data: {
+          gatewayVersion: "0.68.1",
+          agentVersion: "1.2.0",
+          sessionStatus: "idle",
+          compatibility: "compatible",
+        },
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/idle/).length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Dispatch a session_status_change event WITHOUT a status field
+    src.onmessage?.({
+      data: JSON.stringify({
+        type: "session_status_change",
+        data: { sessionId: "sess-001" },
+      }),
+    });
+
+    // sessionStatus should remain "idle" since no status was provided
+    await waitFor(() => {
+      expect(screen.getAllByText(/idle/).length).toBeGreaterThanOrEqual(1);
     });
   });
 });
