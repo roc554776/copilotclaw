@@ -83,17 +83,21 @@ channel operator が知覚すべき入力を「メッセージ」に一本化せ
 - これらの非メッセージ要素は、メッセージとは視覚的に区別して表示する（例: システムイベントとしてスタイルを変える）
 - タイムライン UI を「メッセージ + 非メッセージイベント」の統一ストリームとして扱う設計にする
 
-### Req: copilotclaw_intent tool（未実現）
+### Req: copilotclaw_intent tool（v0.70.0 で部分実現）
 
 agent が何をしようとしているのかをチャンネルに伝えるための専用 tool を追加する。
 
-- tool 名: `copilotclaw_intent`
+v0.70.0 で実現した部分:
+- tool 名: `copilotclaw_intent`（toolDefinitions に追加済み）
+- 他のツールと同時に呼び出す設計（単独呼び出し禁止のシステムプロンプト制約を channel-operator / worker の両方に付与済み）
+- channel-operator と worker の両方への付与（copilotclawTools に追加済み）
+- gateway 側 handler（`handleIntentToolCall`）で受信し、in-memory IntentsStore に記録
+
+未実現のまま:
+- intent のタイムライン表示（agent のプロフィールモーダル内での時系列表示）— UI 未実装
+- `GET /api/channels/:channelId/intents/:agentId` API エンドポイント — 未実装
+- SQLite 永続化（intents テーブル）— 未実装
 - GitHub Copilot の intent 機能と同様のコンセプト
-- 他のツールと同時に呼び出す設計にする（単独で呼び出すな、というシステムプロンプト制約を付与する）
-- intent のタイムライン表示:
-  - チャンネルのタイムライン上ではメッセージとは区別して表示する
-  - まずは agent のプロフィールモーダル内でのみ、タイムライン的に時系列表示する
-- channel-operator と worker の両方に付与する
 
 ### Req: SSE による channel 情報のリアルタイム配信（未実現）
 
@@ -142,6 +146,6 @@ v0.69.0 で実現した部分（`tools: null` 廃止と明示割り当て）:
   - `copilotclaw_wait` は worker に渡さない
 - 一部のエージェントで `copilotclaw_*` ツールが割り当てられない現象がある。各エージェントへのツール割り当てを明示的に定義することで解消する（実装方法は proposal に委ねる）
 
-未実現のまま（別候補）:
+v0.70.0 で追加実現（別候補）:
 
-- `copilotclaw_intent`（追加）— channel-operator と worker の両方への付与。`copilotclaw_intent` tool 自体が未実装のため未実現
+- `copilotclaw_intent`（追加）— channel-operator と worker の両方への付与。v0.70.0 で tool 定義・gateway handler・copilotclawTools 追加を実現済み

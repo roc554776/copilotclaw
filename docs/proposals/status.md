@@ -201,6 +201,8 @@
 
 - Orchestrator skill フレームワーク（`/orchestrator` スラッシュコマンド、worker subagent の呼び出し、レビューループ付きデフォルト workflow）（v未定 — feat/stability ブランチで実装中、バージョン番号は main マージ時に確定）（skill ファイル作成済み。実動作は未検証）
 
+- `copilotclaw_intent` tool — tool 定義・gateway handler（`handleIntentToolCall`）・in-memory IntentsStore・システムプロンプト制約（単独呼び出し禁止）・channel-operator / worker への copilotclawTools 追加・MIN_AGENT_VERSION を 0.70.0 に引き上げ（v0.70.0 で部分実現）。API エンドポイント（`GET /api/channels/:channelId/intents/:agentId`）・UI 表示（プロフィールモーダル内の intent タイムライン）・SQLite 永続化（intents テーブル）は未実現
+
 **未実現:**
 - SSE エンドポイントの分離（channel-scoped / global-scoped）:
   - `/api/channels/{channelId}/events` — channel-scoped SSE（チャンネル別メッセージ・ステータス・タイムラインイベント）
@@ -220,7 +222,7 @@
   - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序 — 本 proposal の PendingQueue subsystem ACK プロトコルと SendQueue subsystem で解消
   - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する） — 本 proposal の SendQueue subsystem の `MessageAcknowledged` event で解消
   - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— 本 proposal の「Channel subsystem の拡張」節（2026-04-14 追加）で設計済み
-  - `copilotclaw_intent` tool の追加 — agent の意図を伝える専用 tool。他ツールと同時呼び出し必須のシステムプロンプト制約を持つ。channel-operator と worker の両方に付与（2026-04-14 追加）
+  - `copilotclaw_intent` API / UI / SQLite 永続化 — tool 定義・gateway handler・システムプロンプト制約は v0.70.0 で部分実現済み。`GET /api/channels/:channelId/intents/:agentId` エンドポイント・プロフィールモーダル UI 表示・intents テーブル SQLite 永続化が未実現（2026-04-14 追加）
   - sub-subagent 完了通知抑制の修正 — outer wrapper 経由のフィルタ（`msg["parentId"]`）が未機能。agent 側 session キャッチオールが `parentId` を outer wrapper に含めないため gateway の `msg["parentId"]` が常に undefined（2026-04-14 再確認）
   - メッセージ sender の詳細識別 — `Message.sender` を discriminated union に拡張し agentId / agentDisplayName / agentRole を付与（2026-04-14 追加）
   - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
