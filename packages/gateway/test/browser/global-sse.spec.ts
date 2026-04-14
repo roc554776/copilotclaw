@@ -10,8 +10,9 @@ test("status bar updates agentVersion via global SSE agent_status_change", async
 
   try {
     await page.goto(`${baseUrl}/?channel=${channelId}`);
-    // Wait for the frontend to connect SSE
+    // Wait for both channel SSE and global SSE connections to be established
     await page.waitForSelector(".ws-connected", { timeout: 10000 });
+    await page.waitForSelector("[data-global-sse-connected='true']", { timeout: 10000 });
 
     // Broadcast global agent_status_change event
     handle.sseBroadcaster.broadcastGlobal({
@@ -35,7 +36,9 @@ test("status bar updates compatibility via global SSE agent_compatibility_change
 
   try {
     await page.goto(`${baseUrl}/?channel=${channelId}`);
+    // Wait for both channel SSE and global SSE connections to be established
     await page.waitForSelector(".ws-connected", { timeout: 10000 });
+    await page.waitForSelector("[data-global-sse-connected='true']", { timeout: 10000 });
 
     // Broadcast global agent_compatibility_change event
     handle.sseBroadcaster.broadcastGlobal({

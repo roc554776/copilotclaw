@@ -8,6 +8,18 @@
 
 ---
 
+## SSE 配信スコープに関する設計方針
+
+### アンバウンド session status は SSE で配信しない
+
+session status change イベントは常に channel-scoped である（1 つのセッションは必ず 1 つの channel に bind される）。channelId のない session status イベントが発生した場合、どのクライアントに届けるかを決定する根拠がないため、SSE での配信は行わない。
+
+これは v0.72.0 以前の実装（channelId なしで全クライアントに broadcast していた）とは異なる意図的な変更である。旧実装の broadcast は誤りであり、新実装ではこのケースを明示的に drop する。
+
+具体的には `daemon.ts` の `setSseBroadcast` コールバックで `event.channelId === undefined` のイベントを drop し、コメントでその Intent を説明している。
+
+---
+
 ## 背景と問題意識
 
 ### 観測されている症状

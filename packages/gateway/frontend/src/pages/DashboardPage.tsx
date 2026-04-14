@@ -74,6 +74,7 @@ export function DashboardPage() {
     };
   }, []);
   const [sseConnected, setSseConnected] = useState(false);
+  const [globalSseConnected, setGlobalSseConnected] = useState(false);
   const [sessionStatus, setSessionStatus] = useState("--");
   const [gatewayVersion, setGatewayVersion] = useState("--");
   const [agentVersion, setAgentVersion] = useState("--");
@@ -296,6 +297,13 @@ export function DashboardPage() {
           };
           if (event.type === "new_message") {
             refreshMessages();
+            // One-shot status fetch on new_message: this is intentionally event-driven
+            // (not periodic polling). The fetch is required because dashboard.spec.ts
+            // "processing indicator" tests depend on this path: an agent message arrival
+            // triggers a status update to reflect the latest session state in the UI.
+            // TODO: Once the processing indicator is driven by session_status_change
+            // (derivedStatus via channel SSE) instead of a status fetch, this call can
+            // be removed. Track in state-management-architecture.md refactor.
             refreshStatusRef.current();
           } else if (event.type === "session_status_change") {
             const d = event.data;
@@ -386,8 +394,9 @@ export function DashboardPage() {
       if (closed) return;
       source = new EventSource("/api/global-events");
 
-      source.onopen = () => {};
+      source.onopen = () => { setGlobalSseConnected(true); };
       source.onerror = () => {
+        setGlobalSseConnected(false);
         source?.close();
         source = null;
         if (!closed) {
@@ -417,6 +426,7 @@ export function DashboardPage() {
 
     return () => {
       closed = true;
+      setGlobalSseConnected(false);
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
       source?.close();
       source = null;
@@ -593,7 +603,10 @@ export function DashboardPage() {
   const isProcessing = sessionStatus === "processing";
 
   return (
-    <div style={{ height: "100dvh", display: "flex", flexDirection: "column", maxWidth: "100vw", overflow: "hidden" }}>
+    <div
+      style={{ height: "100dvh", display: "flex", flexDirection: "column", maxWidth: "100vw", overflow: "hidden" }}
+      data-global-sse-connected={globalSseConnected ? "true" : undefined}
+    >
       {/* Status Bar */}
       <div
         id="status-bar"

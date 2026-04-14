@@ -176,7 +176,6 @@ describe("SSE /api/global-events (global-scoped)", () => {
     const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
     const freshUrl = `http://localhost:${freshHandle.port}`;
 
-    const sse = connectSSE.bind(null, "");
     // manually build the SSE connection to the fresh server
     const events: Array<{ type: string; data: unknown }> = [];
     const controller = new AbortController();
@@ -225,7 +224,6 @@ describe("SSE /api/global-events (global-scoped)", () => {
     expect(events.find((e) => e.type === "agent_status_change")).toBeTruthy();
 
     await freshHandle.close();
-    void sse; // suppress unused var warning
   });
 
   it("global client does NOT receive channel-scoped broadcastToChannel events", async () => {

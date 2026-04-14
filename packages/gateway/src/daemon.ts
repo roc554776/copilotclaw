@@ -578,7 +578,12 @@ async function main(): Promise<void> {
       if (event.channelId !== undefined) {
         broadcaster.broadcastToChannel(event.channelId, { type: event.type, data: event.data });
       }
-      // Events without channelId are channel-scoped session events — silently ignore if no channelId
+      // Intentionally drop events without channelId: session status events are always
+      // channel-scoped (a session is bound to exactly one channel). If no channelId is
+      // present, there is no way to determine which connected clients should receive the
+      // event, so broadcasting to all would be incorrect. Unbound session events are
+      // therefore not delivered via SSE. This differs from the pre-global-SSE behavior
+      // (which incorrectly broadcast to all clients); the new behavior is intentional.
     });
   }
 
