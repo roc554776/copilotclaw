@@ -441,17 +441,23 @@ type PendingQueueCommand =
 
 ### Gateway: SSE Broadcaster subsystem
 
-**現状**
+**現状（v0.72.0 時点）**
 
 `clients = new Set<SseClient>()`、ephemeral、missed events の replay なし。
 
-エンドポイントは `/api/events?channel=...` の 1 本のみ。channel 別フィルタは `SseBroadcaster.broadcast(event)` が `channelId` で内部フィルタする形で実現されている。`broadcastAll()` は呼び出し箇所なし（dead code）。global SSE エンドポイントは存在しない。
+`SseClient` は `scope: { type: "channel"; channelId: string } | { type: "global" }` のスコープ分離済み。エンドポイントは 2 本:
+- `/api/events?channel=...` — channel-scoped（`addChannelClient`）
+- `/api/global-events` — global-scoped（`addGlobalClient`、v0.72.0 で新設）
+
+`broadcastAll()` は存在しない（v0.72.0 で削除済み）。`broadcast()` は deprecated 互換実装として残存（channelId ありの場合は `broadcastToChannel` に委譲、なしの場合は no-op）。
 
 実際に SSE 送信されている event 型:
 - `new_message` — channel-scoped
 - `session_status_change` — channel-scoped（v0.68.1 で frontend 受信・処理を実装済み。`event.data.status` で `setSessionStatus` を更新する）
+- `agent_status_change` — global-scoped（v0.72.0 で新設。daemon の agent monitor が変化検知時に `broadcastGlobal` 送信）
+- `agent_compatibility_change` — global-scoped（v0.72.0 で新設。同上）
 
-`status_update` event は frontend が handler を持つが、backend に送信側が存在しない（dead sink）。
+`status_update` dead sink は v0.72.0 で frontend handler ごと削除済み。
 
 **新設計: エンドポイント分離**
 
@@ -563,11 +569,11 @@ type SseBroadcasterCommand =
 
 process state（実際の SSE ソケット）は effect runtime が管理し、world state には含めない。
 
-**frontend 設計（未実現）**
+**frontend 設計（v0.72.0 で部分実現）**
 
-- `DashboardPage` は 2 本の `EventSource` を管理する（アクティブチャンネル用 channel-scoped + global）
-- グローバル情報を表示するページは global `EventSource` のみ使用する
-- ポーリングで実装されている gateway/agent status・ログ・session event 等の定期取得は SSE 受信に置き換えた後に削除する
+- `DashboardPage` は 2 本の `EventSource` を管理する（アクティブチャンネル用 channel-scoped + global）— v0.72.0 で実現済み
+- グローバル情報を表示するページは global `EventSource` のみ使用する — v0.72.0 で実現済み（`DashboardPage` / `StatusPage` ともに `/api/global-events` を subscribe）
+- ポーリングで実装されている gateway/agent status・ログ・session event 等の定期取得は SSE 受信に置き換えた後に削除する — gateway/agent status は v0.72.0 で解消済み。ログ・session event のポーリングは未実現
 
 **ポーリング置換対象（網羅リスト）**
 
@@ -575,14 +581,14 @@ process state（実際の SSE ソケット）は effect runtime が管理し、w
 
 | ページ | ポーリング対象 API | 間隔 | 置換先 SSE | 置換方針 |
 |---|---|---|---|---|
-| `DashboardPage` | `GET /api/status` | 5s | global SSE | `gateway_status_change` / `agent_status_change` / `agent_compatibility_change` + `channel_status_change` の受信で置き換える。`system_status_change` event も gateway/agent 状態変化時に送信する |
-| `DashboardPage` | `GET /api/logs` | 3s（Logs パネル表示中のみ） | global SSE | 新規 global event `log_appended` を追加し、LogBuffer へのアペンド時に broadcast する。frontend は `log_appended` を受信して Logs パネルをリアルタイム更新する |
-| `StatusPage` | `GET /api/status` | 5s | global SSE | `DashboardPage` と同一の global SSE を subscribe し、`gateway_status_change` / `agent_status_change` / `agent_compatibility_change` で更新する |
-| `StatusPage` | `GET /api/quota` | 5s | global SSE | 新規 global event `quota_update` を追加し、クォータ情報が更新された時点で broadcast する。`system_status_change` に含めるか独立 event にするかは実装時に決定する |
-| `StatusPage` | `GET /api/models` | 5s | global SSE | 新規 global event `models_update` を追加する。モデル一覧は変化頻度が低いため、初回接続時の `SendReplayEvents` で最新値を受け取り、変化時のみ更新 event を受信する設計が合理的 |
-| `StatusPage` | `GET /api/token-usage` (5h window) | 5s | global SSE | 新規 global event `token_usage_update` を追加し、トークン消費が記録されるたびに broadcast する。`TokenUsagePage` の自動更新（1 分ポーリング）も同 event で置き換える |
-| `StatusPage` | 複数期間の `GET /api/token-usage` | 60s | global SSE | 同上。`token_usage_update` を受信した frontend が最新データを pull するか、event payload にサマリーを含める形で対応する（実装時に決定） |
-| `SessionEventsPage` | `GET /api/sessions/{sessionId}/events` | 2s | channel-scoped SSE または session-scoped SSE | 専用 session-scoped SSE エンドポイントを追加するか、既存の channel-scoped SSE（`/api/channels/{channelId}/events`）を拡張して session event の差分を `channel_timeline_event` として配信する設計を採用する（詳細は下記注を参照） |
+| `DashboardPage` | `GET /api/status` | ~~5s~~ | global SSE | **v0.72.0 で解消済み**。初回マウント時の snapshot fetch（gateway version 取得）+ `/api/global-events` の `agent_status_change` / `agent_compatibility_change` 受信で更新。周期ポーリングは削除済み |
+| `DashboardPage` | `GET /api/logs` | 3s（Logs パネル表示中のみ） | global SSE | 新規 global event `log_appended` を追加し、LogBuffer へのアペンド時に broadcast する。frontend は `log_appended` を受信して Logs パネルをリアルタイム更新する（未実現）|
+| `StatusPage` | `GET /api/status` | ~~5s~~ | global SSE | **v0.72.0 で解消済み**。`DashboardPage` と同様に初回 snapshot + `/api/global-events` 受信に置き換え済み |
+| `StatusPage` | `GET /api/quota` | 5s | global SSE | 新規 global event `quota_update` を追加し、クォータ情報が更新された時点で broadcast する。`system_status_change` に含めるか独立 event にするかは実装時に決定する（未実現）|
+| `StatusPage` | `GET /api/models` | 5s | global SSE | 新規 global event `models_update` を追加する。モデル一覧は変化頻度が低いため、初回接続時の `SendReplayEvents` で最新値を受け取り、変化時のみ更新 event を受信する設計が合理的（未実現）|
+| `StatusPage` | `GET /api/token-usage` (5h window) | 5s | global SSE | 新規 global event `token_usage_update` を追加し、トークン消費が記録されるたびに broadcast する。`TokenUsagePage` の自動更新（1 分ポーリング）も同 event で置き換える（未実現）|
+| `StatusPage` | 複数期間の `GET /api/token-usage` | 60s | global SSE | 同上。`token_usage_update` を受信した frontend が最新データを pull するか、event payload にサマリーを含める形で対応する（実装時に決定）（未実現）|
+| `SessionEventsPage` | `GET /api/sessions/{sessionId}/events` | 2s | channel-scoped SSE または session-scoped SSE | 専用 session-scoped SSE エンドポイントを追加するか、既存の channel-scoped SSE（`/api/channels/{channelId}/events`）を拡張して session event の差分を `channel_timeline_event` として配信する設計を採用する（詳細は下記注を参照）（未実現）|
 
 各ポーリング置換に対応する新規 global event（`log_appended` / `quota_update` / `models_update` / `token_usage_update`）の型定義は「新設計: SseEvent 型定義」節の `GlobalSseEvent` を参照。
 

@@ -203,20 +203,21 @@
 
 - `copilotclaw_intent` tool — tool 定義・gateway handler（`handleIntentToolCall`）・in-memory IntentsStore・システムプロンプト制約（単独呼び出し禁止）・channel-operator / worker への copilotclawTools 追加・MIN_AGENT_VERSION を 0.70.0 に引き上げ（v0.70.0 で部分実現）。API エンドポイント（`GET /api/channels/:channelId/intents/:agentId`）・UI 表示（プロフィールモーダル内の intent タイムライン）・SQLite 永続化（intents テーブル）は未実現
 
+- SSE エンドポイント分離（channel-scoped / global-scoped）— v0.72.0 で部分実現:
+  - `/api/events?channel=...` — channel-scoped SSE（既存、変更なし）
+  - `/api/global-events` — global SSE（v0.72.0 で新設）
+  - `status_update` SSE event の廃止（frontend handler を削除 — v0.72.0 で解消済み）
+  - `broadcastAll()` の削除（v0.72.0 で解消済み — `broadcast()` に deprecated 互換実装を残し、`broadcastAll` は既に存在しない）
+  - ポーリング置換（v0.72.0 で部分実現。全置換対象の網羅リストと置換先 SSE の設計判断は `docs/proposals/state-management-architecture.md` の「ポーリング置換対象（網羅リスト）」節を参照）:
+    - `DashboardPage`: `GET /api/status` 5s ポーリング → global SSE（v0.72.0 で解消。初回マウント時の snapshot fetch + `/api/global-events` の `agent_status_change` / `agent_compatibility_change` 受信で更新）
+    - `StatusPage`: `GET /api/status` 5s ポーリング → global SSE（v0.72.0 で解消。`DashboardPage` と同様）
+    - `DashboardPage`: `GET /api/logs` 3s ポーリング（Logs パネル表示中のみ）→ global SSE（新規 `log_appended` event）— 未実現
+    - `StatusPage`: `GET /api/quota` ポーリング → global SSE（新規 `quota_update` event）— 未実現
+    - `StatusPage`: `GET /api/models` ポーリング → global SSE（新規 `models_update` event）— 未実現
+    - `StatusPage`: `GET /api/token-usage` ポーリング → global SSE（新規 `token_usage_update` event）— 未実現
+    - `SessionEventsPage`: `GET /api/sessions/{sessionId}/events` 2s ポーリング → session-scoped SSE（新規 `/api/sessions/{sessionId}/events/stream` エンドポイントを追加する方針を暫定とする）— 未実現
+
 **未実現:**
-- SSE エンドポイントの分離（channel-scoped / global-scoped）:
-  - `/api/channels/{channelId}/events` — channel-scoped SSE（チャンネル別メッセージ・ステータス・タイムラインイベント）
-  - `/api/global-events` — global SSE（gateway/agent バージョン、compatibility、channel list、config 等）
-  - `status_update` SSE event の廃止（frontend に handler があるが backend に送信側が存在しない dead sink。新設計では `gateway_status_change` / `agent_status_change` 等に置き換える）
-  - `broadcastAll()` の削除（現状呼び出し箇所なし — dead code）
-  - ポーリング置換（全置換対象の網羅リストと置換先 SSE の設計判断は `docs/proposals/state-management-architecture.md` の「ポーリング置換対象（網羅リスト）」節を参照）:
-    - `DashboardPage`: `GET /api/status` 5s ポーリング → global SSE（`gateway_status_change` / `agent_status_change` / `agent_compatibility_change` / `channel_status_change`）
-    - `DashboardPage`: `GET /api/logs` 3s ポーリング（Logs パネル表示中のみ）→ global SSE（新規 `log_appended` event）
-    - `StatusPage`: `GET /api/status` 5s ポーリング → global SSE（`DashboardPage` と同一）
-    - `StatusPage`: `GET /api/quota` 5s ポーリング → global SSE（新規 `quota_update` event）
-    - `StatusPage`: `GET /api/models` 5s ポーリング → global SSE（新規 `models_update` event）
-    - `StatusPage`: `GET /api/token-usage` 5s / 60s ポーリング → global SSE（新規 `token_usage_update` event）
-    - `SessionEventsPage`: `GET /api/sessions/{sessionId}/events` 2s ポーリング → session-scoped SSE（新規 `/api/sessions/{sessionId}/events/stream` エンドポイントを追加する方針を暫定とする）
 - 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — gateway 側・agent 側・IPC/cross-cutting の全 subsystem を対象に、world state / process state 分離・subsystem ごとの reducer・event bus による subsystem 間通信を導入する。下記の個別未実現項目はすべて本 proposal の実装に包含される
   - gateway 側の copilotSessionId → physicalSessionId 統一（DB スキーマ migration 含む）— 本 proposal の `StartPhysicalSession` event 型設計で型レベルから解消
   - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序 — 本 proposal の PendingQueue subsystem ACK プロトコルと SendQueue subsystem で解消
