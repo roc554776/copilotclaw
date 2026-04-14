@@ -197,6 +197,8 @@
 - session.setModel を session.send 前に呼ぶことでモデル切り替えを実現（v0.68.0）
 - end turn run の disconnect 方式 — session.disconnect() で切断（クライアントは止めない）。physical session id を保持して次回 resume（v0.68.0）
 
+- channel operator / worker への明示的 copilotclaw tool 割り当て（`client.rpc.tools.list({})` で builtin tool 名を取得し、各 custom agent の `tools` に builtin + copilotclawTools を明示指定。`tools: null` を廃止。`copilotclawTools` フィールドを `CustomAgentDef` に追加し gateway から agent へ IPC 経由で送信。MIN_AGENT_VERSION を `0.69.0` に引き上げ）（v0.69.0）
+
 - Orchestrator skill フレームワーク（`/orchestrator` スラッシュコマンド、worker subagent の呼び出し、レビューループ付きデフォルト workflow）（v未定 — feat/stability ブランチで実装中、バージョン番号は main マージ時に確定）（skill ファイル作成済み。実動作は未検証）
 
 **未実現:**
@@ -219,7 +221,6 @@
   - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する） — 本 proposal の SendQueue subsystem の `MessageAcknowledged` event で解消
   - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— 本 proposal の「Channel subsystem の拡張」節（2026-04-14 追加）で設計済み
   - `copilotclaw_intent` tool の追加 — agent の意図を伝える専用 tool。他ツールと同時呼び出し必須のシステムプロンプト制約を持つ。channel-operator と worker の両方に付与（2026-04-14 追加）
-  - channel operator / worker への明示的なツール割り当て — SDK の builtin tool list API を使い `tools: null` を廃止して明示指定に変更（2026-04-14 追加）
   - sub-subagent 完了通知抑制の修正 — outer wrapper 経由のフィルタ（`msg["parentId"]`）が未機能。agent 側 session キャッチオールが `parentId` を outer wrapper に含めないため gateway の `msg["parentId"]` が常に undefined（2026-04-14 再確認）
   - メッセージ sender の詳細識別 — `Message.sender` を discriminated union に拡張し agentId / agentDisplayName / agentRole を付与（2026-04-14 追加）
   - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
