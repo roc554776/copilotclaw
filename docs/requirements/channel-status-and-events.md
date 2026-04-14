@@ -9,7 +9,7 @@
 
 ---
 
-### Req: チャンネルの表示用ステータス定義（未実現）
+### Req: チャンネルの表示用ステータス定義（v0.71.0 で部分実現）
 
 チャンネルの内部状態（abstract session / physical session / turn run / CopilotClient の複合状態）を、表示用の排他的な enum 値に射影する。
 
@@ -30,6 +30,14 @@
 
 - `no-physical-session-initial` と `no-physical-session-after-stop` は両方 physical session が存在しないが、意味が異なるため区別する
 - 上記 enum 値は導出値であり、Channel subsystem の world state に直接書き込まれる値ではない。abstract session status・physical session の有無・turn run 状態・CopilotClient status の組み合わせから導出される（導出の具体的な実装方法は proposal に委ねる）
+
+v0.71.0 で実現した部分:
+- `DerivedChannelStatus` 型定義（6 値）と `selectDerivedChannelStatus` 純関数（`channel-status-selector.ts`）を実装
+- `session-controller.ts` の `broadcastStatusChange` で selector を呼び、SSE event data に `derivedStatus` を付与
+- `DashboardPage.tsx` で `session_status_change` 受信時に `derivedStatus` を優先表示
+
+未実現のまま:
+- `client-not-started` 状態（CopilotClient 観測経路）— selector は `clientStarted = true` を固定仮定。CopilotClient の起動状態を観測する経路が未実装のため、この値は実際には返されない
 
 ### Req: イベント抽象化（未実現）
 

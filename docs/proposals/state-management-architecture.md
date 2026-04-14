@@ -1143,11 +1143,18 @@ IPC stream の mock（メモリ内双方向チャネル）を用意して、gate
 
 ---
 
-## チャンネルステータス・イベント抽象化・エージェント識別の設計（未実現）
+## チャンネルステータス・イベント抽象化・エージェント識別の設計（部分実現）
 
 本節は `docs/raw-requirements/channel-status-and-events-redesign.md`（2026-04-14）の要望に基づく設計拡張である。要求定義は `docs/requirements/channel-status-and-events.md` に記載されている。
 
 ### Gateway: Channel subsystem の拡張 — 表示用ステータスの射影
+
+**v0.71.0 で部分実現**: `DerivedChannelStatus` 型定義と `selectDerivedChannelStatus` 純関数（`channel-status-selector.ts`）を実装済み。`session-controller.ts` の `broadcastStatusChange` で selector を呼び SSE event data に `derivedStatus` を付与済み。`DashboardPage.tsx` で `session_status_change` 時に `derivedStatus` を優先表示するよう実装済み。
+
+以下の項目は proposal として未実現のまま残存:
+- `client-not-started` 状態（CopilotClient 観測経路）— selector は常に `clientStarted = true` を仮定。CopilotClient の状態を観測する経路が未実装
+- `waitingOnWaitTool` フィールド — `AbstractSessionState` には存在しない。selector は `session.status` と `hasPending` で近似判定
+- `hasHadPhysicalSession` フィールド — `AbstractSessionState` には存在しない。`physicalSessionHistory.length > 0` で代替
 
 Channel subsystem の現設計（上記「Gateway: Channel subsystem」節）を以下のように拡張する。
 

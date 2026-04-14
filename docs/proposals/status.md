@@ -221,7 +221,7 @@
   - gateway 側の copilotSessionId → physicalSessionId 統一（DB スキーマ migration 含む）— 本 proposal の `StartPhysicalSession` event 型設計で型レベルから解消
   - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序 — 本 proposal の PendingQueue subsystem ACK プロトコルと SendQueue subsystem で解消
   - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する） — 本 proposal の SendQueue subsystem の `MessageAcknowledged` event で解消
-  - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— 本 proposal の「Channel subsystem の拡張」節（2026-04-14 追加）で設計済み
+  - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— v0.71.0 で部分実現。`selectDerivedChannelStatus` 純関数（`channel-status-selector.ts`）・`broadcastStatusChange` での selector 呼び出しと SSE event への `derivedStatus` 付与・DashboardPage での `derivedStatus` 優先表示を実装済み。`client-not-started` 状態（CopilotClient 観測経路）は未実現のまま（selector は常に `clientStarted = true` を仮定）。`waitingOnWaitTool` フィールドおよび `hasHadPhysicalSession` フィールドは未実装（`physicalSessionHistory.length` で代替）のため proposal として残存
   - `copilotclaw_intent` API / UI / SQLite 永続化 — tool 定義・gateway handler・システムプロンプト制約は v0.70.0 で部分実現済み。`GET /api/channels/:channelId/intents/:agentId` エンドポイント・プロフィールモーダル UI 表示・intents テーブル SQLite 永続化が未実現（2026-04-14 追加）
   - sub-subagent 完了通知抑制の修正 — outer wrapper 経由のフィルタ（`msg["parentId"]`）が未機能。agent 側 session キャッチオールが `parentId` を outer wrapper に含めないため gateway の `msg["parentId"]` が常に undefined（2026-04-14 再確認）
   - メッセージ sender の詳細識別 — `Message.sender` を discriminated union に拡張し agentId / agentDisplayName / agentRole を付与（2026-04-14 追加）
