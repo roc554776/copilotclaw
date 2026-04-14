@@ -790,6 +790,8 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
           for (const provider of channelProviders) {
             provider.close?.();
           }
+          // Force-close idle keep-alive connections so server.close() resolves promptly
+          server.closeAllConnections();
           // Agent process is NOT stopped — independent process
           await new Promise<void>((res, rej) => {
             server.close((err) => { err ? rej(err) : res(); });

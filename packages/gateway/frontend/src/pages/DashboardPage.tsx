@@ -75,8 +75,6 @@ export function DashboardPage() {
   }, []);
   const [sseConnected, setSseConnected] = useState(false);
   const [sessionStatus, setSessionStatus] = useState("--");
-  const [agentReplyCount, setAgentReplyCount] = useState(0);
-  const [gatewayStatus, setGatewayStatus] = useState("running");
   const [gatewayVersion, setGatewayVersion] = useState("--");
   const [agentVersion, setAgentVersion] = useState("--");
   const [compatibility, setCompatibility] = useState("");
@@ -297,9 +295,6 @@ export function DashboardPage() {
             data?: Record<string, unknown>;
           };
           if (event.type === "new_message") {
-            if (event.data?.["sender"] === "agent") {
-              setAgentReplyCount((c) => c + 1);
-            }
             refreshMessages();
             refreshStatusRef.current();
           } else if (event.type === "status_update") {
@@ -356,7 +351,6 @@ export function DashboardPage() {
   const refreshStatus = useCallback(async () => {
     try {
       const data = await fetchStatus();
-      setGatewayStatus(data.gateway.status ?? "running");
       setGatewayVersion(data.gateway.version);
       if (data.agent) {
         setAgentVersion(data.agent.version ?? "--");
@@ -590,7 +584,7 @@ export function DashboardPage() {
               background: sseConnected ? "#3fb950" : "#f85149",
             }}
           />
-          gateway: {gatewayStatus} | v{gatewayVersion} | agent: v{agentVersion}
+          gateway: v{gatewayVersion} | agent: v{agentVersion}
           {compatLabel} | session: {sessionStatus}
         </span>
         <div style={{ display: "flex", gap: "0.4rem" }}>
@@ -747,7 +741,7 @@ export function DashboardPage() {
             Open in new tab &rarr;
           </a>
         </h3>
-        {showModal && (modalStatus ? (
+        {modalStatus ? (
           <StatusModalContent
             status={modalStatus}
             quota={modalQuota}
@@ -757,7 +751,7 @@ export function DashboardPage() {
           />
         ) : (
           <div>Loading...</div>
-        ))}
+        )}
       </div>
 
       {/* Channel Settings Modal */}
@@ -1010,7 +1004,7 @@ export function DashboardPage() {
         })}
         <div
           id="processing-indicator"
-          className={isProcessing ? "visible" : agentReplyCount > 0 ? "" : undefined}
+          className={isProcessing ? "visible" : ""}
           style={{
             alignSelf: "flex-start",
             gap: "0.3rem",

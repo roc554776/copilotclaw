@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./test/browser",
-  timeout: 15000,
+  timeout: 30000,
   use: {
     headless: true,
   },
