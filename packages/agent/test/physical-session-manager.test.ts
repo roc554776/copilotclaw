@@ -1002,7 +1002,7 @@ describe("PhysicalSessionManager — suspend clears physical session (history is
     expect(endedCalls[0]![0]).toMatchObject({ reason: "idle" });
   });
 
-  it("reports running sessions via getRunningSessionsSummary", async () => {
+  it("reports running sessions via getRunningPhysicalSessionsSummary", async () => {
     const mockSession = makeMockCopilotSession("idle");
     mockSession.send.mockImplementation(async () => "msg-id");
 
