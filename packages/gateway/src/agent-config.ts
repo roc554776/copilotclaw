@@ -11,6 +11,8 @@ export interface CustomAgentDef {
   description: string;
   prompt: string;
   infer: boolean;
+  /** Copilotclaw tool names to include in this agent's tools list (in addition to builtin tools). */
+  copilotclawTools: string[];
 }
 
 export interface AgentPromptConfig {
@@ -179,6 +181,7 @@ export function getAgentPromptConfig(): AgentPromptConfig {
           "This agent is EXCLUSIVELY the top-level operator that manages the channel lifecycle.",
         prompt: CHANNEL_OPERATOR_PROMPT,
         infer: false,
+        copilotclawTools: ["copilotclaw_wait", "copilotclaw_list_messages", "copilotclaw_send_message"],
       },
       {
         name: "worker",
@@ -189,6 +192,7 @@ export function getAgentPromptConfig(): AgentPromptConfig {
           "This is the sole subagent available for task delegation. Always use 'worker' for any subagent dispatch.",
         prompt: "",
         infer: true,
+        copilotclawTools: ["copilotclaw_list_messages", "copilotclaw_send_message"],
       },
     ],
     primaryAgentName: "channel-operator",

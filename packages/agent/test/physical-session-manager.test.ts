@@ -96,6 +96,7 @@ const TEST_PROMPTS = {
       description: "The primary agent. WARNING: NEVER NEVER NEVER dispatch as subagent — catastrophic failure.",
       prompt: "CRITICAL — DEADLOCK PREVENTION\nYou MUST call copilotclaw_wait whenever you have nothing to do.",
       infer: false,
+      copilotclawTools: ["copilotclaw_wait", "copilotclaw_list_messages", "copilotclaw_send_message"],
     },
     {
       name: "worker",
@@ -103,6 +104,7 @@ const TEST_PROMPTS = {
       description: "The ONLY agent to dispatch as a subagent.",
       prompt: "",
       infer: true,
+      copilotclawTools: ["copilotclaw_list_messages", "copilotclaw_send_message"],
     },
   ],
   primaryAgentName: "channel-operator",
@@ -149,6 +151,15 @@ function installClientMock(createSession: ReturnType<typeof vi.fn>): void {
     (this as Record<string, unknown>)["rpc"] = {
       models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
       account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+      tools: {
+        list: vi.fn().mockResolvedValue({
+          tools: [
+            { name: "read_file", description: "Read a file" },
+            { name: "write_file", description: "Write a file" },
+            { name: "bash", description: "Run bash" },
+          ],
+        }),
+      },
     };
   });
 }
@@ -703,14 +714,13 @@ describe("PhysicalSessionManager — custom agents configuration", () => {
     const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
     installClientMock(createSessionSpy);
 
-
     const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
 
     manager.startPhysicalSession({ sessionId: nextSessionId() });
     await waitForSessionReady(manager);
 
     const config = createSessionSpy.mock.calls[0]![0] as {
-      customAgents: Array<{ name: string; prompt: string; infer: boolean }>;
+      customAgents: Array<{ name: string; prompt: string; infer: boolean; tools: string[] }>;
       agent: string;
     };
 
@@ -731,6 +741,165 @@ describe("PhysicalSessionManager — custom agents configuration", () => {
 
     // Session starts with channel-operator active
     expect(config.agent).toBe("channel-operator");
+
+    // No tools: null — all agents must have an explicit tools array
+    for (const agent of config.customAgents) {
+      expect(agent.tools).not.toBeNull();
+      expect(Array.isArray(agent.tools)).toBe(true);
+    }
+
+    mockSession.emit("session.idle", { data: {} });
+    await wait(30);
+  });
+
+  it("sets channel-operator tools to builtin tools + copilotclaw_wait + copilotclaw_list_messages + copilotclaw_send_message", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
+    installClientMock(createSessionSpy);
+
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
+    await waitForSessionReady(manager);
+
+    const config = createSessionSpy.mock.calls[0]![0] as {
+      customAgents: Array<{ name: string; tools: string[] }>;
+    };
+
+    const operator = config.customAgents.find((a) => a.name === "channel-operator");
+    expect(operator).toBeDefined();
+    // Builtin tools from mock
+    expect(operator!.tools).toContain("read_file");
+    expect(operator!.tools).toContain("write_file");
+    expect(operator!.tools).toContain("bash");
+    // Copilotclaw tools for channel-operator
+    expect(operator!.tools).toContain("copilotclaw_wait");
+    expect(operator!.tools).toContain("copilotclaw_list_messages");
+    expect(operator!.tools).toContain("copilotclaw_send_message");
+
+    mockSession.emit("session.idle", { data: {} });
+    await wait(30);
+  });
+
+  it("sets worker tools to builtin tools + copilotclaw_list_messages + copilotclaw_send_message (no copilotclaw_wait)", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
+    installClientMock(createSessionSpy);
+
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
+    await waitForSessionReady(manager);
+
+    const config = createSessionSpy.mock.calls[0]![0] as {
+      customAgents: Array<{ name: string; tools: string[] }>;
+    };
+
+    const worker = config.customAgents.find((a) => a.name === "worker");
+    expect(worker).toBeDefined();
+    // Builtin tools from mock
+    expect(worker!.tools).toContain("read_file");
+    expect(worker!.tools).toContain("write_file");
+    expect(worker!.tools).toContain("bash");
+    // Copilotclaw tools for worker (no copilotclaw_wait)
+    expect(worker!.tools).toContain("copilotclaw_list_messages");
+    expect(worker!.tools).toContain("copilotclaw_send_message");
+    expect(worker!.tools).not.toContain("copilotclaw_wait");
+
+    mockSession.emit("session.idle", { data: {} });
+    await wait(30);
+  });
+
+  it("calls rpc.tools.list({}) with empty object (no model param) on each session creation", async () => {
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+
+    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
+    installClientMock(createSessionSpy);
+
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+
+    manager.startPhysicalSession({ sessionId: nextSessionId() });
+    await waitForSessionReady(manager);
+
+    // Retrieve the mock client instance to check rpc.tools.list call
+    const clientInstances = (CopilotClient as ReturnType<typeof vi.fn>).mock.instances;
+    const client = clientInstances[clientInstances.length - 1] as Record<string, { list: ReturnType<typeof vi.fn> }>;
+    const toolsListMock = client["rpc"]!["tools"]!.list;
+
+    // Must be called exactly once (for this session creation)
+    expect(toolsListMock).toHaveBeenCalledTimes(1);
+    // Must be called with empty object (no model param)
+    expect(toolsListMock).toHaveBeenCalledWith({});
+
+    mockSession.emit("session.idle", { data: {} });
+    await wait(30);
+  });
+
+  it("calls rpc.tools.list({}) on each new session start (not cached across sessions)", async () => {
+    // This test verifies that rpc.tools.list is called per runSession invocation,
+    // not cached across sessions. We start two sequential sessions and confirm
+    // tools.list is called each time.
+    let toolsListCallCount = 0;
+
+    const mockSession = makeMockCopilotSession("idle");
+    mockSession.send.mockImplementation(async () => "msg-id");
+    const createSessionSpy = vi.fn().mockResolvedValue(mockSession);
+
+    (CopilotClient as ReturnType<typeof vi.fn>).mockImplementation(function (this: object) {
+      (this as Record<string, unknown>)["createSession"] = createSessionSpy;
+      (this as Record<string, unknown>)["resumeSession"] = createSessionSpy;
+      (this as Record<string, unknown>)["stop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["forceStop"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["start"] = vi.fn().mockResolvedValue(undefined);
+      (this as Record<string, unknown>)["rpc"] = {
+        models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
+        account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+        tools: {
+          list: vi.fn().mockImplementation(async () => {
+            toolsListCallCount += 1;
+            return { tools: [{ name: "read_file" }, { name: "bash" }] };
+          }),
+        },
+      };
+    });
+
+    const manager = new PhysicalSessionManager({ prompts: TEST_PROMPTS });
+
+    // First session
+    const sid1 = nextSessionId();
+    manager.startPhysicalSession({ sessionId: sid1 });
+
+    // Wait until first session is in "waiting" state (past tools.list call)
+    const startWait1 = Date.now();
+    while (Date.now() - startWait1 < 2000) {
+      const s = manager.getPhysicalSessionStatus(sid1);
+      if (s !== undefined && s.status === "waiting") break;
+      await wait(5);
+    }
+    expect(toolsListCallCount).toBe(1);
+
+    mockSession.emit("session.idle", { data: {} });
+    await wait(30);
+
+    // Second session on same manager (same singleton client)
+    const sid2 = nextSessionId();
+    manager.startPhysicalSession({ sessionId: sid2 });
+
+    // Wait until second session is in "waiting" state
+    const startWait2 = Date.now();
+    while (Date.now() - startWait2 < 2000) {
+      const s = manager.getPhysicalSessionStatus(sid2);
+      if (s !== undefined && s.status === "waiting") break;
+      await wait(5);
+    }
+
+    // tools.list must have been called again (not cached from the first session)
+    expect(toolsListCallCount).toBe(2);
 
     mockSession.emit("session.idle", { data: {} });
     await wait(30);
@@ -930,6 +1099,7 @@ describe("PhysicalSessionManager — session status tracking via onStatusChange"
       (this as Record<string, unknown>)["rpc"] = {
         models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
         account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+        tools: { list: vi.fn().mockResolvedValue({ tools: [{ name: "read_file" }, { name: "bash" }] }) },
       };
     });
 
@@ -997,6 +1167,7 @@ describe("PhysicalSessionManager — generic hook RPC dispatch", () => {
       (this as Record<string, unknown>)["rpc"] = {
         models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
         account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+        tools: { list: vi.fn().mockResolvedValue({ tools: [{ name: "read_file" }, { name: "bash" }] }) },
       };
     });
 
@@ -1069,6 +1240,7 @@ describe("PhysicalSessionManager — generic hook RPC dispatch", () => {
       (this as Record<string, unknown>)["rpc"] = {
         models: { list: vi.fn().mockResolvedValue({ models: [{ id: "gpt-4.1", billing: { multiplier: 1 } }] }) },
         account: { getQuota: vi.fn().mockResolvedValue({ quotaSnapshots: {} }) },
+        tools: { list: vi.fn().mockResolvedValue({ tools: [{ name: "read_file" }, { name: "bash" }] }) },
       };
     });
 

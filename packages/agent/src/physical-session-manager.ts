@@ -41,7 +41,7 @@ export interface PhysicalSessionManagerOptions {
   debugLogLevel?: "info" | "debug";
   /** Prompt and session config pushed from gateway. */
   prompts: {
-    customAgents?: Array<{ name: string; displayName: string; description: string; prompt: string; infer: boolean }>;
+    customAgents?: Array<{ name: string; displayName: string; description: string; prompt: string; infer: boolean; copilotclawTools?: string[] }>;
     primaryAgentName?: string;
     systemReminder: string;
     initialPrompt: string;
@@ -81,7 +81,7 @@ export class PhysicalSessionManager {
   private readonly sessions = new Map<string, PhysicalSessionEntry>();
   private readonly workingDirectory: string | undefined;
   private readonly githubToken: string | undefined;
-  private readonly customAgents: Array<{ name: string; displayName: string; description: string; prompt: string; infer: boolean }>;
+  private readonly customAgents: Array<{ name: string; displayName: string; description: string; prompt: string; infer: boolean; copilotclawTools: string[] }>;
   private readonly primaryAgentName: string;
   private readonly initialPrompt: string;
   private readonly keepaliveTimeoutMs: number;
@@ -108,7 +108,10 @@ export class PhysicalSessionManager {
     // that do not send the field. The gateway (agent-config.ts) always sends it as a required
     // field. The empty-array fallback is a type-safety guard — if it fires, the SDK call will
     // have customAgents:[] with agent:"channel-operator", which is a degraded/broken state.
-    this.customAgents = options.prompts.customAgents ?? [];
+    this.customAgents = (options.prompts.customAgents ?? []).map((a) => ({
+      ...a,
+      copilotclawTools: a.copilotclawTools ?? [],
+    }));
     this.primaryAgentName = options.prompts.primaryAgentName ?? this.customAgents.find((a) => !a.infer)?.name ?? "channel-operator";
     this.initialPrompt = options.prompts.initialPrompt;
     this.keepaliveTimeoutMs = options.prompts.keepaliveTimeoutMs ?? 25 * 60 * 1000;
@@ -337,6 +340,12 @@ export class PhysicalSessionManager {
       sections[id] = { action: makeSectionCapture(id) };
     }
 
+    // Fetch builtin tool names from SDK. Called every session creation (not cached)
+    // so that tool availability is always current.
+    await this.ensureClientStarted();
+    const toolsListResult = await this.getClient().rpc.tools.list({});
+    const builtinToolNames: string[] = toolsListResult.tools.map((t: { name: string }) => t.name);
+
     // Build session config with gateway-provided overrides (passthrough)
     const baseConfig = {
       model: resolvedModel,
@@ -346,8 +355,16 @@ export class PhysicalSessionManager {
         mode: "customize" as const,
         sections,
       },
-      // Dynamic custom agents list from gateway (passthrough to SDK)
-      customAgents: this.customAgents.map((a) => ({ ...a, tools: null })),
+      // Dynamic custom agents list from gateway (passthrough to SDK).
+      // Each agent's tools = builtin tools + copilotclaw tools for that agent.
+      customAgents: this.customAgents.map((a) => ({
+        name: a.name,
+        displayName: a.displayName,
+        description: a.description,
+        prompt: a.prompt,
+        infer: a.infer,
+        tools: [...builtinToolNames, ...a.copilotclawTools],
+      })),
       agent: this.primaryAgentName,
       // Gateway-provided session config overrides (passthrough to SDK).
       // Intentionally last — this can overwrite any field above (model, agent,

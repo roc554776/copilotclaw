@@ -20,6 +20,8 @@ interface CustomAgentDef {
   description: string;
   prompt: string;
   infer: boolean;
+  /** Copilotclaw tool names to include in this agent's tools list (in addition to builtin tools). */
+  copilotclawTools: string[];
 }
 
 interface AgentPromptConfig {

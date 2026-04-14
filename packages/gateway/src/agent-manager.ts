@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.68.0";
+export const MIN_AGENT_VERSION = "0.69.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
