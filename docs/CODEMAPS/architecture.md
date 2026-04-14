@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-04-14 | Packages: 3 (cli, gateway, agent) | Version: 0.68.1 | Token estimate: ~2500 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-04-14 | Packages: 3 (cli, gateway, agent) | Version: 0.69.0 | Token estimate: ~2500 -->
 
 # Architecture
 
@@ -81,8 +81,9 @@ Environment variables:
 
 ## Custom Agents (v0.16.0+)
 
-- **Channel-operator**: parent agent exclusively bound to the channel (infer:false, cannot be used as subagent); receives full system prompts including deadlock prevention warnings; subscribes to `copilotclaw_wait` (WAIT_TOOL_NAME) tool to manage session lifecycle
-- **Worker**: subagent available for task delegation (infer:true); can only access `copilotclaw_send_message` and `copilotclaw_list_messages` (never receives `copilotclaw_wait`); started by parent agent via subagent dispatch
+- **Channel-operator**: parent agent exclusively bound to the channel (infer:false, cannot be used as subagent); receives full system prompts including deadlock prevention warnings; subscribes to `copilotclaw_wait` (WAIT_TOOL_NAME) tool to manage session lifecycle; `copilotclawTools` lists `["copilotclaw_wait", "copilotclaw_send_message", "copilotclaw_list_messages"]`
+- **Worker**: subagent available for task delegation (infer:true); can only access `copilotclaw_send_message` and `copilotclaw_list_messages` (never receives `copilotclaw_wait`); started by parent agent via subagent dispatch; `copilotclawTools` lists `["copilotclaw_send_message", "copilotclaw_list_messages"]`
+- **Tool assignment (v0.69.0)**: `CustomAgentDef.copilotclawTools` field added; `PhysicalSessionManager.runSession()` calls `client.rpc.tools.list({})` to obtain builtin tool names, then sets `customAgents[].tools` to the union of builtin names and `copilotclawTools` explicitly (replaces previous `tools: null` — tools are no longer implicitly inherited)
 - Session begins with `agent: "channel-operator"` configuration; custom agent definitions passed to SDK createSession/resumeSession
 - Custom agent definitions (customAgents[] with primaryAgentName) and session timing config (staleTimeoutMs, maxSessionAgeMs, rapidFailureThresholdMs, backoffDurationMs, keepaliveTimeoutMs, reminderThresholdPercent, initialPrompt) defined in gateway's `agent-config.ts` as AgentPromptConfig and CustomAgentDef interfaces; AgentPromptConfig also includes knownSections (configurable KNOWN_SECTIONS for system prompt), maxQueueSize (agent send queue cap), clientOptions (passthrough to CopilotClient constructor), sessionConfigOverrides (merged into SDK session base config), toolDefinitions (ToolDefinition[] for dynamic tool injection — default includes copilotclaw_send_message and copilotclaw_list_messages); resolveModel(modelsResponse, configModel, zeroPremium) function for gateway-side model selection (v0.50.0; v0.55.0: configModel resolved per-channel via channel.model ?? config.model); sent to agent via IPC config push
 
@@ -151,13 +152,13 @@ Environment variables:
 - Startup direction: always gateway → agent (agent never starts gateway)
 - Agent process ensure: gateway start time only (NOT on user message POST)
 - Agent session ensure: gateway responsibility via SessionOrchestrator (sends start_physical_session/stop_physical_session to agent via IPC stream)
-- Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION=0.68.0, exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
+- Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION=0.69.0, exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel; LogBuffer optionally writes structured JSON lines to file via enableFileOutput() (gateway.log); agent spawned with stderr redirected to agent.log; agent process initializes its own StructuredLogger writing to agent.log
 - Structured logging: StructuredLogger (intentionally duplicated in gateway and agent packages) writes JSON Lines (StructuredLogEntry: ts, level, component, msg, data?) to file via appendFileSync; bridges to OpenTelemetry via optional OtelLoggerBridge parameter (emits log records to OTel LoggerProvider when configured); agent uses structured JSON fallback pattern (console.error with JSON.stringify) before StructuredLogger is initialized — applies to index.ts module-level log/logError, PhysicalSessionManager defaultLog/defaultLogError, and channel.ts ChannelToolDeps logError
 - OpenTelemetry: OTel setup module (otel.ts, intentionally duplicated in gateway and agent) initializes OTLP HTTP exporters for logs and metrics; gateway additionally defines application-level metrics (otel-metrics.ts: session count gauges, token usage counters); endpoints configured via config.otel.endpoints (empty = noop export); agent receives OTel config from gateway via IPC stream config push and initializes independently with serviceName "copilotclaw-agent"
 - Channel backoff: SessionOrchestrator tracks channelBackoff map (ephemeral, not persisted); gateway daemon records backoff in onPhysicalSessionEnded when elapsedMs < rapidFailureThresholdMs; isChannelInBackoff() checked before starting sessions (prevents retry storms)
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (640 tests: 104 agent + 500 gateway + 36 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (648 tests: 108 agent + 504 gateway + 36 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
 - Frontend tests: vitest + jsdom + @testing-library/react for React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll)
 - Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
