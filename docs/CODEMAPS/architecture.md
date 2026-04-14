@@ -1,4 +1,4 @@
-<!-- Generated: 2026-03-27 | Updated: 2026-04-14 | Packages: 3 (cli, gateway, agent) | Version: 0.70.0 | Token estimate: ~2500 -->
+<!-- Generated: 2026-03-27 | Updated: 2026-04-14 | Packages: 3 (cli, gateway, agent) | Version: 0.71.0 | Token estimate: ~2500 -->
 
 # Architecture
 
@@ -154,13 +154,13 @@ Environment variables:
 - Startup direction: always gateway → agent (agent never starts gateway)
 - Agent process ensure: gateway start time only (NOT on user message POST)
 - Agent session ensure: gateway responsibility via SessionOrchestrator (sends start_physical_session/stop_physical_session to agent via IPC stream)
-- Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION=0.70.0, exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
+- Agent version check: gateway enforces minimum agent version (MIN_AGENT_VERSION=0.71.0, exported from agent-manager.ts) at start; force-restart on mismatch with reconnectStream(); checkCompatibility()/getMinAgentVersion() expose compatibility status; CLI checkAgentCompatibility polls /api/status when waitForAgent=true (used after force-restart to wait for new agent bootId)
 - Log capture: daemon creates LogBuffer (ring buffer), intercepts console via interceptConsole(); logs served at /api/logs and displayed in dashboard logs panel; LogBuffer optionally writes structured JSON lines to file via enableFileOutput() (gateway.log); agent spawned with stderr redirected to agent.log; agent process initializes its own StructuredLogger writing to agent.log
 - Structured logging: StructuredLogger (intentionally duplicated in gateway and agent packages) writes JSON Lines (StructuredLogEntry: ts, level, component, msg, data?) to file via appendFileSync; bridges to OpenTelemetry via optional OtelLoggerBridge parameter (emits log records to OTel LoggerProvider when configured); agent uses structured JSON fallback pattern (console.error with JSON.stringify) before StructuredLogger is initialized — applies to index.ts module-level log/logError, PhysicalSessionManager defaultLog/defaultLogError, and channel.ts ChannelToolDeps logError
 - OpenTelemetry: OTel setup module (otel.ts, intentionally duplicated in gateway and agent) initializes OTLP HTTP exporters for logs and metrics; gateway additionally defines application-level metrics (otel-metrics.ts: session count gauges, token usage counters); endpoints configured via config.otel.endpoints (empty = noop export); agent receives OTel config from gateway via IPC stream config push and initializes independently with serviceName "copilotclaw-agent"
 - Channel backoff: SessionOrchestrator tracks channelBackoff map (ephemeral, not persisted); gateway daemon records backoff in onPhysicalSessionEnded when elapsedMs < rapidFailureThresholdMs; isChannelInBackoff() checked before starting sessions (prevents retry storms)
 - All Copilot SDK dependencies must be mocked in tests — including E2E. Real Copilot sessions must never be used in automated tests (authentication requirement and BAN risk)
 - Test doubles must be implemented in place, never deferred as skip
-- Test runners: vitest for unit + E2E (679 tests: 112 agent + 523 gateway + 36 frontend), Playwright for browser E2E (8 tests); gateway vitest excludes test/browser/ directory
+- Test runners: vitest for unit + E2E (687 tests: 112 agent + 537 gateway + 38 frontend), Playwright for browser E2E (11 tests); gateway vitest excludes test/browser/ directory
 - Frontend tests: vitest + jsdom + @testing-library/react for React SPA component tests (SessionEventsPage, StatusPage, DashboardPage, SessionsListPage, useAutoScroll)
-- Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal
+- Browser E2E tests (Playwright) cover dashboard UI behaviors: processing indicator SSE hide, SSE chat update, status bar, logs panel toggle/escape, status modal, DerivedChannelStatus SSE projection (channel-status-sse.spec.ts, 3 tests)
