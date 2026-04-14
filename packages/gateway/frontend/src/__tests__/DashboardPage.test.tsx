@@ -41,30 +41,44 @@ const mockStatus = {
   config: {},
 };
 
-// Mock EventSource — must be set on globalThis before component mounts
-let lastMockEventSource: MockEventSource | null = null;
+// Mock EventSource — URL-map based so channel SSE and global SSE are independent
+const mockEventSources = new Map<string, MockEventSource>();
 
 class MockEventSource {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   readyState = 1;
-  constructor(_url: string) {
-    // Track last created instance so tests can dispatch events
-    lastMockEventSource = this;
+  constructor(public url: string) {
+    // Track by URL so tests can dispatch events to the correct source
+    mockEventSources.set(url, this);
   }
   close() {
     this.readyState = 2;
+    mockEventSources.delete(this.url);
   }
 }
 
 // Set early so it's available even before beforeEach runs
 (globalThis as unknown as Record<string, unknown>).EventSource = MockEventSource;
 
+/** Helper to get the channel SSE source (URL contains /api/events?channel=) */
+function getChannelSse(): MockEventSource | undefined {
+  for (const [url, src] of mockEventSources) {
+    if (url.startsWith("/api/events?channel=")) return src;
+  }
+  return undefined;
+}
+
+/** Helper to get the global SSE source */
+function getGlobalSse(): MockEventSource | undefined {
+  return mockEventSources.get("/api/global-events");
+}
+
 describe("DashboardPage", () => {
   beforeEach(() => {
     cleanup();
-    lastMockEventSource = null;
+    mockEventSources.clear();
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
@@ -317,12 +331,12 @@ describe("DashboardPage", () => {
       </MemoryRouter>,
     );
 
-    // Wait for initial render and status to be populated from /api/status poll
+    // Wait for channel SSE to connect
     await waitFor(() => {
-      expect(lastMockEventSource).not.toBeNull();
+      expect(getChannelSse()).not.toBeUndefined();
     });
 
-    const src = lastMockEventSource!;
+    const src = getChannelSse()!;
 
     // Dispatch a session_status_change event with status "processing"
     src.onmessage?.({
@@ -340,27 +354,22 @@ describe("DashboardPage", () => {
 
   it("ignores session_status_change SSE event when data.status is missing", async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={["/?channel=ch-001-full-uuid"]}>
         <DashboardPage />
       </MemoryRouter>,
     );
 
     await waitFor(() => {
-      expect(lastMockEventSource).not.toBeNull();
+      expect(getChannelSse()).not.toBeUndefined();
     });
 
-    const src = lastMockEventSource!;
+    const src = getChannelSse()!;
 
-    // First establish a known status via status_update
+    // Establish a known session status via session_status_change with a valid status
     src.onmessage?.({
       data: JSON.stringify({
-        type: "status_update",
-        data: {
-          gatewayVersion: "0.68.1",
-          agentVersion: "1.2.0",
-          sessionStatus: "idle",
-          compatibility: "compatible",
-        },
+        type: "session_status_change",
+        data: { sessionId: "sess-001", status: "idle" },
       }),
     });
 
@@ -392,10 +401,10 @@ describe("DashboardPage", () => {
     );
 
     await waitFor(() => {
-      expect(lastMockEventSource).not.toBeNull();
+      expect(getChannelSse()).not.toBeUndefined();
     });
 
-    const src = lastMockEventSource!;
+    const src = getChannelSse()!;
 
     // Dispatch a session_status_change event with both status and derivedStatus
     src.onmessage?.({
@@ -419,10 +428,10 @@ describe("DashboardPage", () => {
     );
 
     await waitFor(() => {
-      expect(lastMockEventSource).not.toBeNull();
+      expect(getChannelSse()).not.toBeUndefined();
     });
 
-    const src = lastMockEventSource!;
+    const src = getChannelSse()!;
 
     // Dispatch without derivedStatus — should fall back to raw status
     src.onmessage?.({
@@ -435,5 +444,77 @@ describe("DashboardPage", () => {
     await waitFor(() => {
       expect(screen.getAllByText(/waiting/).length).toBeGreaterThanOrEqual(1);
     });
+  });
+
+  it("updates agentVersion via agent_status_change on global SSE", async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    // Wait for global SSE to connect
+    await waitFor(() => {
+      expect(getGlobalSse()).not.toBeUndefined();
+    });
+
+    const globalSrc = getGlobalSse()!;
+
+    // Dispatch agent_status_change with a new version
+    globalSrc.onmessage?.({
+      data: JSON.stringify({
+        type: "agent_status_change",
+        version: "0.99.0",
+        running: true,
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/0\.99\.0/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("updates compatibility via agent_compatibility_change on global SSE", async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(getGlobalSse()).not.toBeUndefined();
+    });
+
+    const globalSrc = getGlobalSse()!;
+
+    // Dispatch agent_compatibility_change
+    globalSrc.onmessage?.({
+      data: JSON.stringify({
+        type: "agent_compatibility_change",
+        compatibility: "incompatible",
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/incompatible/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("channel SSE and global SSE are independent (different URLs)", async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(getChannelSse()).not.toBeUndefined();
+      expect(getGlobalSse()).not.toBeUndefined();
+    });
+
+    // Verify they are distinct instances
+    expect(getChannelSse()).not.toBe(getGlobalSse());
+    expect(getChannelSse()!.url).toContain("/api/events?channel=");
+    expect(getGlobalSse()!.url).toBe("/api/global-events");
   });
 });

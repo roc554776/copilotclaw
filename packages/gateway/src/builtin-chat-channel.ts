@@ -89,10 +89,22 @@ export class BuiltinChatChannel implements ChannelProvider {
       return true;
     }
 
-    // SSE events route
+    // SSE global events route (agent status, compatibility, gateway status changes)
+    if (pathname === "/api/global-events" && method === "GET") {
+      this.sseBroadcaster.addGlobalClient(res);
+      return true;
+    }
+
+    // SSE channel events route (channel-scoped: new_message, session_status_change)
+    // channelId is required; requests without channelId return 400.
     if (pathname === "/api/events" && method === "GET") {
-      const channelId = params.get("channel") ?? undefined;
-      this.sseBroadcaster.addClient(res, channelId);
+      const channelId = params.get("channel");
+      if (channelId === null) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "channel query parameter is required" }));
+        return true;
+      }
+      this.sseBroadcaster.addChannelClient(res, channelId);
       return true;
     }
 

@@ -1,8 +1,10 @@
 import type { ServerResponse } from "node:http";
 
-export interface SseClient {
+type SseClientScope = { type: "channel"; channelId: string } | { type: "global" };
+
+interface SseClient {
   res: ServerResponse;
-  channelId: string | undefined;
+  scope: SseClientScope;
 }
 
 /**
@@ -13,7 +15,7 @@ export interface SseClient {
 export class SseBroadcaster {
   private readonly clients = new Set<SseClient>();
 
-  addClient(res: ServerResponse, channelId: string | undefined): void {
+  private initSse(res: ServerResponse): void {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -21,26 +23,62 @@ export class SseBroadcaster {
       "X-Accel-Buffering": "no",
     });
     res.write(":\n\n"); // SSE comment as keepalive
+  }
 
-    const client: SseClient = { res, channelId };
+  addChannelClient(res: ServerResponse, channelId: string): void {
+    this.initSse(res);
+    const client: SseClient = { res, scope: { type: "channel", channelId } };
     this.clients.add(client);
-
     res.on("close", () => { this.clients.delete(client); });
   }
 
-  broadcast(event: { type: string; channelId?: string; data?: unknown }): void {
-    const payload = `data: ${JSON.stringify(event)}\n\n`;
+  addGlobalClient(res: ServerResponse): void {
+    this.initSse(res);
+    const client: SseClient = { res, scope: { type: "global" } };
+    this.clients.add(client);
+    res.on("close", () => { this.clients.delete(client); });
+  }
+
+  /**
+   * @deprecated Use addChannelClient or addGlobalClient instead.
+   * Kept for backward compatibility. Will be removed in a future version.
+   */
+  addClient(res: ServerResponse, channelId: string | undefined): void {
+    if (channelId !== undefined) {
+      this.addChannelClient(res, channelId);
+    } else {
+      this.addGlobalClient(res);
+    }
+  }
+
+  broadcastToChannel(channelId: string, event: { type: string; data?: unknown }): void {
+    const payload = `data: ${JSON.stringify({ ...event, channelId })}\n\n`;
     for (const client of this.clients) {
-      if (event.channelId === undefined || client.channelId === undefined || client.channelId === event.channelId) {
+      if (client.scope.type === "channel" && client.scope.channelId === channelId) {
         client.res.write(payload);
       }
     }
   }
 
-  broadcastAll(event: { type: string; data?: unknown }): void {
+  broadcastGlobal(event: { type: string; data?: unknown; [key: string]: unknown }): void {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of this.clients) {
-      client.res.write(payload);
+      if (client.scope.type === "global") {
+        client.res.write(payload);
+      }
+    }
+  }
+
+  /**
+   * @deprecated Scope-ambiguous broadcast. Use broadcastToChannel or broadcastGlobal instead.
+   * For backward compatibility: if event.channelId is set, delegates to broadcastToChannel.
+   * Otherwise logs a warning and does nothing (global broadcasts must be explicit).
+   */
+  broadcast(event: { type: string; channelId?: string; data?: unknown }): void {
+    if (event.channelId !== undefined) {
+      this.broadcastToChannel(event.channelId, { type: event.type, data: event.data });
+    } else {
+      // No channelId — ambiguous. Silently ignored; callers should use broadcastGlobal explicitly.
     }
   }
 

@@ -297,14 +297,6 @@ export function DashboardPage() {
           if (event.type === "new_message") {
             refreshMessages();
             refreshStatusRef.current();
-          } else if (event.type === "status_update") {
-            const d = event.data;
-            if (d) {
-              setGatewayVersion(String(d["gatewayVersion"] ?? "--"));
-              setAgentVersion(String(d["agentVersion"] ?? "--"));
-              setSessionStatus(String(d["sessionStatus"] ?? "--"));
-              setCompatibility(String(d["compatibility"] ?? ""));
-            }
           } else if (event.type === "session_status_change") {
             const d = event.data;
             if (d && typeof d === "object") {
@@ -347,7 +339,7 @@ export function DashboardPage() {
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [refreshMessages]);
 
-  // Poll status every 5 seconds
+  // One-shot status snapshot on mount (SSE delivers subsequent changes)
   const refreshStatus = useCallback(async () => {
     try {
       const data = await fetchStatus();
@@ -378,7 +370,58 @@ export function DashboardPage() {
   // H-2: keep ref in sync with latest refreshStatus
   refreshStatusRef.current = refreshStatus;
 
-  usePolling(refreshStatus, 5000);
+  // Initial status snapshot (one-shot on mount)
+  useEffect(() => {
+    refreshStatus().catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Global SSE: subscribe to agent/gateway status change events
+  useEffect(() => {
+    let closed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let source: EventSource | null = null;
+
+    function connect() {
+      if (closed) return;
+      source = new EventSource("/api/global-events");
+
+      source.onopen = () => {};
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (!closed) {
+          reconnectTimer = setTimeout(connect, 3000);
+        }
+      };
+      source.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data as string) as {
+            type: string;
+            version?: string;
+            running?: boolean;
+            compatibility?: string;
+          };
+          if (event.type === "agent_status_change") {
+            setAgentVersion(event.version ?? "--");
+          } else if (event.type === "agent_compatibility_change") {
+            setCompatibility(event.compatibility ?? "");
+          }
+        } catch {
+          /* ignore parse errors */
+        }
+      };
+    }
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      source?.close();
+      source = null;
+    };
+  }, []);
 
   // Logs polling when visible
   const refreshLogs = useCallback(async () => {

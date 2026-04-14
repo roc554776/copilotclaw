@@ -17,11 +17,11 @@ afterAll(async () => {
   await handle.close();
 });
 
-function connectSSE(channel: string): { events: Array<{ type: string; data: unknown }>; controller: AbortController; ready: Promise<void> } {
+function connectSSE(path: string): { events: Array<{ type: string; data: unknown }>; controller: AbortController; ready: Promise<void> } {
   const events: Array<{ type: string; data: unknown }> = [];
   const controller = new AbortController();
   const ready = new Promise<void>((resolve, reject) => {
-    fetch(`${baseUrl}/api/events?channel=${channel}`, { signal: controller.signal })
+    fetch(`${baseUrl}${path}`, { signal: controller.signal })
       .then(async (res) => {
         if (res.status !== 200) { reject(new Error(`SSE status ${res.status}`)); return; }
         resolve(); // Connected
@@ -53,14 +53,8 @@ function connectSSE(channel: string): { events: Array<{ type: string; data: unkn
   return { events, controller, ready };
 }
 
-describe("SSE /api/events", () => {
-  it("connects to /api/events endpoint", async () => {
-    const res = await fetch(`${baseUrl}/api/events?channel=${defaultChannelId}`, {
-      signal: AbortSignal.timeout(500),
-    }).catch(() => null);
-    // The request should start with status 200 (SSE keeps connection open)
-    // AbortSignal.timeout will abort it, but we should have gotten headers
-    // Use a different approach: just verify the content-type
+describe("SSE /api/events (channel-scoped)", () => {
+  it("connects to /api/events endpoint with channel param", async () => {
     const controller = new AbortController();
     const resPromise = fetch(`${baseUrl}/api/events?channel=${defaultChannelId}`, { signal: controller.signal });
     // Give it a moment to connect
@@ -74,8 +68,15 @@ describe("SSE /api/events", () => {
     }
   });
 
+  it("returns 400 when channel param is missing", async () => {
+    const res = await fetch(`${baseUrl}/api/events`);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain("channel");
+  });
+
   it("receives new_message event when input is posted", async () => {
-    const sse = connectSSE(defaultChannelId);
+    const sse = connectSSE(`/api/events?channel=${defaultChannelId}`);
     await sse.ready;
     // Small delay to ensure SSE client is fully registered
     await new Promise((r) => { setTimeout(r, 50); });
@@ -96,7 +97,7 @@ describe("SSE /api/events", () => {
   });
 
   it("receives new_message event when agent message is posted", async () => {
-    const sse = connectSSE(defaultChannelId);
+    const sse = connectSSE(`/api/events?channel=${defaultChannelId}`);
     await sse.ready;
     await new Promise((r) => { setTimeout(r, 50); });
 
@@ -117,7 +118,7 @@ describe("SSE /api/events", () => {
     const ch2Res = await fetch(`${baseUrl}/api/channels`, { method: "POST" });
     const ch2 = await ch2Res.json() as { id: string };
 
-    const sse = connectSSE(defaultChannelId);
+    const sse = connectSSE(`/api/events?channel=${defaultChannelId}`);
     await sse.ready;
     await new Promise((r) => { setTimeout(r, 50); });
 
@@ -152,6 +153,173 @@ describe("SSE /api/events", () => {
     await resPromise.catch(() => {});
     await new Promise((r) => { setTimeout(r, 50); });
     expect(freshHandle.sseBroadcaster.clientCount).toBe(0);
+
+    await freshHandle.close();
+  });
+});
+
+describe("SSE /api/global-events (global-scoped)", () => {
+  it("connects to /api/global-events endpoint", async () => {
+    const controller = new AbortController();
+    const resPromise = fetch(`${baseUrl}/api/global-events`, { signal: controller.signal });
+    await new Promise((r) => { setTimeout(r, 50); });
+    controller.abort();
+    try {
+      const res2 = await resPromise;
+      expect(res2.headers.get("content-type")).toBe("text/event-stream");
+    } catch {
+      // Aborted — connection was established
+    }
+  });
+
+  it("global client receives broadcastGlobal events", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+
+    const sse = connectSSE.bind(null, "");
+    // manually build the SSE connection to the fresh server
+    const events: Array<{ type: string; data: unknown }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve, reject) => {
+      fetch(`${freshUrl}/api/global-events`, { signal: controller.signal })
+        .then(async (res) => {
+          if (res.status !== 200) { reject(new Error(`SSE status ${res.status}`)); return; }
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const parsed = JSON.parse(line.slice(6)) as { type: string };
+                    events.push({ type: parsed.type, data: parsed });
+                  } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    // Broadcast global event
+    freshHandle.sseBroadcaster.broadcastGlobal({
+      type: "agent_status_change",
+      version: "1.0.0",
+      running: true,
+    });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    expect(events.find((e) => e.type === "agent_status_change")).toBeTruthy();
+
+    await freshHandle.close();
+    void sse; // suppress unused var warning
+  });
+
+  it("global client does NOT receive channel-scoped broadcastToChannel events", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${freshUrl}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const globalEvents: Array<{ type: string }> = [];
+    const globalController = new AbortController();
+    const globalReady = new Promise<void>((resolve) => {
+      fetch(`${freshUrl}/api/global-events`, { signal: globalController.signal })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try { globalEvents.push(JSON.parse(line.slice(6)) as { type: string }); } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await globalReady;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    // Broadcast to a specific channel — global client should NOT receive
+    freshHandle.sseBroadcaster.broadcastToChannel(chId, { type: "new_message", data: { msg: "hello" } });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    globalController.abort();
+
+    expect(globalEvents).toHaveLength(0);
+
+    await freshHandle.close();
+  });
+
+  it("channel client does NOT receive broadcastGlobal events", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${freshUrl}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const channelEvents: Array<{ type: string }> = [];
+    const channelController = new AbortController();
+    const channelReady = new Promise<void>((resolve) => {
+      fetch(`${freshUrl}/api/events?channel=${chId}`, { signal: channelController.signal })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try { channelEvents.push(JSON.parse(line.slice(6)) as { type: string }); } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await channelReady;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    // Broadcast globally — channel client should NOT receive
+    freshHandle.sseBroadcaster.broadcastGlobal({ type: "agent_status_change", version: "x", running: false });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    channelController.abort();
+
+    expect(channelEvents).toHaveLength(0);
 
     await freshHandle.close();
   });

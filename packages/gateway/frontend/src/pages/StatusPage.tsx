@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchModels,
   fetchOriginalPrompts,
@@ -182,7 +182,51 @@ export function StatusPage() {
     }
   }, []);
 
-  usePolling(refresh, 5000);
+  // Initial status snapshot on mount (SSE delivers subsequent changes)
+  useEffect(() => {
+    refresh().catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Global SSE: update status when agent/compatibility changes
+  useEffect(() => {
+    let closed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let source: EventSource | null = null;
+
+    function connect() {
+      if (closed) return;
+      source = new EventSource("/api/global-events");
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (!closed) {
+          reconnectTimer = setTimeout(connect, 3000);
+        }
+      };
+      source.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data as string) as { type: string };
+          if (event.type === "agent_status_change" || event.type === "agent_compatibility_change") {
+            // Re-fetch full status on agent change events
+            refresh().catch(() => {});
+          }
+        } catch {
+          /* ignore */
+        }
+      };
+    }
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      source?.close();
+      source = null;
+    };
+  }, [refresh]);
+
   usePolling(refreshPeriods, 60000);
 
   const loadingPromptsRef = useRef(new Set<string>());

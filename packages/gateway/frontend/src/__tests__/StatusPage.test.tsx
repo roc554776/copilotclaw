@@ -3,6 +3,18 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StatusPage } from "../pages/StatusPage";
 
+// Mock EventSource — StatusPage uses it for /api/global-events
+class MockEventSource {
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  readyState = 1;
+  constructor(public _url: string) {}
+  close() { this.readyState = 2; }
+}
+
+(globalThis as unknown as Record<string, unknown>).EventSource = MockEventSource;
+
 const mockStatus = {
   gateway: { status: "running", version: "0.30.0", profile: "default" },
   agent: {

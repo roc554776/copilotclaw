@@ -571,12 +571,23 @@ async function main(): Promise<void> {
     saveConfig(fileConfig, getProfileName());
   };
   serverHandle = await startServer({ port, store, agentManager, logBuffer, sessionEventStore, sessionOrchestrator: orchestrator, sessionController, onCronReload, getCronJobStatuses: () => getCronJobStatuses(), saveCronJobs, saveChannelModel });
-  // Wire SSE broadcaster to SessionController for status change broadcasts
+  // Wire SSE broadcaster to SessionController for status change broadcasts (channel-scoped)
   if (serverHandle.sseBroadcaster !== undefined) {
-    sessionController.setSseBroadcast((event) => serverHandle!.sseBroadcaster!.broadcast(event));
+    sessionController.setSseBroadcast((event) => {
+      const broadcaster = serverHandle!.sseBroadcaster!;
+      if (event.channelId !== undefined) {
+        broadcaster.broadcastToChannel(event.channelId, { type: event.type, data: event.data });
+      }
+      // Events without channelId are channel-scoped session events — silently ignore if no channelId
+    });
   }
 
-  // Periodic agent process monitoring
+  // Agent status change detection state (for global SSE push)
+  let lastAgentVersion: string | undefined;
+  let lastAgentCompatibility: string | undefined;
+  let lastAgentRunning = false;
+
+  // Periodic agent process monitoring + global SSE change detection
   let consecutiveFailures = 0;
   const monitor = setInterval(async () => {
     try {
@@ -591,6 +602,35 @@ async function main(): Promise<void> {
         console.error(`[gateway] agent process ERROR: health check failed after ${consecutiveFailures} attempts:`, err);
       } else {
         console.error(`[gateway] agent ensure failed (attempt ${consecutiveFailures}/${AGENT_MONITOR_ERROR_THRESHOLD}):`, err);
+      }
+    }
+
+    // Detect agent status changes and push to global SSE clients
+    if (serverHandle?.sseBroadcaster !== undefined) {
+      try {
+        const status = await agentManager.getStatus().catch(() => null);
+        const running = status !== null;
+        const version = status?.version;
+        const compatibility = await agentManager.checkCompatibility().catch(() => "unavailable" as const);
+
+        if (version !== lastAgentVersion || running !== lastAgentRunning) {
+          serverHandle.sseBroadcaster.broadcastGlobal({
+            type: "agent_status_change",
+            version,
+            running,
+          });
+          lastAgentVersion = version;
+          lastAgentRunning = running;
+        }
+        if (compatibility !== lastAgentCompatibility) {
+          serverHandle.sseBroadcaster.broadcastGlobal({
+            type: "agent_compatibility_change",
+            compatibility,
+          });
+          lastAgentCompatibility = compatibility;
+        }
+      } catch {
+        // Ignore — agent status check errors are non-fatal
       }
     }
   }, AGENT_MONITOR_INTERVAL_MS);
