@@ -25,7 +25,7 @@
 - Dashboard ステータスバー（gateway status、agent version、session 状態の表示）
 - 古い agent の強制停止・再起動オプション（`gateway start --force-agent-restart`）
 - Agent session の意図しない停止時の channel 通知と "stopped" status
-- Dashboard リアルタイム更新（SSE によるプッシュ型通信）
+- Dashboard リアルタイム更新（SSE によるプッシュ型通信）— **部分実現**: 新着メッセージのみ SSE 配信。セッションステータス・gateway/agent ステータス・ログ等の SSE 化は未実現（`docs/proposals/state-management-architecture.md` 参照）
 - Dashboard ステータス詳細モーダル（クリックで gateway/agent 詳細表示）
 - Dashboard Processing インジケータ（processing 中にアニメーション付き表示）
 - Workspace 機能（`~/.copilotclaw/` 以下の設定・データディレクトリ）
@@ -171,7 +171,7 @@
 - chat 入力の UX 改善（Alt/Cmd+Enter のみ送信、textarea 高さ自動調整 40vh 上限、下書き保存 debounce 1s + チャンネル切替復元）（v0.59.0）
 - 下書き保存のゾンビ復活バグ修正（チャンネル切替時・unmount 時に pending の draft save を flush するように修正。テキストを空にして 1 秒以内にチャンネルを切り替えた場合、空の状態が保存されず古い下書きが復活する問題を修正）（v0.61.1）
 
-- end turn run の物理セッション非 archive（v0.60.0）— ただし disconnect ではなく stopPhysicalSession を使用しており、正しい end turn run にならない（未実現: disconnect 方式への修正が必要）
+- end turn run の物理セッション非 archive（v0.60.0 で部分実現、v0.68.0 で完成）— v0.60.0 時点では stopPhysicalSession を使用しており disconnect ではなかった。v0.68.0 で `session.disconnect()` 方式に修正し、physical session id を保持して次回 resume するようになった（v0.68.0 エントリ参照）
 
 - System Status UI 改善（モーダルと /status の内容統一: Gateway→Agent→Config→Quota→Models→Original Prompts→Token Consumption→Sessions。セッション/Original Prompts のアコーディオン折り畳み。Open in new tab リンク修正）（v0.60.0）
 
@@ -195,14 +195,37 @@
 - CopilotClient シングルトン化（agent 側 — セッションごとのクライアント作成を廃止、process 全体で 1 つ）（v0.68.0）
 - agent 内部で copilotSessionId → physicalSessionId にリネーム（v0.68.0）
 - session.setModel を session.send 前に呼ぶことでモデル切り替えを実現（v0.68.0）
+- end turn run の disconnect 方式 — session.disconnect() で切断（クライアントは止めない）。physical session id を保持して次回 resume（v0.68.0）
 
 - Orchestrator skill フレームワーク（`/orchestrator` スラッシュコマンド、worker subagent の呼び出し、レビューループ付きデフォルト workflow）（v未定 — feat/stability ブランチで実装中、バージョン番号は main マージ時に確定）（skill ファイル作成済み。実動作は未検証）
 
 **未実現:**
-- gateway 側の copilotSessionId → physicalSessionId 統一（DB スキーマ migration 含む）
-- end turn run の disconnect 方式 — session.disconnect() で切断（クライアントは止めない）。physical session id 保持して次回 resume。現状は stopPhysicalSession を呼んでいる
-- メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序
-- gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する。ACK プロトコルの導入が必要）
+- SSE エンドポイントの分離（channel-scoped / global-scoped）:
+  - `/api/channels/{channelId}/events` — channel-scoped SSE（チャンネル別メッセージ・ステータス・タイムラインイベント）
+  - `/api/global-events` — global SSE（gateway/agent バージョン、compatibility、channel list、config 等）
+  - `session_status_change` を frontend が受信・処理する実装（現状は broadcast されているが frontend が無視している — バグ）
+  - `status_update` SSE event の廃止（frontend に handler があるが backend に送信側が存在しない dead sink。新設計では `gateway_status_change` / `agent_status_change` 等に置き換える）
+  - `broadcastAll()` の削除（現状呼び出し箇所なし — dead code）
+  - ポーリング置換（全置換対象の網羅リストと置換先 SSE の設計判断は `docs/proposals/state-management-architecture.md` の「ポーリング置換対象（網羅リスト）」節を参照）:
+    - `DashboardPage`: `GET /api/status` 5s ポーリング → global SSE（`gateway_status_change` / `agent_status_change` / `agent_compatibility_change` / `channel_status_change`）
+    - `DashboardPage`: `GET /api/logs` 3s ポーリング（Logs パネル表示中のみ）→ global SSE（新規 `log_appended` event）
+    - `StatusPage`: `GET /api/status` 5s ポーリング → global SSE（`DashboardPage` と同一）
+    - `StatusPage`: `GET /api/quota` 5s ポーリング → global SSE（新規 `quota_update` event）
+    - `StatusPage`: `GET /api/models` 5s ポーリング → global SSE（新規 `models_update` event）
+    - `StatusPage`: `GET /api/token-usage` 5s / 60s ポーリング → global SSE（新規 `token_usage_update` event）
+    - `SessionEventsPage`: `GET /api/sessions/{sessionId}/events` 2s ポーリング → session-scoped SSE（新規 `/api/sessions/{sessionId}/events/stream` エンドポイントを追加する方針を暫定とする）
+- 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — gateway 側・agent 側・IPC/cross-cutting の全 subsystem を対象に、world state / process state 分離・subsystem ごとの reducer・event bus による subsystem 間通信を導入する。下記の個別未実現項目はすべて本 proposal の実装に包含される
+  - gateway 側の copilotSessionId → physicalSessionId 統一（DB スキーマ migration 含む）— 本 proposal の `StartPhysicalSession` event 型設計で型レベルから解消
+  - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序 — 本 proposal の PendingQueue subsystem ACK プロトコルと SendQueue subsystem で解消
+  - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する） — 本 proposal の SendQueue subsystem の `MessageAcknowledged` event で解消
+  - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— 本 proposal の「Channel subsystem の拡張」節（2026-04-14 追加）で設計済み
+  - `copilotclaw_intent` tool の追加 — agent の意図を伝える専用 tool。他ツールと同時呼び出し必須のシステムプロンプト制約を持つ。channel-operator と worker の両方に付与（2026-04-14 追加）
+  - channel operator / worker への明示的なツール割り当て — SDK の builtin tool list API を使い `tools: null` を廃止して明示指定に変更（2026-04-14 追加）
+  - sub-subagent 完了通知抑制の修正 — outer wrapper 経由のフィルタ（`msg["parentId"]`）が未機能。agent 側 session キャッチオールが `parentId` を outer wrapper に含めないため gateway の `msg["parentId"]` が常に undefined（2026-04-14 再確認）
+  - メッセージ sender の詳細識別 — `Message.sender` を discriminated union に拡張し agentId / agentDisplayName / agentRole を付与（2026-04-14 追加）
+  - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
+  - イベント抽象化 — `copilotclaw_wait` 返却値の多型化（`WaitToolPayload` を複数イベント型の union に変更）、メッセージ以外のイベント型（subagent-completed / subagent-failed / keepalive）の追加（`docs/proposals/state-management-architecture.md` の「Gateway: AbstractSessionEvent の拡張 — イベント抽象化」節参照）
+  - エージェントアイコン・プロフィールモーダル・collapse 表示 — タイムライン UI における sender の視覚化（アイコン + 表示名 + プロフィールモーダル、subagent メッセージの collapse 表示）（`docs/proposals/state-management-architecture.md` の「メッセージ sender 識別の設計」節参照）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
