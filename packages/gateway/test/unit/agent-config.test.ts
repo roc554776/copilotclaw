@@ -20,11 +20,18 @@ describe("getAgentPromptConfig — customAgents copilotclawTools", () => {
     expect(worker!.copilotclawTools).not.toContain("copilotclaw_wait");
   });
 
-  it("no agent includes copilotclaw_intent (not yet implemented)", () => {
+  it("channel-operator includes copilotclaw_intent", () => {
     const config = getAgentPromptConfig();
-    for (const agent of config.customAgents) {
-      expect(agent.copilotclawTools).not.toContain("copilotclaw_intent");
-    }
+    const operator = config.customAgents.find((a) => a.name === "channel-operator");
+    expect(operator).toBeDefined();
+    expect(operator!.copilotclawTools).toContain("copilotclaw_intent");
+  });
+
+  it("worker includes copilotclaw_intent", () => {
+    const config = getAgentPromptConfig();
+    const worker = config.customAgents.find((a) => a.name === "worker");
+    expect(worker).toBeDefined();
+    expect(worker!.copilotclawTools).toContain("copilotclaw_intent");
   });
 
   it("all customAgents have a copilotclawTools array", () => {
@@ -32,5 +39,16 @@ describe("getAgentPromptConfig — customAgents copilotclawTools", () => {
     for (const agent of config.customAgents) {
       expect(Array.isArray(agent.copilotclawTools)).toBe(true);
     }
+  });
+
+  it("toolDefinitions includes copilotclaw_intent definition", () => {
+    const config = getAgentPromptConfig();
+    const intentDef = config.toolDefinitions?.find((t) => t.name === "copilotclaw_intent");
+    expect(intentDef).toBeDefined();
+    expect(intentDef!.description).toContain("intent");
+    const props = (intentDef!.parameters as { properties: Record<string, unknown> }).properties;
+    expect(props["intent"]).toBeDefined();
+    const required = (intentDef!.parameters as { required: string[] }).required;
+    expect(required).toContain("intent");
   });
 });

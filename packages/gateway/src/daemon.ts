@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getAgentPromptConfig, resolveModel } from "./agent-config.js";
 import { AgentManager } from "./agent-manager.js";
 import { type CronJobConfig, getProfileName, getStateDir, loadConfig, loadFileConfig, resolvePort, saveConfig } from "./config.js";
+import { intentsStore } from "./intents-store.js";
 import { LogBuffer } from "./log-buffer.js";
 import { initOtel, shutdownOtel } from "./otel.js";
 import { initMetrics } from "./otel-metrics.js";
@@ -123,6 +124,18 @@ async function main(): Promise<void> {
           const limit = (request.args["limit"] as number) ?? 5;
           const messages = store.listMessages(channelId, limit);
           return { messages };
+        }
+        case "copilotclaw_intent": {
+          const args = (request.args ?? {}) as Record<string, unknown>;
+          const intent = typeof args["intent"] === "string" ? args["intent"] : "";
+          if (intent.length > 0) {
+            intentsStore.recordIntent({
+              sessionId: request.sessionId,
+              intent,
+              timestamp: new Date().toISOString(),
+            });
+          }
+          return { acknowledged: true };
         }
         case "copilotclaw_wait": {
           // Swallowed-message guard

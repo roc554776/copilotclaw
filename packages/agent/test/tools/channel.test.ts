@@ -10,6 +10,7 @@ vi.mock("../../src/ipc-server.js", async () => {
       if (msg.type === "tool_call") {
         if (msg.toolName === "copilotclaw_send_message") return { status: "sent" };
         if (msg.toolName === "copilotclaw_list_messages") return { messages: [] };
+        if (msg.toolName === "copilotclaw_intent") return { acknowledged: true };
         // copilotclaw_wait: return null → agent falls through to keepalive
         if (msg.toolName === "copilotclaw_wait") return null;
       }
@@ -37,6 +38,11 @@ const DEFAULT_TOOL_DEFS = [
     description: "List messages",
     parameters: { type: "object", properties: { limit: { type: "number" } }, required: [] },
   },
+  {
+    name: "copilotclaw_intent",
+    description: "Declare the agent's current intent",
+    parameters: { type: "object", properties: { intent: { type: "string" } }, required: ["intent"] },
+  },
 ];
 
 /** Helper: create channel tools and extract by name for test convenience. */
@@ -51,6 +57,7 @@ function makeTools(deps: Partial<ChannelToolDeps> & { sessionId: string }) {
     wait: findTool("copilotclaw_wait")!,
     sendMessage: findTool("copilotclaw_send_message"),
     listMessages: findTool("copilotclaw_list_messages"),
+    intent: findTool("copilotclaw_intent"),
     tools,
   };
 }
@@ -85,6 +92,7 @@ beforeEach(() => {
     if (msg.type === "tool_call") {
       if (msg.toolName === "copilotclaw_send_message") return { status: "sent" };
       if (msg.toolName === "copilotclaw_list_messages") return { messages: [] };
+      if (msg.toolName === "copilotclaw_intent") return { acknowledged: true };
       if (msg.toolName === "copilotclaw_wait") return null;
     }
     return null;
@@ -467,5 +475,48 @@ describe("copilotclaw_list_messages", () => {
       sessionId: "ch-abc",
     });
     expect(listMessages!.name).toBe("copilotclaw_list_messages");
+  });
+});
+
+describe("copilotclaw_intent", () => {
+  it("is registered as a dynamic tool when present in toolDefinitions", () => {
+    const { intent } = makeTools({ sessionId: "ch-abc" });
+    expect(intent).toBeDefined();
+    expect(intent!.name).toBe("copilotclaw_intent");
+  });
+
+  it("dispatches to gateway via RPC with correct payload", async () => {
+    const { intent } = makeTools({ sessionId: "ch-abc" });
+
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await intent!.handler({ intent: "about to list messages" }, invocation) as { acknowledged: boolean };
+
+    expect(result.acknowledged).toBe(true);
+    expect(requestFromGateway).toHaveBeenCalledWith({
+      type: "tool_call",
+      toolName: "copilotclaw_intent",
+      sessionId: "ch-abc",
+      args: { intent: "about to list messages" },
+    });
+  });
+
+  it("returns { acknowledged: true } from gateway response", async () => {
+    (requestFromGateway as ReturnType<typeof vi.fn>).mockResolvedValue({ acknowledged: true });
+
+    const { intent } = makeTools({ sessionId: "ch-abc" });
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const result = await intent!.handler({ intent: "doing something" }, invocation) as { acknowledged: boolean };
+    expect(result.acknowledged).toBe(true);
+  });
+
+  it("returns graceful error on gateway disconnect", async () => {
+    mockGatewayDown();
+
+    const { intent } = makeTools({ sessionId: "ch-abc" });
+    const invocation = { sessionId: "s", toolCallId: "t", toolName: "", arguments: {} };
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await intent!.handler({ intent: "doing something" }, invocation) as { error: string };
+    expect(result.error).toContain("Gateway is not connected");
+    errSpy.mockRestore();
   });
 });

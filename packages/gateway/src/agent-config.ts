@@ -150,6 +150,10 @@ const CHANNEL_OPERATOR_PROMPT =
   "Only use the 'worker' agent — never use any other agent type (explore, etc.). " +
   "After dispatching a subagent, call copilotclaw_wait immediately to wait for its completion.\n" +
   "\n" +
+  "## Tool usage rules\n" +
+  "copilotclaw_intent は他のツール呼び出しと同時にのみ使用する。単独で呼び出してはならない。" +
+  "copilotclaw_intent を通じて、これから何をするのかを宣言しながら、実際の作業のツール呼び出しと並列に実行する。\n" +
+  "\n" +
   "╔══════════════════════════════════════════════════════════════════╗\n" +
   "║ CRITICAL — DEADLOCK PREVENTION (REPEATED)                      ║\n" +
   "║                                                                ║\n" +
@@ -157,6 +161,11 @@ const CHANNEL_OPERATOR_PROMPT =
   "║ do. NEVER stop, idle, or end your turn without first calling   ║\n" +
   "║ copilotclaw_wait.                                              ║\n" +
   "╚══════════════════════════════════════════════════════════════════╝";
+
+const WORKER_PROMPT =
+  "## Tool usage rules\n" +
+  "copilotclaw_intent は他のツール呼び出しと同時にのみ使用する。単独で呼び出してはならない。" +
+  "copilotclaw_intent を通じて、これから何をするのかを宣言しながら、実際の作業のツール呼び出しと並列に実行する。";
 
 const SYSTEM_REMINDER =
   `<system>\n` +
@@ -181,7 +190,7 @@ export function getAgentPromptConfig(): AgentPromptConfig {
           "This agent is EXCLUSIVELY the top-level operator that manages the channel lifecycle.",
         prompt: CHANNEL_OPERATOR_PROMPT,
         infer: false,
-        copilotclawTools: ["copilotclaw_wait", "copilotclaw_list_messages", "copilotclaw_send_message"],
+        copilotclawTools: ["copilotclaw_wait", "copilotclaw_list_messages", "copilotclaw_send_message", "copilotclaw_intent"],
       },
       {
         name: "worker",
@@ -190,9 +199,9 @@ export function getAgentPromptConfig(): AgentPromptConfig {
           "The ONLY agent to dispatch as a subagent. " +
           "When you need to delegate work to a subagent, you MUST use this agent — there is no other option. " +
           "This is the sole subagent available for task delegation. Always use 'worker' for any subagent dispatch.",
-        prompt: "",
+        prompt: WORKER_PROMPT,
         infer: true,
-        copilotclawTools: ["copilotclaw_list_messages", "copilotclaw_send_message"],
+        copilotclawTools: ["copilotclaw_list_messages", "copilotclaw_send_message", "copilotclaw_intent"],
       },
     ],
     primaryAgentName: "channel-operator",
@@ -232,6 +241,20 @@ export function getAgentPromptConfig(): AgentPromptConfig {
             limit: { type: "number", description: "Maximum number of messages to return (default: 5)" },
           },
           required: [],
+        },
+      },
+      {
+        name: "copilotclaw_intent",
+        description: "Declare the agent's current intent (what you are about to do). Must be called together with another tool call, not on its own. The gateway records the intent for UI display.",
+        parameters: {
+          type: "object",
+          properties: {
+            intent: {
+              type: "string",
+              description: "Brief natural-language description of what you intend to do next",
+            },
+          },
+          required: ["intent"],
         },
       },
     ],
