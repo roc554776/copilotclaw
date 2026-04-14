@@ -293,7 +293,7 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (698 total: 687 vitest + 11 Playwright)
+### Test Suites (700 total: 689 vitest + 11 Playwright)
 
 ```
 Gateway vitest (537 tests)   — unit + E2E tests with mock agent (includes config, config-cli, config-migration, doctor, ipc-paths, setup, workspace, structured-logger, session-event-store, store, session-orchestrator, agent-manager, daemon-session-event-handler, daemon-lifecycle-handler tests); E2E tests use SessionEventStore for /api/token-usage endpoint coverage; session-orchestrator tests cover start/suspend/idle/stop/revive, SQLite persistence, schema migrations (v0→v1→v2→v3), legacy migration, backoff, maxAge, idleAllActive; agent-config.test.ts added (4 tests) covering CustomAgentDef.copilotclawTools field and tool assignment; channel-status-selector.test.ts (9 tests) covering DerivedChannelStatus derivation for all abstract session states; session-controller.test.ts extended (+4 tests) verifying derivedStatus field in broadcastStatusChange SSE payloads
