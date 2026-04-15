@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import type { LogEntry } from "./log-buffer.js";
 
 type SseClientScope = { type: "channel"; channelId: string } | { type: "global" };
 
@@ -6,6 +7,18 @@ interface SseClient {
   res: ServerResponse;
   scope: SseClientScope;
 }
+
+/**
+ * Global SSE events broadcast to clients subscribed to `/api/global-events`.
+ * These are system-wide events not tied to any specific channel.
+ *
+ * See `docs/proposals/state-management-architecture.md` "GlobalSseEvent" for the design contract.
+ */
+export type GlobalSseEvent =
+  | { type: "gateway_status_change"; version: string; running: boolean }
+  | { type: "agent_status_change"; version: string | undefined; running: boolean }
+  | { type: "agent_compatibility_change"; compatibility: "compatible" | "incompatible" | "unavailable" }
+  | { type: "log_appended"; entries: LogEntry[] };
 
 /**
  * Server-Sent Events broadcaster. Uses SSE instead of WebSocket
@@ -60,7 +73,7 @@ export class SseBroadcaster {
     }
   }
 
-  broadcastGlobal(event: { type: string; data?: unknown; [key: string]: unknown }): void {
+  broadcastGlobal(event: GlobalSseEvent): void {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of this.clients) {
       if (client.scope.type === "global") {
