@@ -8,10 +8,19 @@ export interface Channel {
   draft?: string | null;
 }
 
+export type AgentRole = "channel-operator" | "worker" | "subagent" | "unknown";
+
+export interface MessageSenderMeta {
+  agentId: string;
+  agentDisplayName: string;
+  agentRole: AgentRole;
+}
+
 export interface Message {
   id: string;
   channelId: string;
   sender: "user" | "agent" | "cron" | "system";
+  senderMeta?: MessageSenderMeta;
   message: string;
   createdAt: string;
 }

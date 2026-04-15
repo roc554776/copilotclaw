@@ -226,11 +226,12 @@
   - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する） — 本 proposal の SendQueue subsystem の `MessageAcknowledged` event で解消
   - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— v0.71.0 で部分実現。`selectDerivedChannelStatus` 純関数（`channel-status-selector.ts`）・`broadcastStatusChange` での selector 呼び出しと SSE event への `derivedStatus` 付与・DashboardPage での `derivedStatus` 優先表示を実装済み。`client-not-started` 状態（CopilotClient 観測経路）は未実現のまま（selector は常に `clientStarted = true` を仮定）。`waitingOnWaitTool` フィールドおよび `hasHadPhysicalSession` フィールドは未実装（`physicalSessionHistory.length` で代替）のため proposal として残存
   - `copilotclaw_intent` API / UI / SQLite 永続化 — tool 定義・gateway handler・システムプロンプト制約は v0.70.0 で部分実現済み。`GET /api/channels/:channelId/intents/:agentId` エンドポイント・プロフィールモーダル UI 表示・intents テーブル SQLite 永続化が未実現（2026-04-14 追加）
-  - sub-subagent 完了通知抑制の修正 — outer wrapper 経由のフィルタ（`msg["parentId"]`）が未機能。agent 側 session キャッチオールが `parentId` を outer wrapper に含めないため gateway の `msg["parentId"]` が常に undefined（2026-04-14 再確認）
-  - メッセージ sender の詳細識別 — `Message.sender` を discriminated union に拡張し agentId / agentDisplayName / agentRole を付与（2026-04-14 追加）
+  - sub-subagent 完了通知抑制の修正 — outer wrapper 経由のフィルタ（`msg["parentId"]`）が未機能。agent 側 session キャッチオールが `parentId` を outer wrapper に含めないため gateway の `msg["parentId"]` が常に undefined（2026-04-14 再確認）。本 scope の parentToolCallId（assistant.message の sender 識別機構）とは別問題（v0.78.0 scope 外）
   - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
   - イベント抽象化 — `copilotclaw_wait` 返却値の多型化（`WaitToolPayload` を複数イベント型の union に変更）、メッセージ以外のイベント型（subagent-completed / subagent-failed / keepalive）の追加（`docs/proposals/state-management-architecture.md` の「Gateway: AbstractSessionEvent の拡張 — イベント抽象化」節参照）
-  - エージェントアイコン・プロフィールモーダル・collapse 表示 — タイムライン UI における sender の視覚化（アイコン + 表示名 + プロフィールモーダル、subagent メッセージの collapse 表示）（`docs/proposals/state-management-architecture.md` の「メッセージ sender 識別の設計」節参照）
+
+- メッセージ sender の詳細識別 — `Message.senderMeta` フィールド（agentId / agentDisplayName / agentRole）を v0.78.0 で追加。DB migration v4→v5、gateway sender 決定ロジック（channel-operator / subagent 自動判別）、frontend Avatar + ProfileModal + subagent collapse UI を実現済み（v0.78.0）
+- エージェントアイコン・プロフィールモーダル・collapse 表示 — v0.78.0 で部分実現（channel-operator / subagent の 2 種のみ自動判別。Intent timeline は ProfileModal に placeholder タブのみ）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）

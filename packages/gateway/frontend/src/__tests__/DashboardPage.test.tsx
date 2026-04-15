@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -715,5 +715,139 @@ describe("DashboardPage", () => {
 
     // No new /api/logs calls should have been triggered by timer advance
     expect(logCallsAfter).toBe(logCallsBefore);
+  });
+
+  it("renders agent message avatar alongside message text", async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello agent").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Agent avatar should be present
+    const agentAvatars = screen.getAllByTestId("avatar-agent");
+    expect(agentAvatars.length).toBeGreaterThanOrEqual(1);
+
+    // User avatar should be present
+    const userAvatars = screen.getAllByTestId("avatar-user");
+    expect(userAvatars.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("agent avatar click opens ProfileModal when senderMeta present", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const messagesWithMeta = [
+      {
+        id: "msg-agent-meta",
+        channelId: "ch-001-full-uuid",
+        sender: "agent",
+        senderMeta: { agentId: "channel-operator", agentDisplayName: "Channel Operator", agentRole: "channel-operator" },
+        message: "Hello human",
+        createdAt: "2026-03-28T10:01:00Z",
+      },
+    ];
+    fetchMock.mockImplementation(async (url) => {
+      const urlStr = typeof url === "string" ? url : (url as Request).url;
+      if (urlStr.includes("/api/channels") && !urlStr.includes("/messages")) {
+        return { ok: true, json: () => Promise.resolve(mockChannels) } as Response;
+      }
+      if (urlStr.includes("/messages")) {
+        return { ok: true, json: () => Promise.resolve(messagesWithMeta) } as Response;
+      }
+      if (urlStr.includes("/api/status")) {
+        return { ok: true, json: () => Promise.resolve(mockStatus) } as Response;
+      }
+      if (urlStr.includes("/api/logs")) {
+        return { ok: true, json: () => Promise.resolve([]) } as Response;
+      }
+      return { ok: false, json: () => Promise.resolve({}) } as Response;
+    });
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("avatar-agent").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Click agent avatar — ProfileModal should open
+    const agentAvatar = screen.getAllByTestId("avatar-agent")[0]!;
+    fireEvent.click(agentAvatar);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("profile-modal")).toBeDefined();
+    });
+
+    expect(screen.getByTestId("profile-modal-display-name").textContent).toBe("Channel Operator");
+  });
+
+  it("subagent messages are collapsed into a details group", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const subagentMessages = [
+      {
+        id: "msg-sub-1",
+        channelId: "ch-001-full-uuid",
+        sender: "agent",
+        senderMeta: { agentId: "worker", agentDisplayName: "Worker", agentRole: "subagent" },
+        message: "Subtask result 1",
+        createdAt: "2026-03-28T10:01:00Z",
+      },
+      {
+        id: "msg-sub-2",
+        channelId: "ch-001-full-uuid",
+        sender: "agent",
+        senderMeta: { agentId: "worker", agentDisplayName: "Worker", agentRole: "subagent" },
+        message: "Subtask result 2",
+        createdAt: "2026-03-28T10:01:01Z",
+      },
+      {
+        id: "msg-user",
+        channelId: "ch-001-full-uuid",
+        sender: "user",
+        message: "User message",
+        createdAt: "2026-03-28T10:00:00Z",
+      },
+    ];
+
+    fetchMock.mockImplementation(async (url) => {
+      const urlStr = typeof url === "string" ? url : (url as Request).url;
+      if (urlStr.includes("/api/channels") && !urlStr.includes("/messages")) {
+        return { ok: true, json: () => Promise.resolve(mockChannels) } as Response;
+      }
+      if (urlStr.includes("/messages")) {
+        return { ok: true, json: () => Promise.resolve(subagentMessages) } as Response;
+      }
+      if (urlStr.includes("/api/status")) {
+        return { ok: true, json: () => Promise.resolve(mockStatus) } as Response;
+      }
+      if (urlStr.includes("/api/logs")) {
+        return { ok: true, json: () => Promise.resolve([]) } as Response;
+      }
+      return { ok: false, json: () => Promise.resolve({}) } as Response;
+    });
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("subagent-collapse-group").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Summary should mention count
+    const summary = screen.getByTestId("subagent-collapse-summary");
+    expect(summary.textContent).toContain("2 messages");
+
+    // Content is inside details (not expanded by default)
+    const group = screen.getByTestId("subagent-collapse-group");
+    expect(group.tagName.toLowerCase()).toBe("details");
   });
 });

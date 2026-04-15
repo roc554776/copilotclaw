@@ -25,6 +25,7 @@ import {
   type CronJobStatus,
   type LogEntry,
   type Message,
+  type MessageSenderMeta,
   type ModelEntry,
   type ModelsResponse,
   type OriginalPrompt,
@@ -32,6 +33,8 @@ import {
   type StatusResponse,
   type TokenUsageEntry,
 } from "../api";
+import { MessageAvatar } from "../components/MessageAvatar";
+import { ProfileModal } from "../components/ProfileModal";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import { elapsed, SESSION_ID_SHORT, SDK_SESSION_ID_SHORT } from "../utils";
 
@@ -50,6 +53,143 @@ const modalRowStyle: React.CSSProperties = {
 const modalLabelStyle: React.CSSProperties = { color: "#8b949e" };
 
 const INITIAL_MESSAGE_LIMIT = 50;
+
+/** Render a single message bubble with avatar. */
+function renderSingleMessage(msg: Message, onAgentClick: (meta: MessageSenderMeta) => void): React.ReactNode {
+  const isUser = msg.sender === "user";
+  const senderLabel =
+    msg.sender === "user" ? "You"
+    : msg.sender === "cron" ? "Cron"
+    : msg.sender === "system" ? "System"
+    : (msg.senderMeta?.agentDisplayName ?? "Agent");
+
+  return (
+    <div
+      key={msg.id}
+      style={{
+        display: "flex",
+        flexDirection: isUser ? "row-reverse" : "row",
+        gap: "0.5rem",
+        maxWidth: "min(70%, 90vw)",
+        alignSelf: isUser ? "flex-end" : "flex-start",
+        alignItems: "flex-end",
+      }}
+    >
+      <MessageAvatar
+        sender={msg.sender}
+        senderMeta={msg.senderMeta}
+        onAgentClick={msg.sender === "agent" && msg.senderMeta !== undefined ? onAgentClick : undefined}
+      />
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: isUser ? "flex-end" : "flex-start",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "0.7rem",
+            color: "#8b949e",
+            marginBottom: "0.2rem",
+          }}
+        >
+          {senderLabel}
+        </div>
+        <div
+          style={{
+            padding: "0.6rem 1rem",
+            borderRadius: "1rem",
+            lineHeight: 1.4,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            background: isUser ? "#238636" : "#21262d",
+            color: isUser ? "#fff" : "#c9d1d9",
+            borderBottomRightRadius: isUser ? "0.25rem" : undefined,
+            borderBottomLeftRadius: !isUser ? "0.25rem" : undefined,
+          }}
+        >
+          {msg.message}
+        </div>
+        <div
+          style={{
+            fontSize: "0.7rem",
+            color: "#484f58",
+            marginTop: "0.2rem",
+          }}
+        >
+          {msg.createdAt}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Group messages for rendering: consecutive subagent messages from the same
+ * agentId are collapsed into a <details> element.
+ * channel-operator, user, cron, and system messages are never collapsed.
+ */
+function renderMessages(messages: Message[], onAgentClick: (meta: MessageSenderMeta) => void): React.ReactNode[] {
+  const result: React.ReactNode[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const msg = messages[i]!;
+    const isSubagent = msg.sender === "agent" && msg.senderMeta?.agentRole === "subagent";
+
+    if (isSubagent && msg.senderMeta !== undefined) {
+      // Collect consecutive subagent messages from the same agentId
+      const agentId = msg.senderMeta.agentId;
+      const displayName = msg.senderMeta.agentDisplayName;
+      const group: Message[] = [];
+      while (
+        i < messages.length &&
+        messages[i]!.sender === "agent" &&
+        messages[i]!.senderMeta?.agentRole === "subagent" &&
+        messages[i]!.senderMeta?.agentId === agentId
+      ) {
+        group.push(messages[i]!);
+        i++;
+      }
+      result.push(
+        <details
+          key={`subagent-group-${group[0]!.id}`}
+          data-testid="subagent-collapse-group"
+          style={{ alignSelf: "flex-start", maxWidth: "min(70%, 90vw)", width: "100%" }}
+        >
+          <summary
+            data-testid="subagent-collapse-summary"
+            style={{
+              cursor: "pointer",
+              color: "#8b949e",
+              fontSize: "0.8rem",
+              padding: "0.3rem 0.5rem",
+              borderRadius: "0.4rem",
+              background: "#21262d",
+              listStyle: "none",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+            }}
+          >
+            <span style={{ fontSize: "0.65rem" }}>▶</span>
+            {displayName} — {group.length} message{group.length !== 1 ? "s" : ""}
+          </summary>
+          <div
+            data-testid="subagent-collapse-content"
+            style={{ display: "flex", flexDirection: "column", gap: "0.5rem", paddingTop: "0.4rem", paddingLeft: "0.5rem" }}
+          >
+            {group.map((m) => renderSingleMessage(m, onAgentClick))}
+          </div>
+        </details>,
+      );
+    } else {
+      result.push(renderSingleMessage(msg, onAgentClick));
+      i++;
+    }
+  }
+  return result;
+}
 
 export function DashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -89,6 +229,7 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [profileModal, setProfileModal] = useState<MessageSenderMeta | null>(null);
   const [channelSettingsId, setChannelSettingsId] = useState<string | null>(null);
   const [channelSettingsModels, setChannelSettingsModels] = useState<ModelEntry[]>([]);
   const [channelSettingsCron, setChannelSettingsCron] = useState<CronJobStatus[]>([]);
@@ -751,6 +892,16 @@ export function DashboardPage() {
         ))}
       </div>
 
+      {/* Profile Modal — agent avatar click */}
+      {profileModal !== null && (
+        <ProfileModal
+          agentId={profileModal.agentId}
+          agentDisplayName={profileModal.agentDisplayName}
+          agentRole={profileModal.agentRole}
+          onClose={() => setProfileModal(null)}
+        />
+      )}
+
       {/* Status Modal — L-3: role="dialog" and aria-modal="true" */}
       {showModal && (
         <div
@@ -1047,46 +1198,7 @@ export function DashboardPage() {
             Send a message to start the conversation.
           </div>
         )}
-        {messages.map((msg) => {
-          const isUser = msg.sender === "user";
-          return (
-            <div
-              key={msg.id}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                maxWidth: "min(70%, 90vw)",
-                alignSelf: isUser ? "flex-end" : "flex-start",
-                alignItems: isUser ? "flex-end" : "flex-start",
-              }}
-            >
-              <div
-                style={{
-                  padding: "0.6rem 1rem",
-                  borderRadius: "1rem",
-                  lineHeight: 1.4,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  background: isUser ? "#238636" : "#21262d",
-                  color: isUser ? "#fff" : "#c9d1d9",
-                  borderBottomRightRadius: isUser ? "0.25rem" : undefined,
-                  borderBottomLeftRadius: !isUser ? "0.25rem" : undefined,
-                }}
-              >
-                {msg.message}
-              </div>
-              <div
-                style={{
-                  fontSize: "0.7rem",
-                  color: "#484f58",
-                  marginTop: "0.2rem",
-                }}
-              >
-                {msg.createdAt}
-              </div>
-            </div>
-          );
-        })}
+        {renderMessages(messages, (meta) => setProfileModal(meta))}
         <div
           id="processing-indicator"
           className={isProcessing ? "visible" : ""}

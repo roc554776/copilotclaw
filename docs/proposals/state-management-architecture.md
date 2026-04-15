@@ -1338,66 +1338,55 @@ type AgentToGatewayEvent =
 
 gateway 側は `msg["parentId"]` が非 undefined かつ対応するセッションが直接呼び出しでない場合に通知を抑制する。これにより `data["parentToolCallId"]` と `msg["parentId"]` の 2 経路でフィルタリングが機能する（二重防御）。
 
-### メッセージ sender 識別の設計
+### メッセージ sender 識別の設計（v0.78.0 で部分実現）
 
-**メッセージスキーマの拡張**
+**v0.78.0 実装済みスキーマ**
 
-`Message.sender` を以下のように拡張する。
+`Message.sender` フィールドは後方互換のまま維持し、`Message.senderMeta` フィールドを追加。
 
 ```typescript
-type MessageSender =
-  | { type: "user" }
-  | { type: "agent"; agentId: string; agentDisplayName: string; agentRole: "channel-operator" | "worker" | "unknown" }
-  | { type: "cron"; jobId: string }
-  | { type: "system" }
+// 既存（後方互換維持）
+sender: "user" | "agent" | "cron" | "system"
+
+// v0.78.0 追加（agent メッセージのみ設定）
+senderMeta?: {
+  agentId: string;
+  agentDisplayName: string;
+  agentRole: "channel-operator" | "worker" | "subagent" | "unknown";
+}
 ```
 
-既存の `"user" | "agent" | "cron" | "system"` の 4 値文字列から、sender の詳細情報を持つ discriminated union に変更する。DB スキーマは sender_type カラムと sender_meta（JSON）カラムに分割する（既存 sender カラムからの移行）。
+DB migration v4→v5 で `messages.senderMeta TEXT` カラムを追加（JSON シリアライズ）。既存 agent 行はデフォルト channel-operator meta で backfill 済み。
 
-**sender 特定の実装方針**
+**v0.78.0 sender 特定ロジック**
 
-`copilotclaw_send_message` ハンドラ（`packages/gateway/src/daemon.ts`）が tool call event を受信した時点で、セッションの subagent 追跡情報（`AbstractSessionState.subagents`）を参照し、呼び出し元の agentId を特定する。
+- `assistant.message` session event の `data.parentToolCallId` で channel-operator / subagent を判別（`resolveAgentSenderMeta` in `packages/gateway/src/message-sender.ts`）
+- `copilotclaw_send_message` ツール呼び出しは channel-operator 固定（subagent はこのツールを持つが、識別は parentToolCallId 経由に限定）
+- worker ロールの識別は将来課題（現在は subagent に統一; agentRole = "subagent"）
 
-session event の tool call event（SDK の `tool_call.start` 相当）を `SessionEvent` として gateway に転送し、gateway が `copilotclaw_send_message` の呼び出し元 agent を特定する経路を検討する。セッション event が subagent/sub-subagent のイベントも拾える場合、tool call event から sender を特定できる（要 SDK 動作検証）。
+**未実現（将来課題）**
 
-#### task tool インターフェース分析と agent 命名戦略（未実現・要 SDK 動作検証）
+- worker と sub-worker の区別（SDK の task tool インターフェース分析が前提）
+- sub-subagent の parentToolCallId チェーン追跡
 
-SDK の Task tool（subagent を呼び出すツール）のインターフェースを把握し、かつシステムプロンプトを工夫することで、agent ごとに異なる名前を割り当てる設計が必要である。現時点では SDK の動作検証が完了していないため、以下は候補アプローチの整理と暫定設計方針にとどまる。
+#### task tool インターフェース分析と agent 命名戦略（将来課題）
 
-**調査対象（SDK 動作検証が必要な点）**
+SDK の Task tool（subagent を呼び出すツール）のインターフェースを把握し、かつシステムプロンプトを工夫することで、agent ごとに異なる名前を割り当てる設計が必要である。v0.78.0 では `assistant.message` の `parentToolCallId` + `orchestrator.subagentSessions` による自動識別で channel-operator / subagent の 2 種を区別するに留まる。
 
-- SDK の Task tool がサブエージェント呼び出し時にどのような引数を受け取るか
-- `subagent_type` や agent name を指定する手段が Task tool の引数として存在するか
-- サブエージェントに異なる display name を割り当てるインターフェースの存在（SDK が API として提供しているか）
-- サブエージェント内部から自分の identity（自分がどの名前・役割で起動されたか）を参照する API の存在
+**候補となる設計アプローチ（将来）**
 
-**候補となる設計アプローチ**
+- **sdk-tool-arg**: Task tool の引数として `agent_name` / `display_name` を渡す設計
+- **session-event-tracking**: session event の tool call event から subagent の identity を特定する設計（v0.78.0 で部分実現）
+- **self-declared-naming**: システムプロンプトで agent に自身の名前を認識させる設計
 
-- **sdk-tool-arg**: Task tool の引数として `agent_name` / `display_name` を渡す設計 — SDK が API として提供している場合に採用できる。ゲートウェイ側での自動識別が可能で、agent の協力を必要としない
-- **self-declared-naming**: システムプロンプトで agent に自身の名前を認識させ、`copilotclaw_send_message` / `copilotclaw_intent` 呼び出し時に名前を明示的に渡させる設計 — SDK の API に依存しないが、agent がシステムプロンプトの指示に従うことに依存する
-- **session-event-tracking**: session event の tool call event から、サブエージェントがセッション内でどの `agent-type` として起動されたかを特定する設計 — 自動化でき agent の協力が不要だが、SDK が subagent の session event を適切に公開している必要がある
-- **parent-assigned-id**: 親エージェント側がサブエージェント起動時に ID を割り当て、その対応表を gateway に事前送信する設計 — sdk-tool-arg / self-declared-naming / session-event-tracking のいずれも不十分な場合のフォールバック
+### UI 設計方針（v0.78.0 で部分実現）
 
-**決定基準**
+**タイムライン UI の統一ストリーム設計（将来課題）**
 
-- SDK 動作検証の結果により sdk-tool-arg が可能であれば最優先
-- sdk-tool-arg が不可能な場合、session-event-tracking が次善（自動化でき、agent の協力不要）
-- session-event-tracking が不可能な場合、self-declared-naming を採用（ただし agent がシステムプロンプトの指示に従うことに依存）
-- parent-assigned-id は sdk-tool-arg / self-declared-naming / session-event-tracking のいずれも不十分な場合のフォールバック
-
-**暫定設計方針（SDK 検証前）**
-
-現時点では session-event-tracking を本命として設計を進める。`SessionEvent` に含まれる tool call event から subagent の identity を特定する試みを行い、SDK 動作検証の結果によって上記決定基準に基づき最終設計を確定する。SDK 動作検証が本設計全体の blocker であり、検証完了まで実装に着手しない。
-
-### UI 設計方針
-
-本 proposal は frontend の実装詳細には踏み込まないが、以下の設計方針を定める。
-
-**タイムライン UI の統一ストリーム設計**
-
-チャンネルのタイムライン UI を「メッセージ + 非メッセージイベント」の統一ストリームとして扱う。backend API は timeline エントリの型を以下のように拡張する。
+チャンネルのタイムライン UI を「メッセージ + 非メッセージイベント」の統一ストリームとして扱う設計は将来課題のまま。
 
 ```typescript
+// 将来課題
 type TimelineEntry =
   | { entryType: "message"; message: Message }
   | { entryType: "turn-run-started"; sessionId: string; timestamp: string }
@@ -1406,11 +1395,11 @@ type TimelineEntry =
   | { entryType: "subagent-lifecycle"; toolCallId: string; agentName: string; status: "idle" | "completed" | "failed"; timestamp: string }
 ```
 
-**エージェントアイコン・プロフィールモーダル**
+**エージェントアイコン・プロフィールモーダル（v0.78.0 実現済み）**
 
-- 各メッセージにアイコン + 表示名を表示する（sender.type と agentRole で視覚的に区別）
-- agent アイコンをクリックするとプロフィールモーダルが開く（agentId、agentRole、モデル、ステータス）
-- subagent / sub-subagent からのメッセージはデフォルトで collapse 表示
+- 各メッセージに `MessageAvatar` コンポーネント（`packages/gateway/frontend/src/components/MessageAvatar.tsx`）でアイコン + 表示名を表示
+- agent アイコンをクリックすると `ProfileModal` コンポーネント（`packages/gateway/frontend/src/components/ProfileModal.tsx`）が開く（agentId、agentRole の Info タブ + Intent タイムライン placeholder タブ）
+- 連続した `agentRole === "subagent"` メッセージ（同 agentId）は `<details>` グループに collapse 表示
 
 **intent の表示**
 

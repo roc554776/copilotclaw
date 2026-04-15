@@ -4,10 +4,19 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 
+export type AgentRole = "channel-operator" | "worker" | "subagent" | "unknown";
+
+export interface MessageSenderMeta {
+  agentId: string;
+  agentDisplayName: string;
+  agentRole: AgentRole;
+}
+
 export interface Message {
   id: string;
   channelId: string;
   sender: "user" | "agent" | "cron" | "system";
+  senderMeta?: MessageSenderMeta;
   message: string;
   createdAt: string;
 }
@@ -47,7 +56,7 @@ export class Store {
     }
   }
 
-  private static readonly LATEST_STORE_VERSION = 4;
+  private static readonly LATEST_STORE_VERSION = 5;
 
   private static readonly STORE_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // v0 → v1: Add archivedAt column to channels
@@ -95,6 +104,15 @@ export class Store {
       const columns = db.pragma("table_info(channels)") as Array<{ name: string }>;
       if (!columns.some((c) => c.name === "draft")) {
         db.exec("ALTER TABLE channels ADD COLUMN draft TEXT");
+      }
+    },
+    // v4 → v5: Add senderMeta column to messages for agent identity tracking
+    4: (db) => {
+      const cols = db.pragma("table_info(messages)") as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === "senderMeta")) {
+        db.exec("ALTER TABLE messages ADD COLUMN senderMeta TEXT");
+        // Backfill existing agent rows with default channel-operator meta
+        db.exec(`UPDATE messages SET senderMeta = '{"agentId":"unknown","agentDisplayName":"Agent","agentRole":"channel-operator"}' WHERE sender = 'agent' AND senderMeta IS NULL`);
       }
     },
   };
@@ -256,7 +274,7 @@ export class Store {
     return result.changes > 0;
   }
 
-  addMessage(channelId: string, sender: "user" | "agent" | "cron" | "system", message: string): Message | undefined {
+  addMessage(channelId: string, sender: "user" | "agent" | "cron" | "system", message: string, senderMeta?: MessageSenderMeta): Message | undefined {
     const ch = this.getChannel(channelId);
     if (ch === undefined) return undefined;
     const msg: Message = {
@@ -266,8 +284,12 @@ export class Store {
       message,
       createdAt: new Date().toISOString(),
     };
+    if (senderMeta !== undefined) {
+      msg.senderMeta = senderMeta;
+    }
+    const senderMetaJson = senderMeta !== undefined ? JSON.stringify(senderMeta) : null;
     this.db.transaction(() => {
-      this.db.prepare("INSERT INTO messages (id, channelId, sender, message, createdAt) VALUES (?, ?, ?, ?, ?)").run(msg.id, msg.channelId, msg.sender, msg.message, msg.createdAt);
+      this.db.prepare("INSERT INTO messages (id, channelId, sender, message, createdAt, senderMeta) VALUES (?, ?, ?, ?, ?, ?)").run(msg.id, msg.channelId, msg.sender, msg.message, msg.createdAt, senderMetaJson);
       if (sender === "user" || sender === "cron" || sender === "system") {
         this.db.prepare("INSERT INTO pending_queue (channelId, messageId) VALUES (?, ?)").run(channelId, msg.id);
       }
@@ -275,37 +297,62 @@ export class Store {
     return msg;
   }
 
+  private parseMessageRow(row: { id: string; channelId: string; sender: "user" | "agent" | "cron" | "system"; message: string; createdAt: string; senderMeta?: string | null }): Message {
+    const msg: Message = {
+      id: row.id,
+      channelId: row.channelId,
+      sender: row.sender,
+      message: row.message,
+      createdAt: row.createdAt,
+    };
+    if (row.senderMeta !== null && row.senderMeta !== undefined) {
+      try {
+        msg.senderMeta = JSON.parse(row.senderMeta) as MessageSenderMeta;
+      } catch {
+        // Invalid JSON — omit senderMeta
+      }
+    }
+    return msg;
+  }
+
   listMessages(channelId: string, limit = 5, before?: string): Message[] {
     const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 5;
     // Return newest N messages in reverse chronological order.
     // When `before` is specified, return messages older than the given message ID (cursor-based pagination).
+    type RawRow = { id: string; channelId: string; sender: "user" | "agent" | "cron" | "system"; message: string; createdAt: string; senderMeta?: string | null };
     if (before !== undefined) {
-      return this.db.prepare(
-        "SELECT id, channelId, sender, message, createdAt FROM messages WHERE channelId = ? AND rowid < (SELECT rowid FROM messages WHERE id = ?) ORDER BY rowid DESC LIMIT ?",
-      ).all(channelId, before, safeLimit) as Message[];
+      const rows = this.db.prepare(
+        "SELECT id, channelId, sender, message, createdAt, senderMeta FROM messages WHERE channelId = ? AND rowid < (SELECT rowid FROM messages WHERE id = ?) ORDER BY rowid DESC LIMIT ?",
+      ).all(channelId, before, safeLimit) as RawRow[];
+      return rows.map((r) => this.parseMessageRow(r));
     }
-    return this.db.prepare(
-      "SELECT id, channelId, sender, message, createdAt FROM messages WHERE channelId = ? ORDER BY rowid DESC LIMIT ?",
-    ).all(channelId, safeLimit) as Message[];
+    const rows = this.db.prepare(
+      "SELECT id, channelId, sender, message, createdAt, senderMeta FROM messages WHERE channelId = ? ORDER BY rowid DESC LIMIT ?",
+    ).all(channelId, safeLimit) as RawRow[];
+    return rows.map((r) => this.parseMessageRow(r));
   }
 
   drainPending(channelId: string): Message[] {
-    let rows: Message[] = [];
+    type RawRow = { id: string; channelId: string; sender: "user" | "agent" | "cron" | "system"; message: string; createdAt: string; senderMeta?: string | null };
+    let rawRows: RawRow[] = [];
     this.db.transaction(() => {
-      rows = this.db.prepare(
-        "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC",
-      ).all(channelId) as Message[];
-      if (rows.length > 0) {
+      rawRows = this.db.prepare(
+        "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt, m.senderMeta FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC",
+      ).all(channelId) as RawRow[];
+      if (rawRows.length > 0) {
         this.db.prepare("DELETE FROM pending_queue WHERE channelId = ?").run(channelId);
       }
     })();
-    return rows;
+    return rawRows.map((r) => this.parseMessageRow(r));
   }
 
   peekOldestPending(channelId: string): Message | undefined {
-    return this.db.prepare(
-      "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC LIMIT 1",
-    ).get(channelId) as Message | undefined;
+    type RawRow = { id: string; channelId: string; sender: "user" | "agent" | "cron" | "system"; message: string; createdAt: string; senderMeta?: string | null };
+    const row = this.db.prepare(
+      "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt, m.senderMeta FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC LIMIT 1",
+    ).get(channelId) as RawRow | undefined;
+    if (row === undefined) return undefined;
+    return this.parseMessageRow(row);
   }
 
   flushPending(channelId: string): number {

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { Store } from "../../src/store.js";
+import { Store, type MessageSenderMeta } from "../../src/store.js";
 
 describe("Store", () => {
   let store: Store;
@@ -401,6 +401,48 @@ describe("Store", () => {
       const channels = store.listChannels();
       const ch = channels.find((c) => c.id === channelId);
       expect(ch?.draft).toBe("my draft");
+    });
+  });
+
+  describe("senderMeta", () => {
+    it("stores and retrieves senderMeta for agent messages", () => {
+      const meta: MessageSenderMeta = { agentId: "channel-operator", agentDisplayName: "Channel Operator", agentRole: "channel-operator" };
+      const msg = store.addMessage(channelId, "agent", "hello", meta);
+      expect(msg).toBeDefined();
+      expect(msg!.senderMeta).toEqual(meta);
+
+      const msgs = store.listMessages(channelId, 10);
+      expect(msgs[0]!.senderMeta).toEqual(meta);
+    });
+
+    it("senderMeta is undefined for user messages without senderMeta arg", () => {
+      store.addMessage(channelId, "user", "hello");
+      const msgs = store.listMessages(channelId, 10);
+      expect(msgs[0]!.senderMeta).toBeUndefined();
+    });
+
+    it("senderMeta is undefined for cron and system messages", () => {
+      store.addMessage(channelId, "cron", "[cron:test] task");
+      store.addMessage(channelId, "system", "[SYSTEM] event");
+      const msgs = store.listMessages(channelId, 10);
+      for (const m of msgs) {
+        expect(m.senderMeta).toBeUndefined();
+      }
+    });
+
+    it("stores and retrieves subagent senderMeta", () => {
+      const meta: MessageSenderMeta = { agentId: "worker", agentDisplayName: "Worker", agentRole: "subagent" };
+      store.addMessage(channelId, "agent", "subtask done", meta);
+      const msgs = store.listMessages(channelId, 10);
+      expect(msgs[0]!.senderMeta).toEqual(meta);
+    });
+
+    it("drainPending preserves senderMeta for user messages", () => {
+      // user messages don't have senderMeta, just verify drainPending works
+      store.addMessage(channelId, "user", "pending");
+      const drained = store.drainPending(channelId);
+      expect(drained).toHaveLength(1);
+      expect(drained[0]!.senderMeta).toBeUndefined();
     });
   });
 

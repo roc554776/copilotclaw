@@ -5,6 +5,7 @@ import { AgentManager } from "./agent-manager.js";
 import { type CronJobConfig, getProfileName, getStateDir, loadConfig, loadFileConfig, resolvePort, saveConfig } from "./config.js";
 import { IntentsStore, intentsStore } from "./intents-store.js";
 import { LogBuffer } from "./log-buffer.js";
+import { resolveAgentSenderMeta } from "./message-sender.js";
 import { initOtel, shutdownOtel } from "./otel.js";
 import { initMetrics } from "./otel-metrics.js";
 import { startServer } from "./server.js";
@@ -137,6 +138,10 @@ async function main(): Promise<void> {
   });
   const promptConfig = getAgentPromptConfig();
 
+  // Channel-operator meta derived from agent-config customAgents (first non-infer agent)
+  const channelOperatorAgent = promptConfig.customAgents.find((a) => !a.infer) ?? { name: "channel-operator", displayName: "Channel Operator" };
+  const channelOperatorMetaForSender = { agentName: channelOperatorAgent.name, agentDisplayName: channelOperatorAgent.displayName };
+
   // Helper: resolve sessionId → channelId via orchestrator.
   const resolveChannelId = (sessionId: string): string | undefined => {
     return orchestrator.getSessionStatuses()[sessionId]?.channelId;
@@ -189,11 +194,13 @@ async function main(): Promise<void> {
       switch (request.toolName) {
         case "copilotclaw_send_message": {
           const message = request.args["message"] as string ?? "";
-          store.addMessage(channelId, "agent", message);
+          // copilotclaw_send_message is only callable from channel-operator (not subagents)
+          const sendMsgSenderMeta = resolveAgentSenderMeta(request.sessionId, undefined, orchestrator, channelOperatorMetaForSender);
+          store.addMessage(channelId, "agent", message, sendMsgSenderMeta);
           serverHandle?.sseBroadcaster?.broadcast({
             type: "new_message",
             channelId,
-            data: { sender: "agent", message },
+            data: { sender: "agent", message, senderMeta: sendMsgSenderMeta },
           });
           // Clear swallowed-message flag — agent replied successfully
           sessionController.onAgentReplied(request.sessionId);
@@ -378,14 +385,17 @@ async function main(): Promise<void> {
       // Reflect assistant.message to channel timeline as agent message.
       // The agent forwards all SDK events as session_event; gateway handles the
       // channel reflection here instead of the agent sending a separate channel_message.
+      // parentToolCallId in the event data identifies subagent messages (SDK convention).
       if (eventChannelId !== undefined && eventType === "assistant.message") {
         const content = typeof data["content"] === "string" ? data["content"] : "";
         if (content.length > 0) {
-          store.addMessage(eventChannelId, "agent", content);
+          const parentToolCallId = typeof data["parentToolCallId"] === "string" ? data["parentToolCallId"] : undefined;
+          const assistantMsgSenderMeta = resolveAgentSenderMeta(sessionId, parentToolCallId, orchestrator, channelOperatorMetaForSender);
+          store.addMessage(eventChannelId, "agent", content, assistantMsgSenderMeta);
           serverHandle?.sseBroadcaster?.broadcast({
             type: "new_message",
             channelId: eventChannelId,
-            data: { sender: "agent" as const, message: content },
+            data: { sender: "agent" as const, message: content, senderMeta: assistantMsgSenderMeta },
           });
         }
       }

@@ -53,22 +53,27 @@ channel operator が知覚すべき入力を「メッセージ」に一本化せ
 
 `docs/requirements/custom-agents.md` の「Req: ネスト subagent 完了通知の抑制」を参照。本ファイルの single source of truth は `custom-agents.md` である。
 
-### Req: メッセージ sender 識別（未実現）
+### Req: メッセージ sender 識別（v0.78.0 で部分実現）
 
 チャンネルのタイムラインに表示されるメッセージに、送信者（sender）を正確に識別する情報を付与する。
 
-- 現状: `sender` フィールドは `"user" | "agent" | "cron" | "system"` の 4 値。`"agent"` はどの agent が送ったかを区別しない
-- `copilotclaw_send_message` を呼び出した agent が channel-operator なのか subagent なのか sub-subagent なのかを区別できるようにする
-- hooks は親エージェント（channel-operator）にしか機能しないため、hooks を使って subagent/sub-subagent の sender を特定することは困難
-- session event の tool call event を利用することで、subagent/sub-subagent が `copilotclaw_send_message` を呼び出した記録を拾える可能性がある（session event が subagent/sub-subagent のイベントも拾えるか要検証）
-- agent は id と表示名（display name）を持つため、内部的に区別できる
-- 送信者として個別の agent を識別できる（agent の種別・id・表示名による区別）（具体的なスキーマ・型定義は proposal に委ねる）
+**v0.78.0 実現済み:**
+- `Message.senderMeta` フィールド（agentId / agentDisplayName / agentRole）を DB + API + frontend に追加
+- `sender` フィールドは後方互換のまま `"user" | "agent" | "cron" | "system"` の 4 値を維持
+- `assistant.message` イベントの `parentToolCallId` で channel-operator / subagent を自動判別
+- `copilotclaw_send_message` ツール呼び出しは常に channel-operator 固定
+- DB migration v4→v5: `senderMeta TEXT` カラム追加、既存 agent 行へのデフォルト backfill
+- frontend: MessageAvatar + ProfileModal + subagent collapse （`<details>` グループ）
+
+**未実現（将来課題）:**
+- worker ロールの識別（現在は subagent に統一; worker と sub-worker の区別は未実現）
+- sub-subagent の識別（parentToolCallId チェーンのネスト追跡は未対応）
+- ProfileModal の Intent timeline（プレースホルダタブのみ）
 
 識別対象（外部観察可能な区別）:
 - `user`: ユーザーからのメッセージ
-- `agent:channel-operator`: channel-operator agent からのメッセージ
-- `agent:worker`: worker subagent からのメッセージ
-- `agent` その他: その他の agent（種別・id・表示名で識別）
+- `agent` + `agentRole: "channel-operator"`: channel-operator agent からのメッセージ
+- `agent` + `agentRole: "subagent"`: subagent（worker）からのメッセージ
 - `cron`: cron ジョブからのメッセージ
 - `system`: system からのメッセージ
 

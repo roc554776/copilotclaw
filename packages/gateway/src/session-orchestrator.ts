@@ -501,6 +501,19 @@ export class SessionOrchestrator {
     if (sub !== undefined) sub.status = status;
   }
 
+  /**
+   * Look up a subagent by its toolCallId within a session.
+   * Returns the subagent's name and display name if found, or undefined if not tracked.
+   * Used by message-sender.ts to resolve MessageSenderMeta for assistant.message events
+   * that carry parentToolCallId (indicating a subagent message).
+   */
+  getSubagentInfo(sessionId: string, toolCallId: string): { agentName: string; agentDisplayName: string } | undefined {
+    const session = this.sessions.get(sessionId);
+    const sub = session?.subagentSessions?.find((s) => s.toolCallId === toolCallId);
+    if (sub === undefined) return undefined;
+    return { agentName: sub.agentName, agentDisplayName: sub.agentDisplayName };
+  }
+
   /** Fully remove a session and its channel binding. */
   stopSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);

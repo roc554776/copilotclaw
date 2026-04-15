@@ -1203,3 +1203,53 @@ describe("GET /api/sessions/:id/events/stream — Last-Event-ID replay", () => {
     expect(received.some((e) => e.type === "anchor-event")).toBe(false);
   });
 });
+
+describe("senderMeta in messages API", () => {
+  it("POST user message returns no senderMeta; GET confirms no senderMeta", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null, sessionEventStore });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${url}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const postRes = await fetch(`${url}/api/channels/${chId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: "user", message: "hello user" }),
+    });
+    expect(postRes.status).toBe(201);
+    const posted = await postRes.json() as { sender: string; senderMeta?: unknown };
+    expect(posted.sender).toBe("user");
+    expect(posted.senderMeta).toBeUndefined();
+
+    // GET also should not include senderMeta for user messages
+    const getRes = await fetch(`${url}/api/channels/${chId}/messages?limit=5`);
+    const msgs = await getRes.json() as Array<{ sender: string; senderMeta?: unknown }>;
+    const userMsg = msgs.find((m) => m.sender === "user");
+    expect(userMsg).toBeDefined();
+    expect(userMsg!.senderMeta).toBeUndefined();
+
+    await freshHandle.close();
+  });
+
+  it("DB-injected agent message with senderMeta is returned via GET", async () => {
+    const store = new Store();
+    const freshHandle = await startServer({ port: 0, store, agentManager: null, sessionEventStore });
+    const url = `http://localhost:${freshHandle.port}`;
+    const channels = store.listChannels();
+    const chId = channels[0]!.id;
+
+    // Inject an agent message directly via store (simulating what daemon.ts does)
+    const meta = { agentId: "channel-operator", agentDisplayName: "Channel Operator", agentRole: "channel-operator" as const };
+    store.addMessage(chId, "agent", "agent reply", meta);
+
+    const getRes = await fetch(`${url}/api/channels/${chId}/messages?limit=5`);
+    expect(getRes.status).toBe(200);
+    const msgs = await getRes.json() as Array<{ sender: string; senderMeta?: { agentId: string; agentRole: string } }>;
+    const agentMsg = msgs.find((m) => m.sender === "agent");
+    expect(agentMsg).toBeDefined();
+    expect(agentMsg!.senderMeta?.agentId).toBe("channel-operator");
+    expect(agentMsg!.senderMeta?.agentRole).toBe("channel-operator");
+
+    await freshHandle.close();
+  });
+});
