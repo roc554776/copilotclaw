@@ -89,7 +89,7 @@ export class BuiltinChatChannel implements ChannelProvider {
       return true;
     }
 
-    // SSE global events route (agent status, compatibility, gateway status changes)
+    // SSE global events route (agent status, compatibility, gateway status changes, log append)
     if (pathname === "/api/global-events" && method === "GET") {
       this.sseBroadcaster.addGlobalClient(res);
       return true;

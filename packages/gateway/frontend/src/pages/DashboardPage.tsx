@@ -416,7 +416,7 @@ export function DashboardPage() {
           } else if (event.type === "agent_compatibility_change") {
             setCompatibility(event.compatibility ?? "");
           } else if (event.type === "log_appended") {
-            const entries = (event as { entries?: LogEntry[] }).entries ?? [];
+            const entries = event.entries ?? [];
             if (entries.length > 0) {
               setLogs((prev) => [...entries.slice().reverse(), ...prev].slice(0, 200));
             }
