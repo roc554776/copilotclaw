@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionEventStore } from "../../src/session-event-store.js";
+import { broadcastTokenUsageIfNeeded } from "../../src/daemon.js";
 
 describe("SessionEventStore", () => {
   let tmpDir: string;
@@ -449,22 +450,11 @@ describe("SessionEventStore", () => {
   describe("assistant.usage → token_usage_update wiring (daemon setOnAppend pattern)", () => {
     it("calls broadcastGlobal with token_usage_update when assistant.usage event is appended", () => {
       const broadcastedEvents: Array<{ type: string }> = [];
-      const mockBroadcastGlobal = vi.fn((event: { type: string }) => {
-        broadcastedEvents.push(event);
-      });
+      const mockBroadcaster = { broadcastGlobal: vi.fn((event: { type: string }) => { broadcastedEvents.push(event); }) };
 
-      // Wire exactly as daemon.ts does
+      // Use the real daemon.ts helper — any drift in daemon.ts will break this test.
       store.setOnAppend((_sessionId, event) => {
-        if (event.type === "assistant.usage") {
-          try {
-            const now = new Date();
-            const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
-            const summary = store.getTokenUsage(from5h, now.toISOString());
-            mockBroadcastGlobal({ type: "token_usage_update", summary });
-          } catch (err) {
-            console.error("[test] token_usage_update broadcast failed:", err);
-          }
-        }
+        broadcastTokenUsageIfNeeded(event, store, mockBroadcaster);
       });
 
       store.appendEvent("sess-wire", {
@@ -473,7 +463,7 @@ describe("SessionEventStore", () => {
         data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 10, multiplier: 1 },
       });
 
-      expect(mockBroadcastGlobal).toHaveBeenCalledTimes(1);
+      expect(mockBroadcaster.broadcastGlobal).toHaveBeenCalledTimes(1);
       const call = broadcastedEvents[0]!;
       expect(call.type).toBe("token_usage_update");
       const summary = (call as { type: string; summary: Array<{ model: string }> }).summary;
@@ -482,19 +472,11 @@ describe("SessionEventStore", () => {
     });
 
     it("does not call broadcastGlobal for non-usage events", () => {
-      const mockBroadcastGlobal = vi.fn();
+      const mockBroadcaster = { broadcastGlobal: vi.fn() };
 
+      // Use the real daemon.ts helper — any drift in daemon.ts will break this test.
       store.setOnAppend((_sessionId, event) => {
-        if (event.type === "assistant.usage") {
-          try {
-            const now = new Date();
-            const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
-            const summary = store.getTokenUsage(from5h, now.toISOString());
-            mockBroadcastGlobal({ type: "token_usage_update", summary });
-          } catch (err) {
-            console.error("[test] token_usage_update broadcast failed:", err);
-          }
-        }
+        broadcastTokenUsageIfNeeded(event, store, mockBroadcaster);
       });
 
       store.appendEvent("sess-wire-skip", {
@@ -503,13 +485,12 @@ describe("SessionEventStore", () => {
         data: { toolName: "bash" },
       });
 
-      expect(mockBroadcastGlobal).not.toHaveBeenCalled();
+      expect(mockBroadcaster.broadcastGlobal).not.toHaveBeenCalled();
     });
 
     it("swallows getTokenUsage exceptions and does not propagate to caller", () => {
       const errorStore = new SessionEventStore(tmpDir);
-      // Force getTokenUsage to throw by closing the DB first — then try to use it
-      // We simulate the exception path by overriding via a throwing wrapper
+      // Force getTokenUsage to throw — simulate a DB error.
       let throwOnGetTokenUsage = false;
       const origGetTokenUsage = errorStore.getTokenUsage.bind(errorStore);
       errorStore.getTokenUsage = (...args) => {
@@ -517,18 +498,11 @@ describe("SessionEventStore", () => {
         return origGetTokenUsage(...args);
       };
 
+      const mockBroadcaster = { broadcastGlobal: vi.fn() };
+
+      // Use the real daemon.ts helper — exception swallowing must be verified against the actual code path.
       errorStore.setOnAppend((_sessionId, event) => {
-        if (event.type === "assistant.usage") {
-          try {
-            const now = new Date();
-            const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
-            const summary = errorStore.getTokenUsage(from5h, now.toISOString());
-            // broadcastGlobal placeholder — just capture it
-            void summary;
-          } catch (err) {
-            console.error("[test] swallowed:", err);
-          }
-        }
+        broadcastTokenUsageIfNeeded(event, errorStore, mockBroadcaster);
       });
 
       throwOnGetTokenUsage = true;

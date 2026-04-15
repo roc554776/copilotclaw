@@ -9,7 +9,7 @@ import { initOtel, shutdownOtel } from "./otel.js";
 import { initMetrics } from "./otel-metrics.js";
 import { startServer } from "./server.js";
 import { SessionController } from "./session-controller.js";
-import { SessionEventStore } from "./session-event-store.js";
+import { type SessionEvent, SessionEventStore } from "./session-event-store.js";
 import { SessionOrchestrator } from "./session-orchestrator.js";
 import { Store } from "./store.js";
 import { ensureWorkspace, getDataDir, getStoreDbPath, getStoreFilePath, getWorkspaceRoot } from "./workspace.js";
@@ -17,6 +17,27 @@ import { ensureWorkspace, getDataDir, getStoreDbPath, getStoreFilePath, getWorks
 const AGENT_MONITOR_INTERVAL_MS = 30_000; // 30 seconds
 const AGENT_MONITOR_ERROR_THRESHOLD = 3;
 const ORCHESTRATOR_CHECK_INTERVAL_MS = 30_000; // 30 seconds
+
+/**
+ * Broadcasts a token_usage_update global SSE event when an assistant.usage session event is appended.
+ * Exported so integration tests can import and exercise the exact same code path,
+ * eliminating the risk of test/implementation drift.
+ */
+export function broadcastTokenUsageIfNeeded(
+  event: SessionEvent,
+  sessionEventStore: SessionEventStore,
+  sseBroadcaster: { broadcastGlobal: (event: import("./sse-broadcaster.js").GlobalSseEvent) => void },
+): void {
+  if (event.type !== "assistant.usage") return;
+  try {
+    const now = new Date();
+    const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
+    const summary = sessionEventStore.getTokenUsage(from5h, now.toISOString());
+    sseBroadcaster.broadcastGlobal({ type: "token_usage_update", summary });
+  } catch (err) {
+    console.error("[gateway] token_usage_update broadcast failed:", err);
+  }
+}
 
 export interface IntentToolCallRequest {
   sessionId: string;
@@ -601,16 +622,7 @@ async function main(): Promise<void> {
         type: "session_event_appended",
         event,
       });
-      if (event.type === "assistant.usage") {
-        try {
-          const now = new Date();
-          const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
-          const summary = sessionEventStore.getTokenUsage(from5h, now.toISOString());
-          serverHandle!.sseBroadcaster!.broadcastGlobal({ type: "token_usage_update", summary });
-        } catch (err) {
-          console.error("[gateway] token_usage_update broadcast failed:", err);
-        }
-      }
+      broadcastTokenUsageIfNeeded(event, sessionEventStore, serverHandle!.sseBroadcaster!);
     });
   }
 
