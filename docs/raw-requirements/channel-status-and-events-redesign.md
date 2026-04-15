@@ -65,3 +65,6 @@
 - チャンネルのメッセージ、イベントステータス等、チャンネルごとの情報は SSE で送信してほしい。
 - チャンネル固有でない情報は、専用の SSE で送信してほしい。
 - （現状は、メッセージだけが SSE で送られており、それ以外はポーリングなので、 UI の描画が滑らかでない。）
+
+<!-- 2026-04-15 -->
+- session-scoped SSE に Last-Event-ID reconnect replay を実装して、切断→再接続時の event 欠損を解消してほしい。ネットワーク blip やタブ sleep の後に missed event が戻ってくるように。EventSource の Last-Event-ID 標準機能を使いたい。global / channel SSE の replay は別 scope で後回し。

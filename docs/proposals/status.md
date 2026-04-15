@@ -230,6 +230,7 @@
   - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
   - イベント抽象化 — `copilotclaw_wait` 返却値の多型化（`WaitToolPayload` を複数イベント型の union に変更）、メッセージ以外のイベント型（subagent-completed / subagent-failed / keepalive）の追加（`docs/proposals/state-management-architecture.md` の「Gateway: AbstractSessionEvent の拡張 — イベント抽象化」節参照）
   - エージェントアイコン・プロフィールモーダル・collapse 表示 — タイムライン UI における sender の視覚化（アイコン + 表示名 + プロフィールモーダル、subagent メッセージの collapse 表示）（`docs/proposals/state-management-architecture.md` の「メッセージ sender 識別の設計」節参照）
+  - session-scoped SSE の Last-Event-ID reconnect replay — ネットワーク blip やタブスリープ後の再接続時に missed event を DB から catch-up 配信する。`SessionEventStore.listEventsAfterId` メソッド追加、SSE frame への `id:` line 付与、`/api/sessions/:id/events/stream` での `Last-Event-ID` header parse と接続直後の catch-up 送信が含まれる。channel / global SSE の replay は別 scope（`docs/proposals/state-management-architecture.md` の「session-scoped SSE の Last-Event-ID reconnect replay 設計」節参照）（2026-04-15 追加）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）
