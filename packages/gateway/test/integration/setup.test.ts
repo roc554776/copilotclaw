@@ -9,7 +9,7 @@ import { checkWorkspaceHealth, ensureWorkspaceReady, findAvailablePort, isPortAv
 function listenOnRandomPort(): Promise<{ server: ReturnType<typeof createServer>; port: number }> {
   return new Promise((resolve) => {
     const server = createServer();
-    server.listen(0, () => {
+    server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       resolve({ server, port: typeof addr === "object" && addr !== null ? addr.port : 0 });
     });
