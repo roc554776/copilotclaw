@@ -446,6 +446,104 @@ describe("SessionEventStore", () => {
     });
   });
 
+  describe("assistant.usage → token_usage_update wiring (daemon setOnAppend pattern)", () => {
+    it("calls broadcastGlobal with token_usage_update when assistant.usage event is appended", () => {
+      const broadcastedEvents: Array<{ type: string }> = [];
+      const mockBroadcastGlobal = vi.fn((event: { type: string }) => {
+        broadcastedEvents.push(event);
+      });
+
+      // Wire exactly as daemon.ts does
+      store.setOnAppend((_sessionId, event) => {
+        if (event.type === "assistant.usage") {
+          try {
+            const now = new Date();
+            const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
+            const summary = store.getTokenUsage(from5h, now.toISOString());
+            mockBroadcastGlobal({ type: "token_usage_update", summary });
+          } catch (err) {
+            console.error("[test] token_usage_update broadcast failed:", err);
+          }
+        }
+      });
+
+      store.appendEvent("sess-wire", {
+        type: "assistant.usage",
+        timestamp: new Date().toISOString(),
+        data: { model: "gpt-4.1", inputTokens: 100, outputTokens: 10, multiplier: 1 },
+      });
+
+      expect(mockBroadcastGlobal).toHaveBeenCalledTimes(1);
+      const call = broadcastedEvents[0]!;
+      expect(call.type).toBe("token_usage_update");
+      const summary = (call as { type: string; summary: Array<{ model: string }> }).summary;
+      expect(summary.length).toBeGreaterThan(0);
+      expect(summary[0]!.model).toBe("gpt-4.1");
+    });
+
+    it("does not call broadcastGlobal for non-usage events", () => {
+      const mockBroadcastGlobal = vi.fn();
+
+      store.setOnAppend((_sessionId, event) => {
+        if (event.type === "assistant.usage") {
+          try {
+            const now = new Date();
+            const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
+            const summary = store.getTokenUsage(from5h, now.toISOString());
+            mockBroadcastGlobal({ type: "token_usage_update", summary });
+          } catch (err) {
+            console.error("[test] token_usage_update broadcast failed:", err);
+          }
+        }
+      });
+
+      store.appendEvent("sess-wire-skip", {
+        type: "tool.execution_start",
+        timestamp: new Date().toISOString(),
+        data: { toolName: "bash" },
+      });
+
+      expect(mockBroadcastGlobal).not.toHaveBeenCalled();
+    });
+
+    it("swallows getTokenUsage exceptions and does not propagate to caller", () => {
+      const errorStore = new SessionEventStore(tmpDir);
+      // Force getTokenUsage to throw by closing the DB first — then try to use it
+      // We simulate the exception path by overriding via a throwing wrapper
+      let throwOnGetTokenUsage = false;
+      const origGetTokenUsage = errorStore.getTokenUsage.bind(errorStore);
+      errorStore.getTokenUsage = (...args) => {
+        if (throwOnGetTokenUsage) throw new Error("simulated DB error");
+        return origGetTokenUsage(...args);
+      };
+
+      errorStore.setOnAppend((_sessionId, event) => {
+        if (event.type === "assistant.usage") {
+          try {
+            const now = new Date();
+            const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
+            const summary = errorStore.getTokenUsage(from5h, now.toISOString());
+            // broadcastGlobal placeholder — just capture it
+            void summary;
+          } catch (err) {
+            console.error("[test] swallowed:", err);
+          }
+        }
+      });
+
+      throwOnGetTokenUsage = true;
+      expect(() => {
+        errorStore.appendEvent("sess-wire-err", {
+          type: "assistant.usage",
+          timestamp: new Date().toISOString(),
+          data: { model: "gpt-4.1", inputTokens: 50, outputTokens: 5 },
+        });
+      }).not.toThrow();
+
+      errorStore.close();
+    });
+  });
+
   describe("setOnAppend hook", () => {
     it("callback is called after appendEvent with the correct sessionId and event", () => {
       const callback = vi.fn();

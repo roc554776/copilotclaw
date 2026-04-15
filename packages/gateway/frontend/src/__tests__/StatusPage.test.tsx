@@ -262,4 +262,26 @@ describe("StatusPage", () => {
     const div = container.firstChild as HTMLElement;
     expect(div.getAttribute("data-global-sse-connected")).toBe("false");
   });
+
+  it("sets data-global-sse-connected to 'true' after onopen fires", async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <StatusPage />
+      </MemoryRouter>,
+    );
+
+    const div = container.firstChild as HTMLElement;
+    // Initially false before onopen
+    expect(div.getAttribute("data-global-sse-connected")).toBe("false");
+
+    const sseSource = getGlobalSse();
+    expect(sseSource).toBeDefined();
+
+    // Simulate SSE connection established
+    await act(async () => {
+      sseSource!.onopen?.();
+    });
+
+    expect(div.getAttribute("data-global-sse-connected")).toBe("true");
+  });
 });

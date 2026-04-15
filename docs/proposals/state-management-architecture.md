@@ -482,17 +482,19 @@ type ChannelSseEvent =
   | { type: "channel_timeline_event"; channelId: string; entry: TimelineEntry }
 
 // global イベント（/api/global-events で配信）
+// 実装済み型のみ sse-broadcaster.ts の GlobalSseEvent union に存在する。
+// 「（未実現）」マーカーの付いた型は設計上の将来計画であり、まだ実装されていない。
 type GlobalSseEvent =
-  | { type: "gateway_status_change"; version: string; running: boolean }
-  | { type: "agent_status_change"; version: string | undefined; running: boolean }
-  | { type: "agent_compatibility_change"; compatibility: "compatible" | "incompatible" | "unavailable" }
-  | { type: "channel_list_change" }
-  | { type: "config_change" }
-  | { type: "system_status_change" }
+  | { type: "gateway_status_change"; version: string; running: boolean }      // 実装済み
+  | { type: "agent_status_change"; version: string | undefined; running: boolean }  // 実装済み
+  | { type: "agent_compatibility_change"; compatibility: "compatible" | "incompatible" | "unavailable" }  // 実装済み
+  | { type: "channel_list_change" }                                           // （未実現）
+  | { type: "config_change" }                                                 // （未実現）
+  | { type: "system_status_change" }                                          // （未実現）
   // ポーリング置換のために追加される event 型
   | { type: "log_appended"; entries: LogEntry[] }                 // GET /api/logs 3s ポーリングの置換（v0.73.0 実装済み）
-  | { type: "quota_update"; quota: QuotaInfo }                     // GET /api/quota 5s ポーリングの置換
-  | { type: "models_update"; models: ModelInfo[] }                 // GET /api/models 5s ポーリングの置換
+  | { type: "quota_update"; quota: QuotaInfo }                     // GET /api/quota 5s ポーリングの置換（未実現）
+  | { type: "models_update"; models: ModelInfo[] }                 // GET /api/models 5s ポーリングの置換（未実現）
   | { type: "token_usage_update"; summary: TokenUsageSummary }     // GET /api/token-usage ポーリングの置換（v0.75.0 実装済み）
 
 // 全 SSE イベントの union

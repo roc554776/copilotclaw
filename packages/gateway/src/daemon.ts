@@ -602,10 +602,14 @@ async function main(): Promise<void> {
         event,
       });
       if (event.type === "assistant.usage") {
-        const now = new Date();
-        const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
-        const summary = sessionEventStore.getTokenUsage(from5h, now.toISOString());
-        serverHandle!.sseBroadcaster!.broadcastGlobal({ type: "token_usage_update", summary });
+        try {
+          const now = new Date();
+          const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
+          const summary = sessionEventStore.getTokenUsage(from5h, now.toISOString());
+          serverHandle!.sseBroadcaster!.broadcastGlobal({ type: "token_usage_update", summary });
+        } catch (err) {
+          console.error("[gateway] token_usage_update broadcast failed:", err);
+        }
       }
     });
   }
