@@ -166,8 +166,11 @@ v0.73.0 で解消した部分:
 v0.74.0 で解消した部分:
 - `SessionEventsPage` の `GET /api/sessions/{sessionId}/events` 2s ポーリング — `/api/sessions/:id/events/stream` session-scoped SSE エンドポイント新設・`sessionEventStore.setOnAppend` wire・`SessionEventsPage` の EventSource 購読に置き換え済み
 
+v0.75.0 で解消した部分:
+- `StatusPage` の `GET /api/token-usage` ポーリング — `token_usage_update` global SSE event 新設・`sessionEventStore.setOnAppend` の `assistant.usage` 分岐で 5h ウィンドウ集計を `broadcastGlobal` 送信・`StatusPage` の SSE onmessage で受信して `tokenUsage5h` を更新。`usePolling(refreshPeriods, 60000)` も削除済み
+
 未実現のまま:
-- `StatusPage` の `GET /api/quota` / `GET /api/models` / `GET /api/token-usage` ポーリング
+- `StatusPage` の `quota_update` / `models_update` global SSE event — `GET /api/quota` / `GET /api/models` は元々定期ポーリングでなく初回 snapshot fetch のみだが、変化時の push 配信が未実現
 
 ### Req: channel operator / worker のツール割り当て整理（v0.69.0 で部分実現）
 
