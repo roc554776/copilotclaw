@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchSessionEventsPaginated, fetchStatus, type SessionEvent } from "../api";
 import { useAutoScroll } from "../hooks/useAutoScroll";
-import { usePolling } from "../hooks/usePolling";
 import { SESSION_ID_SHORT } from "../utils";
 
 const EVENTS_PAGE_SIZE = 50;
@@ -21,6 +20,7 @@ export function SessionEventsPage() {
   const [abstractSessionId, setAbstractSessionId] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasOlderEvents, setHasOlderEvents] = useState(true);
+  const [sseConnected, setSseConnected] = useState(false);
   const loadingOlderRef = useRef(false);
 
   const eventsRef = useRef<SessionEvent[]>([]);
@@ -69,28 +69,26 @@ export function SessionEventsPage() {
       .catch(() => { /* ignore */ });
   }, [sessionId]);
 
-  // Auto-refresh: poll for new events (append only)
-  const refreshNewEvents = useCallback(async () => {
+  // Live event stream via SSE
+  useEffect(() => {
     if (!sessionId) return;
-    const current = eventsRef.current;
-    if (current.length === 0) return;
-    const newestId = current[current.length - 1]!.id;
-    if (newestId === undefined) return;
-    try {
-      const newer = await fetchSessionEventsPaginated(sessionId, EVENTS_PAGE_SIZE, { after: newestId });
-      if (newer.length > 0) {
-        setEvents((prev) => {
-          const existingIds = new Set(prev.map((e) => e.id).filter((id) => id !== undefined));
-          const unique = newer.filter((e) => e.id === undefined || !existingIds.has(e.id));
-          return unique.length > 0 ? [...prev, ...unique] : prev;
-        });
-      }
-    } catch {
-      /* ignore */
-    }
+    const es = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/events/stream`);
+    es.onopen = () => setSseConnected(true);
+    es.onerror = () => setSseConnected(false);
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data as string) as { type: string; event?: SessionEvent };
+        if (data.type === "session_event_appended" && data.event) {
+          setEvents((prev) => {
+            const existingIds = new Set(prev.map((ev) => ev.id).filter((id): id is number => id !== undefined));
+            if (data.event!.id !== undefined && existingIds.has(data.event!.id)) return prev;
+            return [...prev, data.event!];
+          });
+        }
+      } catch { /* ignore parse errors */ }
+    };
+    return () => es.close();
   }, [sessionId]);
-
-  usePolling(refreshNewEvents, 2000);
 
   // Load older events when scrolling up
   const loadOlderEvents = useCallback(async () => {
@@ -129,7 +127,7 @@ export function SessionEventsPage() {
     : "/sessions";
 
   return (
-    <div style={{ padding: "1rem" }}>
+    <div style={{ padding: "1rem" }} data-session-sse-connected={sseConnected ? "true" : undefined}>
       <div style={{ marginBottom: "1rem", display: "flex", gap: "1rem" }}>
         <a href="/status" style={{ display: "inline-block" }}>
           &larr; Back to System Status

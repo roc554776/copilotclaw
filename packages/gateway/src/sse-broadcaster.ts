@@ -1,12 +1,19 @@
 import type { ServerResponse } from "node:http";
 import type { LogEntry } from "./log-buffer.js";
+import type { SessionEvent } from "./session-event-store.js";
 
-type SseClientScope = { type: "channel"; channelId: string } | { type: "global" };
+type SseClientScope = { type: "channel"; channelId: string } | { type: "global" } | { type: "session"; sessionId: string };
 
 interface SseClient {
   res: ServerResponse;
   scope: SseClientScope;
 }
+
+/**
+ * Session-scoped SSE events broadcast to clients subscribed to `/api/sessions/:id/events/stream`.
+ * These events are scoped to a specific physical session.
+ */
+export type SseSessionEvent = { type: "session_event_appended"; event: SessionEvent };
 
 /**
  * Global SSE events broadcast to clients subscribed to `/api/global-events`.
@@ -52,6 +59,13 @@ export class SseBroadcaster {
     res.on("close", () => { this.clients.delete(client); });
   }
 
+  addSessionClient(res: ServerResponse, sessionId: string): void {
+    this.initSse(res);
+    const client: SseClient = { res, scope: { type: "session", sessionId } };
+    this.clients.add(client);
+    res.on("close", () => { this.clients.delete(client); });
+  }
+
   /**
    * @deprecated Use addChannelClient or addGlobalClient instead.
    * Kept for backward compatibility. Will be removed in a future version.
@@ -68,6 +82,15 @@ export class SseBroadcaster {
     const payload = `data: ${JSON.stringify({ ...event, channelId })}\n\n`;
     for (const client of this.clients) {
       if (client.scope.type === "channel" && client.scope.channelId === channelId) {
+        client.res.write(payload);
+      }
+    }
+  }
+
+  broadcastToSession(sessionId: string, event: SseSessionEvent): void {
+    const payload = `data: ${JSON.stringify(event)}\n\n`;
+    for (const client of this.clients) {
+      if (client.scope.type === "session" && client.scope.sessionId === sessionId) {
         client.res.write(payload);
       }
     }

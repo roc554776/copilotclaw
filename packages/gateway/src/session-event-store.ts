@@ -27,6 +27,7 @@ export class SessionEventStore {
   private readonly db: Database.Database;
   private readonly promptDir: string;
   private readonly maxEvents: number;
+  private onAppend?: (sessionId: string, event: SessionEvent) => void;
 
   constructor(dataDir: string, maxEvents?: number) {
     this.promptDir = join(dataDir, "prompts");
@@ -59,9 +60,17 @@ export class SessionEventStore {
 
   private readonly insertStmt;
 
+  /** Register a callback invoked after each event is inserted (before storage cap enforcement). */
+  setOnAppend(callback: (sessionId: string, event: SessionEvent) => void): void {
+    this.onAppend = callback;
+  }
+
   /** Append an event for a session. */
   appendEvent(sessionId: string, event: SessionEvent): void {
-    this.insertStmt.run(sessionId, event.type, event.timestamp, JSON.stringify(event.data), event.parentId ?? null);
+    const result = this.insertStmt.run(sessionId, event.type, event.timestamp, JSON.stringify(event.data), event.parentId ?? null);
+    // Attach the auto-generated id so the hook receives a complete event
+    const insertedEvent: SessionEvent = { ...event, id: result.lastInsertRowid as number };
+    this.onAppend?.(sessionId, insertedEvent);
     this.maybeEnforceStorageCap();
   }
 

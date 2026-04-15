@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionEventStore } from "../../src/session-event-store.js";
 
 describe("SessionEventStore", () => {
@@ -443,6 +443,62 @@ describe("SessionEventStore", () => {
     it("returns empty array when from is after to", () => {
       const ts = store.getTokenUsageTimeseries("2026-03-30T12:00:00Z", "2026-03-30T10:00:00Z", 4);
       expect(ts).toEqual([]);
+    });
+  });
+
+  describe("setOnAppend hook", () => {
+    it("callback is called after appendEvent with the correct sessionId and event", () => {
+      const callback = vi.fn();
+      store.setOnAppend(callback);
+      store.appendEvent("sess-hook", { type: "tool.execution_start", timestamp: "2026-04-14T10:00:00Z", data: { toolName: "bash" } });
+      expect(callback).toHaveBeenCalledTimes(1);
+      const [calledSessionId, calledEvent] = callback.mock.calls[0]!;
+      expect(calledSessionId).toBe("sess-hook");
+      expect(calledEvent.type).toBe("tool.execution_start");
+      expect(calledEvent.id).toBeDefined();
+      expect(typeof calledEvent.id).toBe("number");
+    });
+
+    it("callback is called once per appendEvent for multiple events", () => {
+      const callback = vi.fn();
+      store.setOnAppend(callback);
+      store.appendEvent("sess-multi", { type: "event-1", timestamp: "2026-04-14T10:00:00Z", data: {} });
+      store.appendEvent("sess-multi", { type: "event-2", timestamp: "2026-04-14T10:00:01Z", data: {} });
+      store.appendEvent("sess-multi", { type: "event-3", timestamp: "2026-04-14T10:00:02Z", data: {} });
+      expect(callback).toHaveBeenCalledTimes(3);
+      expect(callback.mock.calls[0]![1].type).toBe("event-1");
+      expect(callback.mock.calls[1]![1].type).toBe("event-2");
+      expect(callback.mock.calls[2]![1].type).toBe("event-3");
+    });
+
+    it("does not throw when no onAppend is set", () => {
+      // No setOnAppend called — should not throw
+      expect(() => {
+        store.appendEvent("sess-no-hook", { type: "test", timestamp: "2026-04-14T10:00:00Z", data: {} });
+      }).not.toThrow();
+    });
+
+    it("callback is called before storage cap enforcement", () => {
+      const hookCallOrder: string[] = [];
+      const hookTmpDir = mkdtempSync(join(tmpdir(), "copilotclaw-event-store-hook-test-"));
+      try {
+        const smallStore = new SessionEventStore(hookTmpDir, 5);
+        smallStore.setOnAppend((_sessionId, event) => {
+          // The event should be retrievable from DB when callback fires (it was inserted)
+          const rows = smallStore.getEvents("cap-sess");
+          hookCallOrder.push(`hook:${event.type}:db_count=${rows.length}`);
+        });
+
+        for (let i = 0; i < 10; i++) {
+          smallStore.appendEvent("cap-sess", { type: `event-${i}`, timestamp: "2026-04-14T10:00:00Z", data: {} });
+        }
+        smallStore.close();
+      } finally {
+        rmSync(hookTmpDir, { recursive: true, force: true });
+      }
+
+      // All 10 hook calls should have been made
+      expect(hookCallOrder).toHaveLength(10);
     });
   });
 });

@@ -593,6 +593,13 @@ async function main(): Promise<void> {
         entries: [entry],
       });
     });
+    // Wire session event store to session-scoped SSE so SessionEventsPage receives live events.
+    sessionEventStore.setOnAppend((sessionId, event) => {
+      serverHandle!.sseBroadcaster!.broadcastToSession(sessionId, {
+        type: "session_event_appended",
+        event,
+      });
+    });
   }
 
   // Agent status change detection state (for global SSE push)

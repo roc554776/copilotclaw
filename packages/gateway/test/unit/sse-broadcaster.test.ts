@@ -322,3 +322,201 @@ describe("SSE /api/global-events (global-scoped)", () => {
     await freshHandle.close();
   });
 });
+
+describe("SSE /api/sessions/:id/events/stream (session-scoped)", () => {
+  it("session client receives session_event_appended via broadcastToSession", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+
+    const sessionEvents: Array<{ type: string; data: unknown }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve, reject) => {
+      fetch(`${freshUrl}/api/sessions/test-session-abc/events/stream`, { signal: controller.signal })
+        .then(async (res) => {
+          if (res.status !== 200) { reject(new Error(`SSE status ${res.status}`)); return; }
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const parsed = JSON.parse(line.slice(6)) as { type: string };
+                    sessionEvents.push({ type: parsed.type, data: parsed });
+                  } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    // Broadcast to the correct session
+    freshHandle.sseBroadcaster.broadcastToSession("test-session-abc", {
+      type: "session_event_appended",
+      event: { type: "tool.execution_start", timestamp: "2026-04-14T10:00:00Z", data: { toolName: "bash" } },
+    });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    expect(sessionEvents.find((e) => e.type === "session_event_appended")).toBeTruthy();
+
+    await freshHandle.close();
+  });
+
+  it("session client does NOT receive broadcastToSession for a different session", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+
+    const sessionEvents: Array<{ type: string }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve) => {
+      fetch(`${freshUrl}/api/sessions/session-A/events/stream`, { signal: controller.signal })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try { sessionEvents.push(JSON.parse(line.slice(6)) as { type: string }); } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    // Broadcast to session-B — session-A client should NOT receive
+    freshHandle.sseBroadcaster.broadcastToSession("session-B", {
+      type: "session_event_appended",
+      event: { type: "tool.execution_start", timestamp: "2026-04-14T10:00:00Z", data: {} },
+    });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    expect(sessionEvents).toHaveLength(0);
+
+    await freshHandle.close();
+  });
+
+  it("session client does NOT receive broadcastGlobal events", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+
+    const sessionEvents: Array<{ type: string }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve) => {
+      fetch(`${freshUrl}/api/sessions/sess-xyz/events/stream`, { signal: controller.signal })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try { sessionEvents.push(JSON.parse(line.slice(6)) as { type: string }); } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    freshHandle.sseBroadcaster.broadcastGlobal({ type: "agent_status_change", version: "x", running: false });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    expect(sessionEvents).toHaveLength(0);
+
+    await freshHandle.close();
+  });
+
+  it("channel client does NOT receive broadcastToSession events", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+    const channels = await (await fetch(`${freshUrl}/api/channels`)).json() as Array<{ id: string }>;
+    const chId = channels[0]!.id;
+
+    const channelEvents: Array<{ type: string }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve) => {
+      fetch(`${freshUrl}/api/events?channel=${chId}`, { signal: controller.signal })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try { channelEvents.push(JSON.parse(line.slice(6)) as { type: string }); } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    freshHandle.sseBroadcaster.broadcastToSession("some-session", {
+      type: "session_event_appended",
+      event: { type: "tool.execution_start", timestamp: "2026-04-14T10:00:00Z", data: {} },
+    });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    expect(channelEvents).toHaveLength(0);
+
+    await freshHandle.close();
+  });
+});

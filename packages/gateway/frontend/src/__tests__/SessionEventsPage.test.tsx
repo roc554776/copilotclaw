@@ -3,6 +3,30 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionEventsPage } from "../pages/SessionEventsPage";
 
+// Mock EventSource — URL-map based, same pattern as DashboardPage.test.tsx
+const mockEventSources = new Map<string, MockEventSource>();
+
+class MockEventSource {
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  readyState = 1;
+  constructor(public url: string) {
+    mockEventSources.set(url, this);
+  }
+  close() {
+    this.readyState = 2;
+    mockEventSources.delete(this.url);
+  }
+}
+
+(globalThis as unknown as Record<string, unknown>).EventSource = MockEventSource;
+
+/** Helper to get the session SSE source for a given sessionId */
+function getSessionSse(sessionId: string): MockEventSource | undefined {
+  return mockEventSources.get(`/api/sessions/${encodeURIComponent(sessionId)}/events/stream`);
+}
+
 const mockEvents = [
   {
     id: 1,
@@ -52,6 +76,8 @@ function renderPage(sessionId = "test-session-id") {
 
 describe("SessionEventsPage", () => {
   beforeEach(() => {
+    cleanup();
+    mockEventSources.clear();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
@@ -170,7 +196,76 @@ describe("SessionEventsPage", () => {
     });
   });
 
-  it("polls for new events", async () => {
+  it("subscribes to SSE stream on mount", async () => {
+    renderPage("test-session-id");
+
+    await waitFor(() => {
+      expect(getSessionSse("test-session-id")).not.toBeUndefined();
+    });
+  });
+
+  it("appends event to state when session_event_appended SSE message arrives", async () => {
+    renderPage("test-session-id");
+
+    await waitFor(() => {
+      expect(screen.getAllByText("session.start").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const src = getSessionSse("test-session-id");
+    expect(src).not.toBeUndefined();
+
+    // Dispatch a new event via SSE
+    src!.onmessage?.({
+      data: JSON.stringify({
+        type: "session_event_appended",
+        event: {
+          id: 99,
+          type: "tool.execution_complete",
+          timestamp: "2026-04-14T10:03:00Z",
+          data: { result: "ok" },
+        },
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("tool.execution_complete").length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("deduplicates events with same id received via SSE", async () => {
+    renderPage("test-session-id");
+
+    await waitFor(() => {
+      expect(screen.getAllByText("session.start").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const src = getSessionSse("test-session-id");
+    expect(src).not.toBeUndefined();
+
+    const newEvent = {
+      type: "session_event_appended",
+      event: {
+        id: 1, // same id as existing mockEvents[0]
+        type: "session.start",
+        timestamp: "2026-03-28T10:00:00Z",
+        data: { sessionId: "sess-abc" },
+      },
+    };
+
+    // Dispatch the same event twice
+    src!.onmessage?.({ data: JSON.stringify(newEvent) });
+    src!.onmessage?.({ data: JSON.stringify(newEvent) });
+
+    // Wait briefly
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    // Count should remain 3 (no duplicates added)
+    await waitFor(() => {
+      expect(screen.getAllByText("(3 events loaded)").length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("does not poll for new events (no additional fetch calls after initial load)", async () => {
     renderPage();
 
     await waitFor(() => {
@@ -179,11 +274,23 @@ describe("SessionEventsPage", () => {
 
     const initialCount = vi.mocked(fetch).mock.calls.length;
 
-    // Advance timer by 2 seconds for next poll
-    vi.advanceTimersByTime(2000);
+    // Advance timer well past old 2s polling interval — no new fetches should occur
+    vi.advanceTimersByTime(6000);
+
+    // Fetch call count should remain unchanged (no polling)
+    expect(vi.mocked(fetch).mock.calls.length).toBe(initialCount);
+  });
+
+  it("initial snapshot fetch is preserved", async () => {
+    renderPage("test-session-id");
 
     await waitFor(() => {
-      expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(initialCount);
+      const calls = vi.mocked(fetch).mock.calls;
+      const eventFetches = calls.filter((c) => {
+        const url = typeof c[0] === "string" ? c[0] : (c[0] as Request).url;
+        return url.includes("/api/sessions/test-session-id/events");
+      });
+      expect(eventFetches.length).toBeGreaterThanOrEqual(1);
     });
   });
 });

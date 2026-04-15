@@ -162,6 +162,7 @@ function createRequestHandler(
   getCronJobStatuses: (() => CronJobStatus[]) | null,
   saveCronJobs: ((jobs: Array<{ id: string; channelId: string; intervalMs: number; message: string; disabled?: boolean }>) => void) | null,
   saveChannelModel: ((channelId: string, model: string | null) => void) | null,
+  sseBroadcaster: SseBroadcaster,
 ) {
   return async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { method, url } = req;
@@ -585,6 +586,14 @@ function createRequestHandler(
       return;
     }
 
+    // GET /api/sessions/:id/events/stream — SSE stream for live session events (always available)
+    const eventsStreamMatch = /^\/api\/sessions\/([^/]+)\/events\/stream$/.exec(fullPathname);
+    if (eventsStreamMatch !== null && method === "GET") {
+      const sessionId = decodeURIComponent(eventsStreamMatch[1]!);
+      sseBroadcaster.addSessionClient(res, sessionId);
+      return;
+    }
+
     // Session event routes (observability)
     if (sessionEventStore !== null) {
       // POST /api/session-events — agent posts events here
@@ -760,7 +769,7 @@ export function startServer(options?: ServerDeps): Promise<ServerHandle> {
   const saveCronJobs = options?.saveCronJobs ?? null;
   const saveChannelModel = options?.saveChannelModel ?? null;
   const sessionController = options?.sessionController ?? null;
-  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, sessionController, onCronReload, getCronJobStatuses, saveCronJobs, saveChannelModel);
+  const handleRequest = createRequestHandler(store, onStop, agentManager, channelProviders, logBuffer, sessionEventStore, sessionOrchestrator, sessionController, onCronReload, getCronJobStatuses, saveCronJobs, saveChannelModel, sseBroadcaster);
 
   // Create default channel on startup
   if (store.listChannels().length === 0) {
