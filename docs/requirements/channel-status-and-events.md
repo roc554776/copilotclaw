@@ -144,8 +144,11 @@ v0.74.0 で追加実現（補足 — primary scope は global だが同インフ
 v0.75.0 で追加実現:
 - `token_usage_update` global event を新設。`sessionEventStore.setOnAppend` の `assistant.usage` 分岐で 5h ウィンドウ集計を `broadcastGlobal` 送信。StatusPage の SSE handler で受信して `tokenUsage5h` を更新。`usePolling(refreshPeriods, 60000)` は削除済み
 
+v0.76.0 で追加実現:
+- `channel_list_change` global event を新設。`Store.setOnChannelListChange` hook で channel の作成・アーカイブ・unarchive・モデル変更（saveDraft は除外）を検知し `broadcastChannelListChange`（daemon.ts export）経由で全チャンネルリストを `broadcastGlobal` 送信。DashboardPage の `channel_list_change` 分岐でチャンネルリスト更新・`showArchived` によるフィルタリング・アクティブチャンネル消滅時の先頭チャンネルへのフォールバックを実装
+
 未実現のまま:
-- `quota_update` / `models_update` / `channel_list_change` / `config_change` 等の global event
+- `quota_update` / `models_update` / `config_change` 等の global event
 - これらに対応する backend broadcast 実装（`quota` / `models` は agent_status_change 受信時に re-fetch する設計であり、元々定期ポーリングは存在しなかった）
 
 ### Req: ポーリング依存の解消（v0.72.0 で部分実現）
@@ -168,6 +171,9 @@ v0.74.0 で解消した部分:
 
 v0.75.0 で解消した部分:
 - `StatusPage` の `GET /api/token-usage` ポーリング — `token_usage_update` global SSE event 新設・`sessionEventStore.setOnAppend` の `assistant.usage` 分岐で 5h ウィンドウ集計を `broadcastGlobal` 送信・`StatusPage` の SSE onmessage で受信して `tokenUsage5h` を更新。`usePolling(refreshPeriods, 60000)` も削除済み
+
+v0.76.0 で解消した部分:
+- `DashboardPage` チャンネルリストのリアルタイム更新 — `channel_list_change` global SSE event 新設・`Store.setOnChannelListChange` hook + `broadcastChannelListChange`（daemon.ts）で wire・`DashboardPage` の SSE onmessage で受信してチャンネルリスト更新。初回 snapshot fetch + SSE イベント受信でリアルタイム更新（チャンネル作成・アーカイブ・unarchive・モデル変更）
 
 未実現のまま:
 - `StatusPage` の `quota_update` / `models_update` global SSE event — `GET /api/quota` / `GET /api/models` は元々定期ポーリングでなく初回 snapshot fetch のみだが、変化時の push 配信が未実現

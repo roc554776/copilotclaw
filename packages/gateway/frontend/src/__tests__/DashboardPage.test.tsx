@@ -592,6 +592,100 @@ describe("DashboardPage", () => {
     });
   });
 
+  describe("channel_list_change global SSE event", () => {
+    it("updates channels state when channel_list_change arrives", async () => {
+      render(
+        <MemoryRouter>
+          <DashboardPage />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => {
+        expect(getGlobalSse()).not.toBeUndefined();
+      });
+
+      const globalSrc = getGlobalSse()!;
+
+      // Dispatch channel_list_change with new channel list (3 channels)
+      globalSrc.onmessage?.({
+        data: JSON.stringify({
+          type: "channel_list_change",
+          channels: [
+            { id: "ch-001-full-uuid", createdAt: "2026-03-28T09:00:00Z" },
+            { id: "ch-002-full-uuid", createdAt: "2026-03-28T09:01:00Z" },
+            { id: "ch-003-full-uuid", createdAt: "2026-03-28T09:02:00Z" },
+          ],
+        }),
+      });
+
+      await waitFor(() => {
+        expect(screen.getAllByText("ch-003-f").length).toBeGreaterThanOrEqual(1);
+      });
+    });
+
+    it("filters out archived channels when showArchived is false (default)", async () => {
+      render(
+        <MemoryRouter>
+          <DashboardPage />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => {
+        expect(getGlobalSse()).not.toBeUndefined();
+      });
+
+      const globalSrc = getGlobalSse()!;
+
+      // Send a list that includes an archived channel
+      globalSrc.onmessage?.({
+        data: JSON.stringify({
+          type: "channel_list_change",
+          channels: [
+            { id: "ch-001-full-uuid", createdAt: "2026-03-28T09:00:00Z" },
+            { id: "ch-archived-uuid", createdAt: "2026-03-28T09:01:00Z", archivedAt: "2026-04-01T00:00:00Z" },
+          ],
+        }),
+      });
+
+      // Wait briefly for state to settle
+      await waitFor(() => {
+        // ch-archived should not be visible (filtered out by showArchived=false)
+        expect(screen.queryByText("ch-archi")).toBeNull();
+      });
+      // ch-001 should still be visible
+      expect(screen.getAllByText("ch-001-f").length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("falls back to first channel when active channel is absent after channel_list_change", async () => {
+      render(
+        <MemoryRouter initialEntries={["/?channel=ch-002-full-uuid"]}>
+          <DashboardPage />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => {
+        expect(getGlobalSse()).not.toBeUndefined();
+      });
+
+      const globalSrc = getGlobalSse()!;
+
+      // Send a list that does NOT include the current active channel (ch-002-full-uuid)
+      globalSrc.onmessage?.({
+        data: JSON.stringify({
+          type: "channel_list_change",
+          channels: [
+            { id: "ch-001-full-uuid", createdAt: "2026-03-28T09:00:00Z" },
+          ],
+        }),
+      });
+
+      // After the event, ch-001 should become active (setSearchParams fallback)
+      await waitFor(() => {
+        expect(screen.getAllByText("ch-001-f").length).toBeGreaterThanOrEqual(1);
+      });
+    });
+  });
+
   it("does not use polling for logs (fetchLogs not called on timer advances)", async () => {
     const fetchMock = vi.mocked(fetch);
 

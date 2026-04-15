@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import { Store } from "../../src/store.js";
 
 describe("Store", () => {
@@ -401,6 +401,72 @@ describe("Store", () => {
       const channels = store.listChannels();
       const ch = channels.find((c) => c.id === channelId);
       expect(ch?.draft).toBe("my draft");
+    });
+  });
+
+  describe("channel list change hook", () => {
+    it("calls callback when createChannel succeeds", () => {
+      const cb = vi.fn();
+      store.setOnChannelListChange(cb);
+      store.createChannel();
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it("calls callback when archiveChannel succeeds", () => {
+      const cb = vi.fn();
+      store.setOnChannelListChange(cb);
+      const result = store.archiveChannel(channelId);
+      expect(result).toBe(true);
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT call callback when archiveChannel fails (non-existent id)", () => {
+      const cb = vi.fn();
+      store.setOnChannelListChange(cb);
+      const result = store.archiveChannel("nonexistent-id");
+      expect(result).toBe(false);
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it("calls callback when unarchiveChannel succeeds", () => {
+      const cb = vi.fn();
+      store.archiveChannel(channelId); // first archive
+      store.setOnChannelListChange(cb);
+      const result = store.unarchiveChannel(channelId);
+      expect(result).toBe(true);
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT call callback when unarchiveChannel fails (not archived)", () => {
+      const cb = vi.fn();
+      store.setOnChannelListChange(cb);
+      // channelId is not archived, so unarchive should fail
+      const result = store.unarchiveChannel(channelId);
+      expect(result).toBe(false);
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it("calls callback when updateChannelModel succeeds", () => {
+      const cb = vi.fn();
+      store.setOnChannelListChange(cb);
+      const result = store.updateChannelModel(channelId, "claude-3-5-sonnet");
+      expect(result).toBe(true);
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT call callback when updateChannelModel fails (non-existent id)", () => {
+      const cb = vi.fn();
+      store.setOnChannelListChange(cb);
+      const result = store.updateChannelModel("nonexistent-id", "claude-3-5-sonnet");
+      expect(result).toBe(false);
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it("does NOT call callback when saveDraft is called (draft does not affect channel list)", () => {
+      const cb = vi.fn();
+      store.setOnChannelListChange(cb);
+      store.saveDraft(channelId, "draft text");
+      expect(cb).not.toHaveBeenCalled();
     });
   });
 });

@@ -488,7 +488,7 @@ type GlobalSseEvent =
   | { type: "gateway_status_change"; version: string; running: boolean }      // 実装済み
   | { type: "agent_status_change"; version: string | undefined; running: boolean }  // 実装済み
   | { type: "agent_compatibility_change"; compatibility: "compatible" | "incompatible" | "unavailable" }  // 実装済み
-  | { type: "channel_list_change" }                                           // （未実現）
+  | { type: "channel_list_change"; channels: Channel[] }                       // v0.76.0 実装済み
   | { type: "config_change" }                                                 // （未実現）
   | { type: "system_status_change" }                                          // （未実現）
   // ポーリング置換のために追加される event 型
@@ -536,7 +536,7 @@ global event（`/api/global-events` で配信）:
 - `gateway_status_change` — gateway バージョン・起動状態の変化
 - `agent_status_change` — agent バージョン・起動状態の変化
 - `agent_compatibility_change` — compatibility の変化
-- `channel_list_change` — チャンネルの追加・アーカイブ・変更
+- `channel_list_change` — チャンネルの追加・アーカイブ・変更（v0.76.0 実装済み）
 - `config_change` — config 設定の変化
 - `system_status_change` — system 全体のステータス変化
 

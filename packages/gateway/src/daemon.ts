@@ -19,6 +19,23 @@ const AGENT_MONITOR_ERROR_THRESHOLD = 3;
 const ORCHESTRATOR_CHECK_INTERVAL_MS = 30_000; // 30 seconds
 
 /**
+ * Broadcasts a channel_list_change global SSE event with the current full channel list.
+ * Exported so integration tests can import and exercise the exact same code path,
+ * eliminating the risk of test/implementation drift.
+ */
+export function broadcastChannelListChange(
+  store: Store,
+  sseBroadcaster: { broadcastGlobal: (event: import("./sse-broadcaster.js").GlobalSseEvent) => void },
+): void {
+  try {
+    const channels = store.listChannels({ includeArchived: true });
+    sseBroadcaster.broadcastGlobal({ type: "channel_list_change", channels });
+  } catch (err) {
+    console.error("Failed to broadcast channel_list_change", err);
+  }
+}
+
+/**
  * Broadcasts a token_usage_update global SSE event when an assistant.usage session event is appended.
  * Exported so integration tests can import and exercise the exact same code path,
  * eliminating the risk of test/implementation drift.
@@ -623,6 +640,10 @@ async function main(): Promise<void> {
         event,
       });
       broadcastTokenUsageIfNeeded(event, sessionEventStore, serverHandle!.sseBroadcaster!);
+    });
+    // Wire store channel list changes to global SSE so DashboardPage receives live channel updates.
+    store.setOnChannelListChange(() => {
+      broadcastChannelListChange(store, serverHandle!.sseBroadcaster!);
     });
   }
 

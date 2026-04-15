@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import type { LogEntry } from "./log-buffer.js";
 import type { SessionEvent } from "./session-event-store.js";
+import type { Channel } from "./store.js";
 
 /**
  * Token usage summary aggregated per model over a time window.
@@ -39,7 +40,8 @@ export type GlobalSseEvent =
   | { type: "agent_status_change"; version: string | undefined; running: boolean }
   | { type: "agent_compatibility_change"; compatibility: "compatible" | "incompatible" | "unavailable" }
   | { type: "log_appended"; entries: LogEntry[] }
-  | { type: "token_usage_update"; summary: TokenUsageSummary };
+  | { type: "token_usage_update"; summary: TokenUsageSummary }
+  | { type: "channel_list_change"; channels: Channel[] };
 
 /**
  * Server-Sent Events broadcaster. Uses SSE instead of WebSocket

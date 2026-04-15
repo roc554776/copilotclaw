@@ -97,8 +97,13 @@ export function DashboardPage() {
   const evtSourceRef = useRef<EventSource | null>(null);
   const refreshStatusRef = useRef<() => void>(() => {});
   const modalAbortRef = useRef<AbortController | null>(null);
+  // Ref to allow the mount-once global SSE closure to read latest showArchived without reconnecting.
+  const showArchivedRef = useRef(showArchived);
 
   const activeChannelId = searchParams.get("channel") ?? channels[0]?.id;
+
+  // Keep showArchivedRef in sync with the latest value.
+  showArchivedRef.current = showArchived;
 
   /* H-5: use stable primitive (messages.length) instead of messages array */
   const { containerRef: chatRef, handleScroll: handleChatScroll } =
@@ -410,6 +415,7 @@ export function DashboardPage() {
             running?: boolean;
             compatibility?: string;
             entries?: LogEntry[];
+            channels?: Channel[];
           };
           if (event.type === "agent_status_change") {
             setAgentVersion(event.version ?? "--");
@@ -419,6 +425,18 @@ export function DashboardPage() {
             const entries = event.entries ?? [];
             if (entries.length > 0) {
               setLogs((prev) => [...entries.slice().reverse(), ...prev].slice(0, 200));
+            }
+          } else if (event.type === "channel_list_change") {
+            const allChannels = event.channels ?? [];
+            const filtered = showArchivedRef.current ? allChannels : allChannels.filter((c) => !c.archivedAt);
+            setChannels(filtered);
+            // If the active channel disappeared from the filtered list, fall back to the first channel.
+            const currentActiveId = activeChannelIdRef.current;
+            if (currentActiveId && !filtered.some((c) => c.id === currentActiveId)) {
+              const first = filtered[0];
+              if (first) {
+                setSearchParams({ channel: first.id });
+              }
             }
           }
         } catch {

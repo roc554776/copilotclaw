@@ -29,6 +29,7 @@ export interface StoreOptions {
 
 export class Store {
   private readonly db: Database.Database;
+  private onChannelListChange?: () => void;
 
   constructor(options?: StoreOptions) {
     const dbPath = options?.persistPath ?? ":memory:";
@@ -192,12 +193,18 @@ export class Store {
     }
   }
 
+  /** Register a callback to be called when the channel list changes (create/archive/unarchive/model update). */
+  setOnChannelListChange(cb: () => void): void {
+    this.onChannelListChange = cb;
+  }
+
   createChannel(): Channel {
     const channel: Channel = {
       id: randomUUID(),
       createdAt: new Date().toISOString(),
     };
     this.db.prepare("INSERT INTO channels (id, createdAt) VALUES (?, ?)").run(channel.id, channel.createdAt);
+    this.onChannelListChange?.();
     return channel;
   }
 
@@ -215,6 +222,7 @@ export class Store {
   /** Update the model setting for a channel. Pass null to clear (use global default). */
   updateChannelModel(channelId: string, model: string | null): boolean {
     const result = this.db.prepare("UPDATE channels SET model = ? WHERE id = ?").run(model, channelId);
+    if (result.changes > 0) this.onChannelListChange?.();
     return result.changes > 0;
   }
 
@@ -227,11 +235,13 @@ export class Store {
 
   archiveChannel(channelId: string): boolean {
     const result = this.db.prepare("UPDATE channels SET archivedAt = ? WHERE id = ? AND archivedAt IS NULL").run(new Date().toISOString(), channelId);
+    if (result.changes > 0) this.onChannelListChange?.();
     return result.changes > 0;
   }
 
   unarchiveChannel(channelId: string): boolean {
     const result = this.db.prepare("UPDATE channels SET archivedAt = NULL WHERE id = ? AND archivedAt IS NOT NULL").run(channelId);
+    if (result.changes > 0) this.onChannelListChange?.();
     return result.changes > 0;
   }
 

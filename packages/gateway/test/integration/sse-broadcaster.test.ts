@@ -322,6 +322,61 @@ describe("SSE /api/global-events (global-scoped)", () => {
     await freshHandle.close();
   });
 
+  it("global client receives broadcastGlobal channel_list_change event", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+
+    const events: Array<{ type: string; data: unknown }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve, reject) => {
+      fetch(`${freshUrl}/api/global-events`, { signal: controller.signal })
+        .then(async (res) => {
+          if (res.status !== 200) { reject(new Error(`SSE status ${res.status}`)); return; }
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const parsed = JSON.parse(line.slice(6)) as { type: string };
+                    events.push({ type: parsed.type, data: parsed });
+                  } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    const testChannels = [{ id: "ch-abc", createdAt: "2026-04-15T00:00:00Z" }];
+
+    freshHandle.sseBroadcaster.broadcastGlobal({
+      type: "channel_list_change",
+      channels: testChannels,
+    });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    const received = events.find((e) => e.type === "channel_list_change");
+    expect(received).toBeTruthy();
+    expect((received!.data as { channels: typeof testChannels }).channels).toEqual(testChannels);
+
+    await freshHandle.close();
+  });
+
   it("global client receives broadcastGlobal token_usage_update event", async () => {
     const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
     const freshUrl = `http://localhost:${freshHandle.port}`;
