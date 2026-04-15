@@ -36,6 +36,20 @@ export function broadcastChannelListChange(
 }
 
 /**
+ * Wires the Store's channel list change callback to `broadcastChannelListChange`.
+ * Exported as a named function so integration tests can import and verify the wire-up directly,
+ * ensuring that tests break if this coupling is accidentally changed (drift prevention).
+ */
+export function wireStoreToChannelListChange(
+  store: Store,
+  sseBroadcaster: { broadcastGlobal: (event: import("./sse-broadcaster.js").GlobalSseEvent) => void },
+): void {
+  store.setOnChannelListChange(() => {
+    broadcastChannelListChange(store, sseBroadcaster);
+  });
+}
+
+/**
  * Broadcasts a token_usage_update global SSE event when an assistant.usage session event is appended.
  * Exported so integration tests can import and exercise the exact same code path,
  * eliminating the risk of test/implementation drift.
@@ -642,9 +656,7 @@ async function main(): Promise<void> {
       broadcastTokenUsageIfNeeded(event, sessionEventStore, serverHandle!.sseBroadcaster!);
     });
     // Wire store channel list changes to global SSE so DashboardPage receives live channel updates.
-    store.setOnChannelListChange(() => {
-      broadcastChannelListChange(store, serverHandle!.sseBroadcaster!);
-    });
+    wireStoreToChannelListChange(store, serverHandle!.sseBroadcaster!);
   }
 
   // Agent status change detection state (for global SSE push)

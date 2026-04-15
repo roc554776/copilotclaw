@@ -468,5 +468,39 @@ describe("Store", () => {
       store.saveDraft(channelId, "draft text");
       expect(cb).not.toHaveBeenCalled();
     });
+
+    it("throws in callback does not propagate to createChannel caller", () => {
+      store.setOnChannelListChange(() => { throw new Error("callback boom"); });
+      let result: ReturnType<typeof store.createChannel> | undefined;
+      expect(() => { result = store.createChannel(); }).not.toThrow();
+      expect(result).toBeDefined();
+      expect(result!.id).toBeTruthy();
+    });
+
+    it("throws in callback does not propagate to archiveChannel caller", () => {
+      store.setOnChannelListChange(() => { throw new Error("callback boom"); });
+      expect(() => { store.archiveChannel(channelId); }).not.toThrow();
+    });
+
+    it("throws in callback does not propagate to unarchiveChannel caller", () => {
+      store.archiveChannel(channelId);
+      store.setOnChannelListChange(() => { throw new Error("callback boom"); });
+      expect(() => { store.unarchiveChannel(channelId); }).not.toThrow();
+    });
+
+    it("throws in callback does not propagate to updateChannelModel caller", () => {
+      store.setOnChannelListChange(() => { throw new Error("callback boom"); });
+      expect(() => { store.updateChannelModel(channelId, "gpt-4.1"); }).not.toThrow();
+    });
+
+    it("does NOT call callback on second archiveChannel when already archived", () => {
+      const ch = store.createChannel();
+      const cb = vi.fn();
+      store.setOnChannelListChange(cb);
+      store.archiveChannel(ch.id); // succeeds → cb count = 1
+      expect(cb).toHaveBeenCalledTimes(1);
+      store.archiveChannel(ch.id); // no-op (already archived) → cb count unchanged
+      expect(cb).toHaveBeenCalledTimes(1);
+    });
   });
 });
