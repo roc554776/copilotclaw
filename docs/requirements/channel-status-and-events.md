@@ -117,7 +117,9 @@ v0.70.0 で実現した部分:
 - session event のページも同様に、新着イベントがポーリングなしでリアルタイムに表示される
 - ポーリング由来の更新遅延が発生しない
 
-v0.68.1 で部分実現: `session_status_change` SSE event の frontend 受信・処理を実装した（`DashboardPage` の SSE onmessage handler に分岐を追加し、`event.data.status` で `setSessionStatus` を更新）。SSE エンドポイント分離・ポーリング置換・session event ページのリアルタイム化は未実現のまま。
+v0.68.1 で部分実現: `session_status_change` SSE event の frontend 受信・処理を実装した（`DashboardPage` の SSE onmessage handler に分岐を追加し、`event.data.status` で `setSessionStatus` を更新）。SSE エンドポイント分離・ポーリング置換は未実現のまま。
+
+v0.74.0 で追加実現: session event ページのリアルタイム化（`/api/sessions/:id/events/stream` session-scoped SSE エンドポイント新設、`SessionEventsPage` の EventSource 購読とポーリング削除）。
 
 ### Req: グローバル情報のための専用 SSE（v0.72.0 で部分実現）
 
@@ -135,6 +137,9 @@ v0.72.0 で実現した部分:
 
 v0.73.0 で追加実現:
 - `log_appended` global event（`LogBuffer.setOnAppend` フックで `broadcastGlobal` を wire。`DashboardPage` の `log_appended` 受信処理と `logsVisible` 変化時の one-shot snapshot fetch）
+
+v0.74.0 で追加実現（補足 — primary scope は global だが同インフラを session scope にも拡張）:
+- `SseClientScope` に `{ type: "session"; sessionId: string }` スコープを追加し、`addSessionClient` / `broadcastToSession` / `SseSessionEvent` を実装。`sessionEventStore.setOnAppend` フックで session-scoped broadcast を wire。global SSE とは独立したエンドポイント（`/api/sessions/:id/events/stream`）として提供
 
 未実現のまま:
 - `quota_update` / `models_update` / `token_usage_update` / `channel_list_change` / `config_change` 等の global event
@@ -155,9 +160,11 @@ v0.72.0 で解消した部分:
 v0.73.0 で解消した部分:
 - `DashboardPage` の `GET /api/logs` 3s ポーリング — `log_appended` global SSE + `logsVisible` 変化時の one-shot snapshot fetch に置き換え済み
 
+v0.74.0 で解消した部分:
+- `SessionEventsPage` の `GET /api/sessions/{sessionId}/events` 2s ポーリング — `/api/sessions/:id/events/stream` session-scoped SSE エンドポイント新設・`sessionEventStore.setOnAppend` wire・`SessionEventsPage` の EventSource 購読に置き換え済み
+
 未実現のまま:
 - `StatusPage` の `GET /api/quota` / `GET /api/models` / `GET /api/token-usage` ポーリング
-- `SessionEventsPage` の `GET /api/sessions/{sessionId}/events` 2s ポーリング
 
 ### Req: channel operator / worker のツール割り当て整理（v0.69.0 で部分実現）
 

@@ -441,13 +441,14 @@ type PendingQueueCommand =
 
 ### Gateway: SSE Broadcaster subsystem
 
-**現状（v0.72.0 時点）**
+**現状（v0.74.0 時点）**
 
 `clients = new Set<SseClient>()`、ephemeral、missed events の replay なし。
 
-`SseClient` は `scope: { type: "channel"; channelId: string } | { type: "global" }` のスコープ分離済み。エンドポイントは 2 本:
+`SseClient` は `scope: { type: "channel"; channelId: string } | { type: "global" } | { type: "session"; sessionId: string }` のスコープ分離済み。エンドポイントは 3 本:
 - `/api/events?channel=...` — channel-scoped（`addChannelClient`）
 - `/api/global-events` — global-scoped（`addGlobalClient`、v0.72.0 で新設）
+- `/api/sessions/:id/events/stream` — session-scoped（`addSessionClient`、v0.74.0 で新設）
 
 `broadcastAll()` は存在しない（v0.72.0 で削除済み）。`broadcast()` は deprecated 互換実装として残存（channelId ありの場合は `broadcastToChannel` に委譲、なしの場合は no-op）。
 
@@ -588,18 +589,15 @@ process state（実際の SSE ソケット）は effect runtime が管理し、w
 | `StatusPage` | `GET /api/models` | 5s | global SSE | 新規 global event `models_update` を追加する。モデル一覧は変化頻度が低いため、初回接続時の `SendReplayEvents` で最新値を受け取り、変化時のみ更新 event を受信する設計が合理的（未実現）|
 | `StatusPage` | `GET /api/token-usage` (5h window) | 5s | global SSE | 新規 global event `token_usage_update` を追加し、トークン消費が記録されるたびに broadcast する。`TokenUsagePage` の自動更新（1 分ポーリング）も同 event で置き換える（未実現）|
 | `StatusPage` | 複数期間の `GET /api/token-usage` | 60s | global SSE | 同上。`token_usage_update` を受信した frontend が最新データを pull するか、event payload にサマリーを含める形で対応する（実装時に決定）（未実現）|
-| `SessionEventsPage` | `GET /api/sessions/{sessionId}/events` | 2s | channel-scoped SSE または session-scoped SSE | 専用 session-scoped SSE エンドポイントを追加するか、既存の channel-scoped SSE（`/api/channels/{channelId}/events`）を拡張して session event の差分を `channel_timeline_event` として配信する設計を採用する（詳細は下記注を参照）（未実現）|
+| `SessionEventsPage` | ~~`GET /api/sessions/{sessionId}/events` 2s~~ | ~~2s~~ | session-scoped SSE | **v0.74.0 で解消済み**。`/api/sessions/{sessionId}/events/stream` SSE エンドポイントを新設し、`sessionEventStore.setOnAppend` フックで `broadcastToSession` を wire。`SessionEventsPage` は EventSource で購読し、`session_event_appended` を受信してリアルタイム追記（id ベース dedup 付き）。周期ポーリングは削除済み |
 
 各ポーリング置換に対応する global event（`log_appended`（v0.73.0 実装済み） / `quota_update` / `models_update` / `token_usage_update`）の型定義は「新設計: SseEvent 型定義」節の `GlobalSseEvent` を参照。
 
-**`SessionEventsPage` の置換方針注記**
+**`SessionEventsPage` の置換方針注記（v0.74.0 で実現済み）**
 
-`SessionEventsPage` は特定 sessionId の session event stream を 2s ポーリングで取得している。置換候補は 2 つある。
+v0.74.0 で session-scoped SSE を新規追加する方針が採用・実装された。`/api/sessions/{sessionId}/events/stream` エンドポイントを新設し、`SseClientScope` に `{ type: "session"; sessionId: string }` スコープを追加。`sessionEventStore.setOnAppend` フックで `broadcastToSession(sessionId, { type: "session_event_appended", event })` を wire。`SessionEventsPage` は EventSource で購読し、id ベース dedup でリアルタイム追記する。周期ポーリングは削除済み。
 
-- **session-scoped SSE を新規追加する**（`/api/sessions/{sessionId}/events/stream`）: session に特化した専用エンドポイントとして追加する。SSE Broadcaster subsystem にセッションスコープのレイヤーを追加する必要がある
-- **channel-scoped SSE を拡張する**: channel に紐づく physical session の event を `channel_timeline_event` の一部として channel-scoped SSE で配信する。session event の raw dump（`SessionEventsPage` の現在の表示内容）は channel-scoped の概念から外れるため、この場合は SessionEventsPage は独立した SSE を持つことになる
-
-設計判断: channel-scoped SSE の `channel_timeline_event` で turn run 開始・停止・subagent ライフサイクルを配信する設計（上記「event 型の分類」節参照）は DashboardPage のタイムライン UI が対象であり、`SessionEventsPage` の raw session event stream とは用途が異なる。実装フェーズで session-scoped SSE の追加を優先し、raw event stream は session-scoped SSE で配信する方針を暫定とする。
+channel-scoped SSE を拡張する案（`channel_timeline_event`）は DashboardPage のタイムライン UI 向けに別途残存する設計とし、raw session event stream は session-scoped SSE で配信する方針が確定した。
 
 ### Agent: PhysicalSession subsystem
 

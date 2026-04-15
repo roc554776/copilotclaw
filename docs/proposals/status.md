@@ -215,7 +215,7 @@
     - `StatusPage`: `GET /api/quota` ポーリング → global SSE（新規 `quota_update` event）— 未実現
     - `StatusPage`: `GET /api/models` ポーリング → global SSE（新規 `models_update` event）— 未実現
     - `StatusPage`: `GET /api/token-usage` ポーリング → global SSE（新規 `token_usage_update` event）— 未実現
-    - `SessionEventsPage`: `GET /api/sessions/{sessionId}/events` 2s ポーリング → session-scoped SSE（新規 `/api/sessions/{sessionId}/events/stream` エンドポイントを追加する方針を暫定とする）— 未実現
+    - `SessionEventsPage`: `GET /api/sessions/{sessionId}/events` 2s ポーリング → session-scoped SSE（新規 `/api/sessions/{sessionId}/events/stream` エンドポイントを追加する方針を暫定とする）— **v0.74.0 で解消済み**（`SseClientScope` に `session` スコープ追加、`addSessionClient` / `broadcastToSession` / `SseSessionEvent` 実装、`sessionEventStore.setOnAppend` wire、`/api/sessions/:id/events/stream` エンドポイント追加、`SessionEventsPage` の EventSource 購読・dedup・`data-session-sse-connected` 属性）
 
 **未実現:**
 - 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — gateway 側・agent 側・IPC/cross-cutting の全 subsystem を対象に、world state / process state 分離・subsystem ごとの reducer・event bus による subsystem 間通信を導入する。下記の個別未実現項目はすべて本 proposal の実装に包含される
