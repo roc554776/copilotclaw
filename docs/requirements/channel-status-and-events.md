@@ -141,9 +141,12 @@ v0.73.0 で追加実現:
 v0.74.0 で追加実現（補足 — primary scope は global だが同インフラを session scope にも拡張）:
 - `SseClientScope` に `{ type: "session"; sessionId: string }` スコープを追加し、`addSessionClient` / `broadcastToSession` / `SseSessionEvent` を実装。`sessionEventStore.setOnAppend` フックで session-scoped broadcast を wire。global SSE とは独立したエンドポイント（`/api/sessions/:id/events/stream`）として提供
 
+v0.75.0 で追加実現:
+- `token_usage_update` global event を新設。`sessionEventStore.setOnAppend` の `assistant.usage` 分岐で 5h ウィンドウ集計を `broadcastGlobal` 送信。StatusPage の SSE handler で受信して `tokenUsage5h` を更新。`usePolling(refreshPeriods, 60000)` は削除済み
+
 未実現のまま:
-- `quota_update` / `models_update` / `token_usage_update` / `channel_list_change` / `config_change` 等の global event
-- これらに対応する backend broadcast 実装
+- `quota_update` / `models_update` / `channel_list_change` / `config_change` 等の global event
+- これらに対応する backend broadcast 実装（`quota` / `models` は agent_status_change 受信時に re-fetch する設計であり、元々定期ポーリングは存在しなかった）
 
 ### Req: ポーリング依存の解消（v0.72.0 で部分実現）
 

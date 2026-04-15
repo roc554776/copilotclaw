@@ -212,9 +212,9 @@
     - `DashboardPage`: `GET /api/status` 5s ポーリング → global SSE（v0.72.0 で解消。初回マウント時の snapshot fetch + `/api/global-events` の `agent_status_change` / `agent_compatibility_change` 受信で更新）
     - `StatusPage`: `GET /api/status` 5s ポーリング → global SSE（v0.72.0 で解消。`DashboardPage` と同様）
     - `DashboardPage`: `GET /api/logs` 3s ポーリング（Logs パネル表示中のみ）→ global SSE（`log_appended` event）— v0.73.0 で解消済み（`LogBuffer.setOnAppend` フックで `broadcastGlobal({ type: "log_appended", entries: [entry] })` を wire。`DashboardPage` は `logsVisible` 変化時に one-shot snapshot fetch + SSE `log_appended` 受信でリアルタイム更新。周期ポーリングは削除済み）
-    - `StatusPage`: `GET /api/quota` ポーリング → global SSE（新規 `quota_update` event）— 未実現
-    - `StatusPage`: `GET /api/models` ポーリング → global SSE（新規 `models_update` event）— 未実現
-    - `StatusPage`: `GET /api/token-usage` ポーリング → global SSE（新規 `token_usage_update` event）— 未実現
+    - `StatusPage`: `GET /api/quota` ポーリング → global SSE（新規 `quota_update` event）— 未実現（`quota` / `models` は agent_status_change 受信時に re-fetch する設計であり、元々定期ポーリングは存在しなかった）
+    - `StatusPage`: `GET /api/models` ポーリング → global SSE（新規 `models_update` event）— 未実現（同上）
+    - `StatusPage`: `GET /api/token-usage` 60s ポーリング（期間別 tokenUsagePeriods）→ one-shot fetch に置換 / `GET /api/token-usage` 5h ウィンドウ → global SSE（`token_usage_update` event）— **v0.75.0 で解消済み**（`usePolling(refreshPeriods, 60000)` 削除、`refreshPeriods` は初回マウント時 1 度だけ呼び出す。`sessionEventStore.setOnAppend` hook に `assistant.usage` 分岐を追加し、append 時に 5h ウィンドウ集計結果を `broadcastGlobal({ type: "token_usage_update", summary })` で配信。StatusPage の SSE `onmessage` handler で `token_usage_update` を受信して `tokenUsage5h` を更新）
     - `SessionEventsPage`: `GET /api/sessions/{sessionId}/events` 2s ポーリング → session-scoped SSE（新規 `/api/sessions/{sessionId}/events/stream` エンドポイントを追加する方針を暫定とする）— **v0.74.0 で解消済み**（`SseClientScope` に `session` スコープ追加、`addSessionClient` / `broadcastToSession` / `SseSessionEvent` 実装、`sessionEventStore.setOnAppend` wire、`/api/sessions/:id/events/stream` エンドポイント追加、`SessionEventsPage` の EventSource 購読・dedup・`data-session-sse-connected` 属性）
 
 **未実現:**

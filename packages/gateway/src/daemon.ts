@@ -594,11 +594,19 @@ async function main(): Promise<void> {
       });
     });
     // Wire session event store to session-scoped SSE so SessionEventsPage receives live events.
+    // Additionally, when an assistant.usage event is appended, broadcast a token_usage_update
+    // global event so StatusPage can update its 5h window without polling.
     sessionEventStore.setOnAppend((sessionId, event) => {
       serverHandle!.sseBroadcaster!.broadcastToSession(sessionId, {
         type: "session_event_appended",
         event,
       });
+      if (event.type === "assistant.usage") {
+        const now = new Date();
+        const from5h = new Date(now.getTime() - 5 * 3600_000).toISOString();
+        const summary = sessionEventStore.getTokenUsage(from5h, now.toISOString());
+        serverHandle!.sseBroadcaster!.broadcastGlobal({ type: "token_usage_update", summary });
+      }
     });
   }
 

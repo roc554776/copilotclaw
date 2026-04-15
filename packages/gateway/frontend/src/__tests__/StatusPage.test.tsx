@@ -1,19 +1,32 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StatusPage } from "../pages/StatusPage";
 
-// Mock EventSource — StatusPage uses it for /api/global-events
+// URL-map based MockEventSource so global SSE and other connections are independent
+const mockEventSources = new Map<string, MockEventSource>();
+
 class MockEventSource {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   readyState = 1;
-  constructor(public _url: string) {}
-  close() { this.readyState = 2; }
+  constructor(public url: string) {
+    mockEventSources.set(url, this);
+  }
+  close() {
+    this.readyState = 2;
+    mockEventSources.delete(this.url);
+  }
 }
 
+// Set early so it's available even before beforeEach runs
 (globalThis as unknown as Record<string, unknown>).EventSource = MockEventSource;
+
+/** Helper to get the global SSE source */
+function getGlobalSse(): MockEventSource | undefined {
+  return mockEventSources.get("/api/global-events");
+}
 
 const mockStatus = {
   gateway: { status: "running", version: "0.30.0", profile: "default" },
@@ -40,6 +53,7 @@ const mockStatus = {
 
 describe("StatusPage", () => {
   beforeEach(() => {
+    mockEventSources.clear();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
       const urlStr = typeof url === "string" ? url : (url as Request).url;
@@ -48,6 +62,15 @@ describe("StatusPage", () => {
       }
       if (urlStr.includes("/api/system-prompts/original")) {
         return { ok: true, json: () => Promise.resolve([]) } as Response;
+      }
+      if (urlStr.includes("/api/token-usage")) {
+        return { ok: true, json: () => Promise.resolve([]) } as Response;
+      }
+      if (urlStr.includes("/api/quota")) {
+        return { ok: false, json: () => Promise.resolve({}) } as Response;
+      }
+      if (urlStr.includes("/api/models")) {
+        return { ok: false, json: () => Promise.resolve({}) } as Response;
       }
       return { ok: false, json: () => Promise.resolve({}) } as Response;
     });
@@ -132,5 +155,111 @@ describe("StatusPage", () => {
       expect(sessionsLink!.textContent).toContain("All sessions");
       expect(sessionsLink!.textContent).not.toContain("physical");
     });
+  });
+
+  it("updates tokenUsage5h when token_usage_update SSE event is received", async () => {
+    render(
+      <MemoryRouter>
+        <StatusPage />
+      </MemoryRouter>,
+    );
+
+    // Wait for initial render
+    await waitFor(() => {
+      expect(screen.getAllByText("running").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Simulate SSE connected
+    const sseSource = getGlobalSse();
+    expect(sseSource).toBeDefined();
+
+    const summary = [
+      {
+        model: "claude-opus-4-5",
+        inputTokens: 12345,
+        outputTokens: 6789,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        multiplier: 1,
+      },
+    ];
+
+    // Fire the token_usage_update event via SSE
+    await act(async () => {
+      sseSource!.onmessage?.({
+        data: JSON.stringify({ type: "token_usage_update", summary }),
+      });
+    });
+
+    // The tokenUsage5h table should now show the model
+    await waitFor(() => {
+      expect(screen.getAllByText("claude-opus-4-5").length).toBeGreaterThanOrEqual(1);
+    });
+    // And the token counts
+    await waitFor(() => {
+      expect(screen.getByText("12,345")).toBeDefined();
+    });
+  });
+
+  it("does not call refreshPeriods on a polling interval (only once on mount)", async () => {
+    let tokenUsageCallCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const urlStr = typeof url === "string" ? url : (url as Request).url;
+      if (urlStr.includes("/api/token-usage")) {
+        tokenUsageCallCount++;
+        return { ok: true, json: () => Promise.resolve([]) } as Response;
+      }
+      if (urlStr.includes("/api/status")) {
+        return { ok: true, json: () => Promise.resolve(mockStatus) } as Response;
+      }
+      if (urlStr.includes("/api/system-prompts/original")) {
+        return { ok: true, json: () => Promise.resolve([]) } as Response;
+      }
+      if (urlStr.includes("/api/quota")) {
+        return { ok: false, json: () => Promise.resolve({}) } as Response;
+      }
+      if (urlStr.includes("/api/models")) {
+        return { ok: false, json: () => Promise.resolve({}) } as Response;
+      }
+      return { ok: false, json: () => Promise.resolve({}) } as Response;
+    });
+
+    render(
+      <MemoryRouter>
+        <StatusPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("running").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Advance time by 2 minutes — if polling were active, it would have fired again
+    await act(async () => {
+      vi.advanceTimersByTime(120_000);
+    });
+
+    // There are 5 token-usage calls (1 from refresh() for 5h + 4 from refreshPeriods for each period)
+    // plus 0 extra polling calls after the initial mount
+    const callsAfterMount = tokenUsageCallCount;
+
+    await act(async () => {
+      vi.advanceTimersByTime(120_000);
+    });
+
+    // Call count should not increase after the initial mount calls
+    expect(tokenUsageCallCount).toBe(callsAfterMount);
+  });
+
+  it("has data-global-sse-connected attribute on container", async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <StatusPage />
+      </MemoryRouter>,
+    );
+
+    // Initially false (SSE not yet connected in mock)
+    const div = container.firstChild as HTMLElement;
+    expect(div.getAttribute("data-global-sse-connected")).toBe("false");
   });
 });

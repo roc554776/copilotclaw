@@ -441,7 +441,7 @@ type PendingQueueCommand =
 
 ### Gateway: SSE Broadcaster subsystem
 
-**現状（v0.74.0 時点）**
+**現状（v0.75.0 時点）**
 
 `clients = new Set<SseClient>()`、ephemeral、missed events の replay なし。
 
@@ -457,6 +457,9 @@ type PendingQueueCommand =
 - `session_status_change` — channel-scoped（v0.68.1 で frontend 受信・処理を実装済み。`event.data.status` で `setSessionStatus` を更新する）
 - `agent_status_change` — global-scoped（v0.72.0 で新設。daemon の agent monitor が変化検知時に `broadcastGlobal` 送信）
 - `agent_compatibility_change` — global-scoped（v0.72.0 で新設。同上）
+- `log_appended` — global-scoped（v0.73.0 で新設。`LogBuffer.setOnAppend` hook で wire）
+- `session_event_appended` — session-scoped（v0.74.0 で新設。`sessionEventStore.setOnAppend` hook で wire）
+- `token_usage_update` — global-scoped（v0.75.0 で新設。`sessionEventStore.setOnAppend` hook の `assistant.usage` 分岐で 5h ウィンドウ集計を broadcast）
 
 `status_update` dead sink は v0.72.0 で frontend handler ごと削除済み。
 
@@ -490,7 +493,7 @@ type GlobalSseEvent =
   | { type: "log_appended"; entries: LogEntry[] }                 // GET /api/logs 3s ポーリングの置換（v0.73.0 実装済み）
   | { type: "quota_update"; quota: QuotaInfo }                     // GET /api/quota 5s ポーリングの置換
   | { type: "models_update"; models: ModelInfo[] }                 // GET /api/models 5s ポーリングの置換
-  | { type: "token_usage_update"; summary: TokenUsageSummary }     // GET /api/token-usage ポーリングの置換
+  | { type: "token_usage_update"; summary: TokenUsageSummary }     // GET /api/token-usage ポーリングの置換（v0.75.0 実装済み）
 
 // 全 SSE イベントの union
 type SseEvent = ChannelSseEvent | GlobalSseEvent
@@ -587,8 +590,8 @@ process state（実際の SSE ソケット）は effect runtime が管理し、w
 | `StatusPage` | `GET /api/status` | ~~5s~~ | global SSE | **v0.72.0 で解消済み**。`DashboardPage` と同様に初回 snapshot + `/api/global-events` 受信に置き換え済み |
 | `StatusPage` | `GET /api/quota` | 5s | global SSE | 新規 global event `quota_update` を追加し、クォータ情報が更新された時点で broadcast する。`system_status_change` に含めるか独立 event にするかは実装時に決定する（未実現）|
 | `StatusPage` | `GET /api/models` | 5s | global SSE | 新規 global event `models_update` を追加する。モデル一覧は変化頻度が低いため、初回接続時の `SendReplayEvents` で最新値を受け取り、変化時のみ更新 event を受信する設計が合理的（未実現）|
-| `StatusPage` | `GET /api/token-usage` (5h window) | 5s | global SSE | 新規 global event `token_usage_update` を追加し、トークン消費が記録されるたびに broadcast する。`TokenUsagePage` の自動更新（1 分ポーリング）も同 event で置き換える（未実現）|
-| `StatusPage` | 複数期間の `GET /api/token-usage` | 60s | global SSE | 同上。`token_usage_update` を受信した frontend が最新データを pull するか、event payload にサマリーを含める形で対応する（実装時に決定）（未実現）|
+| `StatusPage` | ~~`GET /api/token-usage` (5h window) 60s~~ | ~~60s~~ | global SSE | **v0.75.0 で解消済み**。`sessionEventStore.setOnAppend` に `assistant.usage` 分岐を追加し、append 時に 5h ウィンドウ集計を `broadcastGlobal({ type: "token_usage_update", summary })` で配信。StatusPage の SSE onmessage で受信して `tokenUsage5h` を更新。`usePolling(refreshPeriods, 60000)` は削除済み |
+| `StatusPage` | 複数期間の `GET /api/token-usage` | ~~60s~~ | one-shot fetch | **v0.75.0 で解消済み**（polling 廃止）。`refreshPeriods` は初回マウント時に 1 度だけ呼び出す。期間別 tokenUsagePeriods の SSE リアルタイム更新は別 scope |
 | `SessionEventsPage` | ~~`GET /api/sessions/{sessionId}/events` 2s~~ | ~~2s~~ | session-scoped SSE | **v0.74.0 で解消済み**。`/api/sessions/{sessionId}/events/stream` SSE エンドポイントを新設し、`sessionEventStore.setOnAppend` フックで `broadcastToSession` を wire。`SessionEventsPage` は EventSource で購読し、`session_event_appended` を受信してリアルタイム追記（id ベース dedup 付き）。周期ポーリングは削除済み |
 
 各ポーリング置換に対応する global event（`log_appended`（v0.73.0 実装済み） / `quota_update` / `models_update` / `token_usage_update`）の型定義は「新設計: SseEvent 型定義」節の `GlobalSseEvent` を参照。

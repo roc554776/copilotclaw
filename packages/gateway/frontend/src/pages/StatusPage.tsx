@@ -13,7 +13,6 @@ import {
   type StatusResponse,
   type TokenUsageEntry,
 } from "../api";
-import { usePolling } from "../hooks/usePolling";
 import { elapsed, SESSION_ID_SHORT, SDK_SESSION_ID_SHORT } from "../utils";
 
 const sectionStyle: React.CSSProperties = {
@@ -188,7 +187,14 @@ export function StatusPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Global SSE: update status when agent/compatibility changes
+  // Period breakdown: fetch once on mount (manual refresh is a separate scope)
+  useEffect(() => {
+    refreshPeriods().catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Global SSE: update status when agent/compatibility changes, and update tokenUsage5h on token_usage_update
+  const [globalSseConnected, setGlobalSseConnected] = useState(false);
   useEffect(() => {
     let closed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -200,9 +206,13 @@ export function StatusPage() {
       source.onerror = () => {
         source?.close();
         source = null;
+        setGlobalSseConnected(false);
         if (!closed) {
           reconnectTimer = setTimeout(connect, 3000);
         }
+      };
+      source.onopen = () => {
+        setGlobalSseConnected(true);
       };
       source.onmessage = (e) => {
         try {
@@ -210,6 +220,9 @@ export function StatusPage() {
           if (event.type === "agent_status_change" || event.type === "agent_compatibility_change") {
             // Re-fetch full status on agent change events
             refresh().catch(() => {});
+          } else if (event.type === "token_usage_update") {
+            const update = event as { type: "token_usage_update"; summary: TokenUsageEntry[] };
+            setTokenUsage5h(update.summary);
           }
         } catch {
           /* ignore */
@@ -227,8 +240,6 @@ export function StatusPage() {
     };
   }, [refresh]);
 
-  usePolling(refreshPeriods, 60000);
-
   const loadingPromptsRef = useRef(new Set<string>());
   const loadEffectivePrompt = useCallback(async (sessionId: string) => {
     if (loadingPromptsRef.current.has(sessionId)) return;
@@ -245,7 +256,7 @@ export function StatusPage() {
   }, []);
 
   return (
-    <div style={{ padding: "1rem", maxWidth: 800, margin: "0 auto" }}>
+    <div style={{ padding: "1rem", maxWidth: 800, margin: "0 auto" }} data-global-sse-connected={globalSseConnected ? "true" : "false"}>
       <a href="/" style={{ marginBottom: "1rem", display: "inline-block" }}>
         &larr; Back to chat
       </a>
