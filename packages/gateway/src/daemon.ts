@@ -742,7 +742,11 @@ async function main(): Promise<void> {
   process.once("SIGINT", () => { gracefulShutdown().catch(console.error); });
 }
 
-main().catch((err: unknown) => {
-  console.error("Error:", err);
-  process.exit(1);
-});
+// Run when executed directly (not imported as module for testing)
+const isDirectExecution = process.argv[1]?.endsWith("daemon.js") === true;
+if (isDirectExecution) {
+  main().catch((err: unknown) => {
+    console.error("Error:", err);
+    process.exit(1);
+  });
+}
