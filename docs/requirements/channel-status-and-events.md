@@ -77,15 +77,20 @@ channel operator が知覚すべき入力を「メッセージ」に一本化せ
 - `cron`: cron ジョブからのメッセージ
 - `system`: system からのメッセージ
 
-### Req: エージェントアイコン・プロフィールモーダル・collapse 表示（未実現）
+### Req: エージェントアイコン・プロフィールモーダル・collapse 表示（v0.78.0 で部分実現）
 
 チャンネルのタイムライン UI において、メッセージ送信者を視覚的に識別できるようにする。
 
-- 各メッセージにアイコン + 表示名を表示する（user / channel-operator / worker / その他 agent の種別ごとにデザインを変える）
-- agent アイコンをクリックすると、プロフィールモーダルが開く
-  - プロフィールモーダルに表示する情報: agent タイプ、モデル名、ステータス（session event で確認できる範囲）
-- subagent / sub-subagent からのメッセージはデフォルトで折り畳み（collapse）表示し、必要に応じて展開できるようにする
-- task tool（subagent を呼び出すツール）のインターフェースとシステムプロンプトの工夫により、agent ごとに異なる表示名が割り当てられるようにする
+**v0.78.0 実現済み:**
+- `MessageAvatar` コンポーネント（user / cron / system / agent の 4 種分岐、size prop、colorFromString によるエージェント色付け）
+- agent アイコンクリックで `ProfileModal` を開く（Info タブ: agentId + agentRole、Intent タブ: placeholder）
+- 連続した `agentRole === "subagent"` メッセージ（同 agentId）を `<details>` グループに collapse 表示
+
+**未実現（将来課題）:**
+- プロフィールモーダルへのモデル名・ステータス表示（session event 由来の情報）
+- task tool インターフェースとシステムプロンプト工夫による agent ごとの固有表示名割り当て
+- sub-subagent の collapse（現在は subagent 1 段のみ対応）
+- Intent timeline（ProfileModal に placeholder タブのみ。`copilotclaw_intent` API / UI / SQLite 永続化は未実現）
 
 ### Req: チャンネルタイムライン UI の非メッセージ要素（未実現）
 
