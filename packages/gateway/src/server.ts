@@ -596,8 +596,8 @@ function createRequestHandler(
       // Replay missed events if Last-Event-ID header is present (reconnect scenario)
       if (sessionEventStore !== null) {
         const lastEventIdRaw = req.headers["last-event-id"];
-        if (typeof lastEventIdRaw === "string") {
-          const afterId = parseInt(lastEventIdRaw, 10);
+        if (typeof lastEventIdRaw === "string" && /^\d+$/.test(lastEventIdRaw)) {
+          const afterId = Number(lastEventIdRaw);
           if (Number.isFinite(afterId)) {
             replaySessionEventsAfter(res, sessionId, afterId, sessionEventStore);
           }

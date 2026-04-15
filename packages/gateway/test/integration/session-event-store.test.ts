@@ -553,6 +553,11 @@ describe("SessionEventStore", () => {
       expect(store.listEventsAfterId("sess-after-inf", Infinity)).toHaveLength(0);
     });
 
+    it("returns empty array when afterId is -Infinity", () => {
+      store.appendEvent("sess-after-neg-inf", { type: "event-0", timestamp: "2026-04-15T00:00:00Z", data: {} });
+      expect(store.listEventsAfterId("sess-after-neg-inf", -Infinity)).toHaveLength(0);
+    });
+
     it("respects limit parameter", () => {
       for (let i = 0; i < 10; i++) {
         store.appendEvent("sess-after-limit", { type: `event-${i}`, timestamp: `2026-04-15T00:00:${String(i).padStart(2, "0")}Z`, data: {} });

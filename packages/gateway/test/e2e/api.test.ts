@@ -1059,4 +1059,147 @@ describe("GET /api/sessions/:id/events/stream — Last-Event-ID replay", () => {
     // No pre-existing events should be replayed when no Last-Event-ID header
     expect(received.some((e) => e.type === "pre-event")).toBe(false);
   });
+
+  it("does not replay when Last-Event-ID is a float string (e.g. '3.7')", async () => {
+    const floatIdSessionId = "e2e-float-last-event-id-session";
+    sessionEventStore.appendEvent(floatIdSessionId, { type: "float-event", timestamp: "2026-04-15T00:00:00Z", data: {} });
+
+    const received: Array<{ type: string }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve) => {
+      fetch(`${baseUrl}/api/sessions/${encodeURIComponent(floatIdSessionId)}/events/stream`, {
+        signal: controller.signal,
+        headers: { "Last-Event-ID": "3.7" },
+      })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const parsed = JSON.parse(line.slice(6)) as { type: string; event: { type: string } };
+                    received.push({ type: parsed.event.type });
+                  } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    // Float Last-Event-ID must be rejected — no replay should occur
+    expect(received.some((e) => e.type === "float-event")).toBe(false);
+  });
+
+  it("does not replay when Last-Event-ID is a non-numeric string (e.g. 'abc')", async () => {
+    const nonNumericSessionId = "e2e-non-numeric-last-event-id-session";
+    sessionEventStore.appendEvent(nonNumericSessionId, { type: "non-numeric-event", timestamp: "2026-04-15T00:00:00Z", data: {} });
+
+    const received: Array<{ type: string }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve) => {
+      fetch(`${baseUrl}/api/sessions/${encodeURIComponent(nonNumericSessionId)}/events/stream`, {
+        signal: controller.signal,
+        headers: { "Last-Event-ID": "abc" },
+      })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const parsed = JSON.parse(line.slice(6)) as { type: string; event: { type: string } };
+                    received.push({ type: parsed.event.type });
+                  } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    // Non-numeric Last-Event-ID must be rejected — no replay should occur
+    expect(received.some((e) => e.type === "non-numeric-event")).toBe(false);
+  });
+
+  it("replays events when Last-Event-ID is a valid integer string", async () => {
+    const validIntSessionId = "e2e-valid-int-last-event-id-session";
+    sessionEventStore.appendEvent(validIntSessionId, { type: "anchor-event", timestamp: "2026-04-15T00:00:00Z", data: {} });
+    sessionEventStore.appendEvent(validIntSessionId, { type: "replay-target-event", timestamp: "2026-04-15T00:00:01Z", data: {} });
+
+    const all = sessionEventStore.getEvents(validIntSessionId);
+    const anchorId = all[0]!.id!;
+
+    const received: Array<{ type: string }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve, reject) => {
+      fetch(`${baseUrl}/api/sessions/${encodeURIComponent(validIntSessionId)}/events/stream`, {
+        signal: controller.signal,
+        headers: { "Last-Event-ID": String(anchorId) },
+      })
+        .then(async (res) => {
+          if (res.status !== 200) { reject(new Error(`status ${res.status}`)); return; }
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const parsed = JSON.parse(line.slice(6)) as { type: string; event: { type: string } };
+                    received.push({ type: parsed.event.type });
+                  } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    // Valid integer Last-Event-ID must trigger replay of events after the anchor
+    expect(received.some((e) => e.type === "replay-target-event")).toBe(true);
+    expect(received.some((e) => e.type === "anchor-event")).toBe(false);
+  });
 });

@@ -45,7 +45,7 @@ test("SessionEventsPage receives live events via SSE after session_event_appende
   }
 });
 
-test("SessionEventsPage reconnects with Last-Event-ID and replays missed events", async ({ page }) => {
+test("SessionEventsPage replays missed events via Last-Event-ID on EventSource reconnect", async ({ page }) => {
   const store = new Store();
   mkdirSync(join(process.cwd(), "tmp"), { recursive: true });
   const tmpDir = mkdtempSync(join(process.cwd(), "tmp/session-events-reconnect-test-"));
@@ -63,7 +63,7 @@ test("SessionEventsPage reconnects with Last-Event-ID and replays missed events"
   });
 
   try {
-    // Navigate to the SessionEventsPage
+    // Navigate to the SessionEventsPage and confirm SSE connection
     await page.goto(`${baseUrl}/sessions/${encodeURIComponent(testSessionId)}/events`);
     await page.waitForSelector("[data-session-sse-connected='true']", { timeout: 10000 });
 
@@ -75,28 +75,23 @@ test("SessionEventsPage reconnects with Last-Event-ID and replays missed events"
     });
     await expect(page.locator("text=session.start")).toBeVisible({ timeout: 5000 });
 
-    // Simulate disconnect: intercept the SSE stream and block reconnection,
-    // then inject events into the store while disconnected
-    await page.route(`${baseUrl}/api/sessions/${encodeURIComponent(testSessionId)}/events/stream`, async (route) => {
-      // Check if this is a reconnect (Last-Event-ID header present)
-      const headers = route.request().headers();
-      if (headers["last-event-id"] !== undefined) {
-        // Allow the reconnect to proceed normally so replay happens
-        await route.continue();
-      } else {
-        await route.continue();
-      }
-    });
+    // Go offline: SSE connection drops. EventSource will reconnect once back online.
+    await page.context().setOffline(true);
 
-    // Append a "missed" event while the page may be between connections
+    // While disconnected, append a missed event to the store.
+    // The broadcast cannot reach the browser — the event is only in DB.
     sessionEventStore.appendEvent(testSessionId, {
       type: "tool.execution_start",
       timestamp: new Date().toISOString(),
       data: { toolName: "replay-test-tool" },
     });
 
-    // The missed event should appear (either via live stream or replay on reconnect)
-    await expect(page.locator("text=tool.execution_start")).toBeVisible({ timeout: 8000 });
+    // Restore connectivity. EventSource automatically reconnects and sends
+    // Last-Event-ID, triggering server-side replay of the missed event.
+    await page.context().setOffline(false);
+
+    // The missed event should appear via replay (not live broadcast)
+    await expect(page.locator("text=tool.execution_start")).toBeVisible({ timeout: 10000 });
   } finally {
     await handle.close();
     sessionEventStore.close();
