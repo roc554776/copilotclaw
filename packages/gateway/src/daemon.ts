@@ -585,6 +585,14 @@ async function main(): Promise<void> {
       // therefore not delivered via SSE. This differs from the pre-global-SSE behavior
       // (which incorrectly broadcast to all clients); the new behavior is intentional.
     });
+    // Wire log buffer append events to global SSE so the dashboard receives live log entries.
+    // Only log entries appended after this hook is set are broadcast (no re-broadcast of prior entries).
+    logBuffer.setOnAppend((entry) => {
+      serverHandle!.sseBroadcaster!.broadcastGlobal({
+        type: "log_appended",
+        entries: [entry],
+      });
+    });
   }
 
   // Agent status change detection state (for global SSE push)

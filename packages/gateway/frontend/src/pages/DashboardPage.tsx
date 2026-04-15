@@ -33,7 +33,6 @@ import {
   type TokenUsageEntry,
 } from "../api";
 import { useAutoScroll } from "../hooks/useAutoScroll";
-import { usePolling } from "../hooks/usePolling";
 import { elapsed, SESSION_ID_SHORT, SDK_SESSION_ID_SHORT } from "../utils";
 
 /* M-2: Hoisted style objects for StatusModalContent */
@@ -410,11 +409,17 @@ export function DashboardPage() {
             version?: string;
             running?: boolean;
             compatibility?: string;
+            entries?: LogEntry[];
           };
           if (event.type === "agent_status_change") {
             setAgentVersion(event.version ?? "--");
           } else if (event.type === "agent_compatibility_change") {
             setCompatibility(event.compatibility ?? "");
+          } else if (event.type === "log_appended") {
+            const entries = (event as { entries?: LogEntry[] }).entries ?? [];
+            if (entries.length > 0) {
+              setLogs((prev) => [...entries.slice().reverse(), ...prev].slice(0, 200));
+            }
           }
         } catch {
           /* ignore parse errors */
@@ -433,7 +438,8 @@ export function DashboardPage() {
     };
   }, []);
 
-  // Logs polling when visible
+  // Logs: initial snapshot fetch when panel becomes visible.
+  // Subsequent updates arrive via global SSE log_appended events.
   const refreshLogs = useCallback(async () => {
     try {
       setLogs(await fetchLogs(100));
@@ -442,7 +448,12 @@ export function DashboardPage() {
     }
   }, []);
 
-  usePolling(refreshLogs, 3000, logsVisible);
+  useEffect(() => {
+    if (logsVisible) {
+      refreshLogs().catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logsVisible]);
 
   // Send message
   const handleSend = useCallback(async () => {

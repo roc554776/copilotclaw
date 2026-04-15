@@ -48,6 +48,44 @@ describe("LogBuffer", () => {
     expect(entry.message).toBe("something broke");
   });
 
+  describe("setOnAppend", () => {
+    it("calls the callback after each add", () => {
+      const buf = new LogBuffer();
+      const received: string[] = [];
+      buf.setOnAppend((entry) => { received.push(entry.message); });
+      buf.add("gateway", "info", "first");
+      buf.add("gateway", "error", "second");
+      expect(received).toEqual(["first", "second"]);
+    });
+
+    it("callback receives the correct entry fields", () => {
+      const buf = new LogBuffer();
+      let captured: ReturnType<typeof buf.list>[number] | undefined;
+      buf.setOnAppend((entry) => { captured = entry; });
+      buf.add("agent", "error", "boom");
+      expect(captured).toBeDefined();
+      expect(captured!.source).toBe("agent");
+      expect(captured!.level).toBe("error");
+      expect(captured!.message).toBe("boom");
+      expect(captured!.timestamp).toBeTruthy();
+    });
+
+    it("does not throw when no onAppend is set", () => {
+      const buf = new LogBuffer();
+      expect(() => buf.add("gateway", "info", "no callback")).not.toThrow();
+    });
+
+    it("calls callback for each add individually", () => {
+      const buf = new LogBuffer();
+      let callCount = 0;
+      buf.setOnAppend(() => { callCount++; });
+      buf.add("gateway", "info", "a");
+      buf.add("gateway", "info", "b");
+      buf.add("gateway", "info", "c");
+      expect(callCount).toBe(3);
+    });
+  });
+
   describe("file output", () => {
     let tempDir: string;
 

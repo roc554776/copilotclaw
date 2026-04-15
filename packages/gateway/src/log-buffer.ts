@@ -18,6 +18,7 @@ export class LogBuffer {
   private readonly entries: LogEntry[] = [];
   private readonly maxEntries: number;
   private structuredLogger: StructuredLogger | undefined;
+  private onAppend?: (entry: LogEntry) => void;
 
   constructor(maxEntries = MAX_LOG_ENTRIES) {
     this.maxEntries = maxEntries;
@@ -28,13 +29,19 @@ export class LogBuffer {
     this.structuredLogger = new StructuredLogger(logFilePath, "gateway");
   }
 
+  /** Register a callback to be called after each log entry is appended. */
+  setOnAppend(callback: (entry: LogEntry) => void): void {
+    this.onAppend = callback;
+  }
+
   add(source: "gateway" | "agent", level: "info" | "error", message: string): void {
-    this.entries.push({
+    const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       source,
       level,
       message,
-    });
+    };
+    this.entries.push(entry);
     if (this.entries.length > this.maxEntries) {
       this.entries.shift();
     }
@@ -47,6 +54,7 @@ export class LogBuffer {
         this.structuredLogger.info(message, data);
       }
     }
+    this.onAppend?.(entry);
   }
 
   list(limit = 50): LogEntry[] {

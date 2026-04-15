@@ -517,4 +517,109 @@ describe("DashboardPage", () => {
     expect(getChannelSse()!.url).toContain("/api/events?channel=");
     expect(getGlobalSse()!.url).toBe("/api/global-events");
   });
+
+  it("adds log entries to logs state via global SSE log_appended event", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(getGlobalSse()).not.toBeUndefined();
+    });
+
+    // Open the logs panel
+    const logsBtn = screen.getAllByText("Logs")[0]!;
+    await user.click(logsBtn);
+
+    // Wait for the initial snapshot fetch to complete
+    await waitFor(() => {
+      expect(screen.getByText(/Logs/)).toBeInTheDocument();
+    });
+
+    const globalSrc = getGlobalSse()!;
+
+    // Dispatch a log_appended event
+    globalSrc.onmessage?.({
+      data: JSON.stringify({
+        type: "log_appended",
+        entries: [
+          { timestamp: "2026-04-14T10:00:00.000Z", source: "gateway", level: "info", message: "sse-log-entry" },
+        ],
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/sse-log-entry/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("respects 200-entry ring buffer cap when receiving log_appended events", async () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(getGlobalSse()).not.toBeUndefined();
+    });
+
+    const globalSrc = getGlobalSse()!;
+
+    // Inject 210 entries one by one
+    for (let i = 0; i < 210; i++) {
+      globalSrc.onmessage?.({
+        data: JSON.stringify({
+          type: "log_appended",
+          entries: [
+            { timestamp: `2026-04-14T10:00:${String(i).padStart(2, "0")}.000Z`, source: "gateway", level: "info", message: `entry-${i}` },
+          ],
+        }),
+      });
+    }
+
+    // Give React time to process state updates
+    await waitFor(() => {
+      // The oldest entries (entry-0 through entry-9) should be evicted
+      const allLogText = document.body.textContent ?? "";
+      // Count log entries — should be at most 200
+      const matchCount = (allLogText.match(/entry-/g) ?? []).length;
+      expect(matchCount).toBeLessThanOrEqual(200);
+    });
+  });
+
+  it("does not use polling for logs (fetchLogs not called on timer advances)", async () => {
+    const fetchMock = vi.mocked(fetch);
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello agent").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Count /api/logs calls before timer advance
+    const logCallsBefore = fetchMock.mock.calls.filter((c) => {
+      const urlStr = typeof c[0] === "string" ? c[0] : (c[0] as Request).url;
+      return urlStr.includes("/api/logs");
+    }).length;
+
+    // Advance time by 9 seconds — under old polling this would trigger 3 calls
+    vi.advanceTimersByTime(9000);
+
+    const logCallsAfter = fetchMock.mock.calls.filter((c) => {
+      const urlStr = typeof c[0] === "string" ? c[0] : (c[0] as Request).url;
+      return urlStr.includes("/api/logs");
+    }).length;
+
+    // No new /api/logs calls should have been triggered by timer advance
+    expect(logCallsAfter).toBe(logCallsBefore);
+  });
 });
