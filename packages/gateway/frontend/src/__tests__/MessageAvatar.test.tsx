@@ -73,6 +73,31 @@ describe("MessageAvatar", () => {
     expect(onAgentClick).not.toHaveBeenCalled();
   });
 
+  it("agent avatar renders with large size style when size=large", () => {
+    render(
+      <MessageAvatar
+        sender="agent"
+        senderMeta={{ agentId: "channel-operator", agentDisplayName: "Channel Operator", agentRole: "channel-operator" }}
+        size="large"
+      />,
+    );
+    const avatar = screen.getByTestId("avatar-agent") as HTMLElement;
+    expect(avatar.style.width).toBe("48px");
+    expect(avatar.style.height).toBe("48px");
+  });
+
+  it("agent avatar defaults to small size when size prop is omitted", () => {
+    render(
+      <MessageAvatar
+        sender="agent"
+        senderMeta={{ agentId: "channel-operator", agentDisplayName: "Channel Operator", agentRole: "channel-operator" }}
+      />,
+    );
+    const avatar = screen.getByTestId("avatar-agent") as HTMLElement;
+    expect(avatar.style.width).toBe("28px");
+    expect(avatar.style.height).toBe("28px");
+  });
+
   it("agent avatar keyboard Enter triggers onAgentClick", () => {
     const onAgentClick = vi.fn();
     const meta = { agentId: "channel-operator", agentDisplayName: "Channel Operator", agentRole: "channel-operator" as const };

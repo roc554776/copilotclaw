@@ -759,6 +759,10 @@ export function DashboardPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const handleAgentClick = useCallback((meta: MessageSenderMeta) => {
+    setProfileModal(meta);
+  }, []);
+
   const handleEndTurnRun = useCallback(async (sessionId: string) => {
     try {
       await endTurnRun(sessionId);
@@ -1198,7 +1202,7 @@ export function DashboardPage() {
             Send a message to start the conversation.
           </div>
         )}
-        {renderMessages(messages, (meta) => setProfileModal(meta))}
+        {renderMessages(messages, handleAgentClick)}
         <div
           id="processing-indicator"
           className={isProcessing ? "visible" : ""}

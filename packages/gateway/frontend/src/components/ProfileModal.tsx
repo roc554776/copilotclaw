@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AgentRole, MessageSenderMeta } from "../api";
+import { MessageAvatar } from "./MessageAvatar";
 
 export interface ProfileModalProps {
   agentId: string;
@@ -22,15 +23,6 @@ const ROLE_LABELS: Record<AgentRole, string> = {
   "unknown": "Unknown",
 };
 
-/** Open a ProfileModal from a MessageSenderMeta object. */
-export function profileModalPropsFromMeta(meta: MessageSenderMeta): ProfileModalProps {
-  return {
-    agentId: meta.agentId,
-    agentDisplayName: meta.agentDisplayName,
-    agentRole: meta.agentRole,
-    onClose: () => undefined,
-  };
-}
 
 export function ProfileModal({ agentId, agentDisplayName, agentRole, onClose }: ProfileModalProps) {
   const [activeTab, setActiveTab] = useState<"info" | "intent">("info");
@@ -86,23 +78,12 @@ export function ProfileModal({ agentId, agentDisplayName, agentRole, onClose }: 
             borderBottom: "1px solid #21262d",
           }}
         >
-          <div
-            data-testid="profile-modal-avatar"
-            style={{
-              width: "48px",
-              height: "48px",
-              borderRadius: "50%",
-              background: "#238636",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: "18px",
-              fontWeight: 700,
-              color: "#fff",
-              flexShrink: 0,
-            }}
-          >
-            {(agentDisplayName.charAt(0) ?? "?").toUpperCase()}
+          <div data-testid="profile-modal-avatar">
+            <MessageAvatar
+              sender="agent"
+              senderMeta={{ agentId, agentDisplayName, agentRole }}
+              size="large"
+            />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div

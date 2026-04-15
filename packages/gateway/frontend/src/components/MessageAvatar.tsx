@@ -12,6 +12,7 @@ export interface MessageAvatarProps {
   sender: "user" | "agent" | "cron" | "system";
   senderMeta?: MessageSenderMeta;
   onAgentClick?: (meta: MessageSenderMeta) => void;
+  size?: "small" | "large";
 }
 
 /** Derive a stable background color hex string from an arbitrary string key. */
@@ -32,26 +33,29 @@ function initials(name: string): string {
   return ((parts[0]![0] ?? "") + (parts[parts.length - 1]![0] ?? "")).toUpperCase();
 }
 
+const SIZE_STYLES: Record<"small" | "large", React.CSSProperties> = {
+  small: { width: "28px", height: "28px", fontSize: "11px" },
+  large: { width: "48px", height: "48px", fontSize: "18px" },
+};
+
 const baseStyle: React.CSSProperties = {
-  width: "28px",
-  height: "28px",
   borderRadius: "50%",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  fontSize: "11px",
   fontWeight: 700,
   flexShrink: 0,
   userSelect: "none",
   cursor: "default",
 };
 
-export function MessageAvatar({ sender, senderMeta, onAgentClick }: MessageAvatarProps) {
+export function MessageAvatar({ sender, senderMeta, onAgentClick, size = "small" }: MessageAvatarProps) {
+  const sizeStyle = SIZE_STYLES[size];
   if (sender === "user") {
     return (
       <div
         data-testid="avatar-user"
-        style={{ ...baseStyle, background: "#238636", color: "#fff" }}
+        style={{ ...baseStyle, ...sizeStyle, background: "#238636", color: "#fff" }}
         title="You"
       >
         Y
@@ -63,7 +67,7 @@ export function MessageAvatar({ sender, senderMeta, onAgentClick }: MessageAvata
     return (
       <div
         data-testid="avatar-cron"
-        style={{ ...baseStyle, background: "#6e40c9", color: "#fff" }}
+        style={{ ...baseStyle, ...sizeStyle, background: "#6e40c9", color: "#fff" }}
         title="Cron"
       >
         ⏱
@@ -75,7 +79,7 @@ export function MessageAvatar({ sender, senderMeta, onAgentClick }: MessageAvata
     return (
       <div
         data-testid="avatar-system"
-        style={{ ...baseStyle, background: "#484f58", color: "#c9d1d9" }}
+        style={{ ...baseStyle, ...sizeStyle, background: "#484f58", color: "#c9d1d9" }}
         title="System"
       >
         ⚙
@@ -95,6 +99,7 @@ export function MessageAvatar({ sender, senderMeta, onAgentClick }: MessageAvata
       data-testid="avatar-agent"
       style={{
         ...baseStyle,
+        ...sizeStyle,
         background: bgColor,
         color: "#fff",
         cursor: isClickable ? "pointer" : "default",

@@ -92,4 +92,30 @@ describe("ProfileModal", () => {
     await user.click(modal);
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("header avatar color changes when agentId changes (uses colorFromString, not hardcoded)", () => {
+    const { unmount } = render(
+      <ProfileModal agentId="agent-alpha" agentDisplayName="Alpha" agentRole="channel-operator" onClose={vi.fn()} />,
+    );
+    const avatarA = screen.getByTestId("avatar-agent");
+    const colorA = (avatarA as HTMLElement).style.background;
+    unmount();
+
+    render(
+      <ProfileModal agentId="agent-beta-different" agentDisplayName="Beta" agentRole="channel-operator" onClose={vi.fn()} />,
+    );
+    const avatarB = screen.getByTestId("avatar-agent");
+    const colorB = (avatarB as HTMLElement).style.background;
+
+    // Two distinct agentIds must produce distinct colors
+    expect(colorA).not.toBe(colorB);
+    // Neither color should be the old hardcoded #238636
+    expect(colorA).not.toBe("rgb(35, 134, 54)");
+    expect(colorB).not.toBe("rgb(35, 134, 54)");
+  });
+
+  it("header avatar renders via MessageAvatar (data-testid avatar-agent present)", () => {
+    renderModal({ agentId: "my-agent", agentDisplayName: "My Agent", agentRole: "channel-operator" });
+    expect(screen.getByTestId("avatar-agent")).toBeDefined();
+  });
 });

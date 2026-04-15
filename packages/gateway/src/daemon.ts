@@ -5,14 +5,14 @@ import { AgentManager } from "./agent-manager.js";
 import { type CronJobConfig, getProfileName, getStateDir, loadConfig, loadFileConfig, resolvePort, saveConfig } from "./config.js";
 import { IntentsStore, intentsStore } from "./intents-store.js";
 import { LogBuffer } from "./log-buffer.js";
-import { resolveAgentSenderMeta } from "./message-sender.js";
+import { type ChannelOperatorMeta, resolveAgentSenderMeta, type SubagentResolver } from "./message-sender.js";
 import { initOtel, shutdownOtel } from "./otel.js";
 import { initMetrics } from "./otel-metrics.js";
 import { startServer } from "./server.js";
 import { SessionController } from "./session-controller.js";
 import { type SessionEvent, SessionEventStore } from "./session-event-store.js";
 import { SessionOrchestrator } from "./session-orchestrator.js";
-import { Store } from "./store.js";
+import { type MessageSenderMeta, Store } from "./store.js";
 import { ensureWorkspace, getDataDir, getStoreDbPath, getStoreFilePath, getWorkspaceRoot } from "./workspace.js";
 
 const AGENT_MONITOR_INTERVAL_MS = 30_000; // 30 seconds
@@ -97,6 +97,87 @@ export function handleIntentToolCall(
  * following the same pattern as broadcastTokenUsageIfNeeded and broadcastChannelListChange.
  */
 export { replaySessionEventsAfter } from "./session-replay.js";
+
+export interface AssistantMessageEventDeps {
+  store: Store;
+  orchestrator: SubagentResolver;
+  channelOperatorMeta: ChannelOperatorMeta;
+  sseBroadcast?: (event: Record<string, unknown>) => void;
+}
+
+/**
+ * Handles an assistant.message session event: resolves senderMeta via resolveAgentSenderMeta,
+ * stores the message in the channel timeline, and optionally broadcasts to SSE clients.
+ *
+ * Exported as a named function so tests can import and call the real code path directly,
+ * preventing drift between the test replica and the daemon's onSessionEvent handler.
+ */
+export function handleAssistantMessageEvent(
+  sessionId: string,
+  channelId: string,
+  data: Record<string, unknown>,
+  deps: AssistantMessageEventDeps,
+): { stored: boolean; senderMeta?: MessageSenderMeta } {
+  const content = typeof data["content"] === "string" ? data["content"] : "";
+  if (content.length === 0) return { stored: false };
+  const parentToolCallId = typeof data["parentToolCallId"] === "string" ? data["parentToolCallId"] : undefined;
+  const senderMeta = resolveAgentSenderMeta(sessionId, parentToolCallId, deps.orchestrator, deps.channelOperatorMeta);
+  deps.store.addMessage(channelId, "agent", content, senderMeta);
+  deps.sseBroadcast?.({ type: "new_message", channelId, data: { sender: "agent", message: content, senderMeta } });
+  return { stored: true, senderMeta };
+}
+
+export interface SendMessageToolCallDeps {
+  store: Store;
+  channelOperatorMeta: ChannelOperatorMeta;
+  sseBroadcast?: (event: Record<string, unknown>) => void;
+}
+
+/**
+ * Handles the copilotclaw_send_message tool call: resolves senderMeta for the channel-operator
+ * (send_message is only callable from channel-operator, never subagents), stores the message,
+ * and optionally broadcasts to SSE clients.
+ *
+ * Exported as a named function so tests can import and call the real code path directly,
+ * preventing drift between test expectations and the daemon's onToolCall handler.
+ */
+export function handleSendMessageToolCall(
+  sessionId: string,
+  channelId: string,
+  message: string,
+  deps: SendMessageToolCallDeps,
+): { senderMeta: MessageSenderMeta } {
+  const senderMeta = resolveAgentSenderMeta(sessionId, undefined, {}, deps.channelOperatorMeta);
+  deps.store.addMessage(channelId, "agent", message, senderMeta);
+  deps.sseBroadcast?.({ type: "new_message", channelId, data: { sender: "agent", message, senderMeta } });
+  return { senderMeta };
+}
+
+export interface ChannelMessageAgentDeps {
+  store: Store;
+  orchestrator: SubagentResolver;
+  channelOperatorMeta: ChannelOperatorMeta;
+  sseBroadcast?: (event: Record<string, unknown>) => void;
+}
+
+/**
+ * Handles the "agent" sender branch of the onChannelMessage IPC backward-compatible path.
+ * Assigns channel-operator senderMeta to agent messages received via the legacy channel_message IPC path.
+ *
+ * Exported as a named function so tests can import and verify senderMeta is correctly assigned,
+ * preventing silent drift in the backward-compatible IPC path.
+ */
+export function handleChannelMessageAgent(
+  sessionId: string,
+  channelId: string,
+  message: string,
+  deps: ChannelMessageAgentDeps,
+): { senderMeta: MessageSenderMeta } {
+  const senderMeta = resolveAgentSenderMeta(sessionId, undefined, deps.orchestrator, deps.channelOperatorMeta);
+  deps.store.addMessage(channelId, "agent", message, senderMeta);
+  deps.sseBroadcast?.({ type: "new_message", channelId, data: { sender: "agent", message, senderMeta } });
+  return { senderMeta };
+}
 
 async function main(): Promise<void> {
   const forceAgentRestart = process.env["COPILOTCLAW_FORCE_AGENT_RESTART"] === "1";
@@ -195,12 +276,10 @@ async function main(): Promise<void> {
         case "copilotclaw_send_message": {
           const message = request.args["message"] as string ?? "";
           // copilotclaw_send_message is only callable from channel-operator (not subagents)
-          const sendMsgSenderMeta = resolveAgentSenderMeta(request.sessionId, undefined, orchestrator, channelOperatorMetaForSender);
-          store.addMessage(channelId, "agent", message, sendMsgSenderMeta);
-          serverHandle?.sseBroadcaster?.broadcast({
-            type: "new_message",
-            channelId,
-            data: { sender: "agent", message, senderMeta: sendMsgSenderMeta },
+          handleSendMessageToolCall(request.sessionId, channelId, message, {
+            store,
+            channelOperatorMeta: channelOperatorMetaForSender,
+            sseBroadcast: (event) => serverHandle?.sseBroadcaster?.broadcast(event as Parameters<typeof serverHandle.sseBroadcaster.broadcast>[0]),
           });
           // Clear swallowed-message flag — agent replied successfully
           sessionController.onAgentReplied(request.sessionId);
@@ -285,13 +364,23 @@ async function main(): Promise<void> {
       const msgChannelId = resolveChannelId(sessionId);
       if (msgChannelId === undefined) return;
       const senderType = sender === "user" ? "user" as const : sender === "cron" ? "cron" as const : sender === "system" ? "system" as const : "agent" as const;
-      store.addMessage(msgChannelId, senderType, message);
-      // Broadcast to SSE clients (serverHandle.sseBroadcaster set after startServer)
-      serverHandle?.sseBroadcaster?.broadcast({
-        type: "new_message",
-        channelId: msgChannelId,
-        data: { sender: senderType, message },
-      });
+      if (senderType === "agent") {
+        // IPC backward-compatible path: assign channel-operator senderMeta as default
+        handleChannelMessageAgent(sessionId, msgChannelId, message, {
+          store,
+          orchestrator,
+          channelOperatorMeta: channelOperatorMetaForSender,
+          sseBroadcast: (event) => serverHandle?.sseBroadcaster?.broadcast(event as Parameters<typeof serverHandle.sseBroadcaster.broadcast>[0]),
+        });
+      } else {
+        store.addMessage(msgChannelId, senderType, message);
+        // Broadcast to SSE clients (serverHandle.sseBroadcaster set after startServer)
+        serverHandle?.sseBroadcaster?.broadcast({
+          type: "new_message",
+          channelId: msgChannelId,
+          data: { sender: senderType, message },
+        });
+      }
     },
     onSessionEvent: (sessionId, copilotSessionId, eventType, timestamp, data, parentId) => {
       const eventChannelId = resolveChannelId(sessionId);
@@ -387,17 +476,12 @@ async function main(): Promise<void> {
       // channel reflection here instead of the agent sending a separate channel_message.
       // parentToolCallId in the event data identifies subagent messages (SDK convention).
       if (eventChannelId !== undefined && eventType === "assistant.message") {
-        const content = typeof data["content"] === "string" ? data["content"] : "";
-        if (content.length > 0) {
-          const parentToolCallId = typeof data["parentToolCallId"] === "string" ? data["parentToolCallId"] : undefined;
-          const assistantMsgSenderMeta = resolveAgentSenderMeta(sessionId, parentToolCallId, orchestrator, channelOperatorMetaForSender);
-          store.addMessage(eventChannelId, "agent", content, assistantMsgSenderMeta);
-          serverHandle?.sseBroadcaster?.broadcast({
-            type: "new_message",
-            channelId: eventChannelId,
-            data: { sender: "agent" as const, message: content, senderMeta: assistantMsgSenderMeta },
-          });
-        }
+        handleAssistantMessageEvent(sessionId, eventChannelId, data, {
+          store,
+          orchestrator,
+          channelOperatorMeta: channelOperatorMetaForSender,
+          sseBroadcast: (event) => serverHandle?.sseBroadcaster?.broadcast(event as Parameters<typeof serverHandle.sseBroadcaster.broadcast>[0]),
+        });
       }
 
       // session.idle with backgroundTasks: a subagent stopped but the overall session

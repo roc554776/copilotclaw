@@ -1,39 +1,167 @@
 /**
  * Tests for the daemon's onSessionEvent handler logic.
  *
- * The handler lives inline in daemon.ts main(), so these tests replicate
- * its behavior using the real Store and a mock AgentManager to verify:
+ * Uses the real named exports from daemon.ts (handleAssistantMessageEvent) instead of
+ * replicating the handler inline — preventing drift between tests and the implementation.
+ *
+ * Covers:
+ *  - assistant.message reflection includes correct senderMeta (parentToolCallId absent → channel-operator)
+ *  - assistant.message with parentToolCallId present resolves subagent senderMeta
+ *  - empty content is ignored
  *  - subagent.completed inserts a system message and calls notifyAgent
  *  - nested subagent (parentToolCallId present) does NOT insert system message
  *  - subagent.failed inserts a system message with error info
  */
 import { describe, expect, it, vi } from "vitest";
+import { handleAssistantMessageEvent, handleChannelMessageAgent } from "../../src/daemon.js";
+import type { AssistantMessageEventDeps, ChannelMessageAgentDeps } from "../../src/daemon.js";
 import { Store } from "../../src/store.js";
 
-/** Replicates the daemon's onSessionEvent handler logic for assistant.message and subagent events. */
-function handleSessionEvent(
+const defaultChannelOperatorMeta = { agentName: "channel-operator", agentDisplayName: "Channel Operator" };
+
+function makeDeps(store: Store, overrides?: Partial<AssistantMessageEventDeps>): AssistantMessageEventDeps {
+  return {
+    store,
+    orchestrator: {},
+    channelOperatorMeta: defaultChannelOperatorMeta,
+    ...overrides,
+  };
+}
+
+describe("daemon onSessionEvent — assistant.message reflection (via handleAssistantMessageEvent)", () => {
+  it("adds agent message to channel timeline with channel-operator senderMeta when no parentToolCallId", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+    const sseBroadcasts: Array<Record<string, unknown>> = [];
+
+    const result = handleAssistantMessageEvent("session-1", channelId, { content: "Hello from the assistant" }, {
+      ...makeDeps(store),
+      sseBroadcast: (e) => sseBroadcasts.push(e),
+    });
+
+    expect(result.stored).toBe(true);
+    expect(result.senderMeta).toEqual({
+      agentId: "channel-operator",
+      agentDisplayName: "Channel Operator",
+      agentRole: "channel-operator",
+    });
+
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.sender).toBe("agent");
+    expect(msgs[0]!.message).toBe("Hello from the assistant");
+    expect(msgs[0]!.senderMeta).toEqual({
+      agentId: "channel-operator",
+      agentDisplayName: "Channel Operator",
+      agentRole: "channel-operator",
+    });
+
+    expect(sseBroadcasts).toHaveLength(1);
+    const broadcast = sseBroadcasts[0] as Record<string, unknown>;
+    expect(broadcast["type"]).toBe("new_message");
+    expect(broadcast["channelId"]).toBe(channelId);
+    const broadcastData = broadcast["data"] as Record<string, unknown>;
+    expect(broadcastData["sender"]).toBe("agent");
+    expect(broadcastData["senderMeta"]).toEqual({
+      agentId: "channel-operator",
+      agentDisplayName: "Channel Operator",
+      agentRole: "channel-operator",
+    });
+  });
+
+  it("resolves subagent senderMeta when parentToolCallId matches a tracked subagent", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+
+    const orchestrator = {
+      getSubagentInfo: (sessionId: string, toolCallId: string) => {
+        if (sessionId === "session-sub" && toolCallId === "tool-abc") {
+          return { agentName: "worker", agentDisplayName: "Worker Agent" };
+        }
+        return undefined;
+      },
+    };
+
+    const result = handleAssistantMessageEvent(
+      "session-sub",
+      channelId,
+      { content: "Subagent reply", parentToolCallId: "tool-abc" },
+      { ...makeDeps(store), orchestrator },
+    );
+
+    expect(result.stored).toBe(true);
+    expect(result.senderMeta).toEqual({
+      agentId: "worker",
+      agentDisplayName: "Worker Agent",
+      agentRole: "subagent",
+    });
+
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs[0]!.senderMeta?.agentRole).toBe("subagent");
+    expect(msgs[0]!.senderMeta?.agentId).toBe("worker");
+  });
+
+  it("falls back to unknown-subagent when parentToolCallId does not match", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+
+    const orchestrator = { getSubagentInfo: () => undefined };
+
+    const result = handleAssistantMessageEvent(
+      "session-1",
+      channelId,
+      { content: "Unknown subagent", parentToolCallId: "no-match" },
+      { ...makeDeps(store), orchestrator },
+    );
+
+    expect(result.senderMeta?.agentRole).toBe("subagent");
+    expect(result.senderMeta?.agentId).toBe("unknown-subagent");
+  });
+
+  it("ignores assistant.message with empty content", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+
+    const result = handleAssistantMessageEvent("session-1", channelId, { content: "" }, makeDeps(store));
+
+    expect(result.stored).toBe(false);
+    expect(store.listMessages(channelId, 10)).toHaveLength(0);
+  });
+
+  it("ignores assistant.message when content is not a string", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+
+    const result = handleAssistantMessageEvent("session-1", channelId, {}, makeDeps(store));
+
+    expect(result.stored).toBe(false);
+    expect(store.listMessages(channelId, 10)).toHaveLength(0);
+  });
+
+  it("does not broadcast when sseBroadcast is not provided", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+
+    const result = handleAssistantMessageEvent("session-1", channelId, { content: "Hello" }, makeDeps(store));
+
+    expect(result.stored).toBe(true);
+    // No error thrown — sseBroadcast is optional
+  });
+});
+
+/**
+ * The subagent-completion and session.idle branches remain inline in daemon.ts main()
+ * and are tested here via a local replica to preserve existing test coverage.
+ * These branches do not use resolveAgentSenderMeta and are not at drift risk.
+ */
+function handleSubagentEvent(
   store: Store,
-  notifyAgent: (channelId: string) => void,
+  notifyAgent: (sessionId: string) => void,
   channelId: string | undefined,
+  sessionId: string,
   eventType: string,
   data: Record<string, unknown>,
-): { sseBroadcasts: Array<Record<string, unknown>> } {
-  const sseBroadcasts: Array<Record<string, unknown>> = [];
-
-  // Reflect assistant.message to channel timeline
-  if (channelId !== undefined && eventType === "assistant.message") {
-    const content = typeof data["content"] === "string" ? data["content"] : "";
-    if (content.length > 0) {
-      store.addMessage(channelId, "agent", content);
-      sseBroadcasts.push({
-        type: "new_message",
-        channelId,
-        data: { sender: "agent" as const, message: content },
-      });
-    }
-  }
-
-  // session.idle with backgroundTasks: notify agent about subagent stop
+): void {
   if (channelId !== undefined && eventType === "session.idle") {
     const bgTasks = data["backgroundTasks"] as { agents?: Array<{ agentId: string; agentType: string }> } | undefined;
     if (bgTasks?.agents !== undefined && bgTasks.agents.length > 0) {
@@ -41,7 +169,7 @@ function handleSessionEvent(
         const msg = `[SUBAGENT IDLE] ${agent.agentId} (${agent.agentType}) stopped`;
         store.addMessage(channelId, "system", msg);
       }
-      notifyAgent(channelId);
+      notifyAgent(sessionId);
     }
   }
 
@@ -52,72 +180,10 @@ function handleSessionEvent(
       const error = typeof data["error"] === "string" ? ` (error: ${data["error"]})` : "";
       const msg = `[SUBAGENT ${status.toUpperCase()}] ${agentName} ${status}${error}`;
       store.addMessage(channelId, "system", msg);
-      notifyAgent(channelId);
+      notifyAgent(sessionId);
     }
   }
-
-  return { sseBroadcasts };
 }
-
-describe("daemon onSessionEvent — assistant.message reflection", () => {
-  it("adds agent message to channel timeline on assistant.message", () => {
-    const store = new Store();
-    const channelId = store.createChannel().id;
-    const notifyAgent = vi.fn();
-
-    const { sseBroadcasts } = handleSessionEvent(store, notifyAgent, channelId, "assistant.message", {
-      content: "Hello from the assistant",
-    });
-
-    const msgs = store.listMessages(channelId, 10);
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0]!.sender).toBe("agent");
-    expect(msgs[0]!.message).toBe("Hello from the assistant");
-    expect(sseBroadcasts).toHaveLength(1);
-    expect(sseBroadcasts[0]).toEqual({
-      type: "new_message",
-      channelId,
-      data: { sender: "agent", message: "Hello from the assistant" },
-    });
-  });
-
-  it("ignores assistant.message with empty content", () => {
-    const store = new Store();
-    const channelId = store.createChannel().id;
-    const notifyAgent = vi.fn();
-
-    const { sseBroadcasts } = handleSessionEvent(store, notifyAgent, channelId, "assistant.message", {
-      content: "",
-    });
-
-    const msgs = store.listMessages(channelId, 10);
-    expect(msgs).toHaveLength(0);
-    expect(sseBroadcasts).toHaveLength(0);
-  });
-
-  it("ignores assistant.message when content is not a string", () => {
-    const store = new Store();
-    const channelId = store.createChannel().id;
-    const notifyAgent = vi.fn();
-
-    const { sseBroadcasts } = handleSessionEvent(store, notifyAgent, channelId, "assistant.message", {});
-
-    const msgs = store.listMessages(channelId, 10);
-    expect(msgs).toHaveLength(0);
-    expect(sseBroadcasts).toHaveLength(0);
-  });
-
-  it("ignores assistant.message when channelId is undefined", () => {
-    const store = new Store();
-    const notifyAgent = vi.fn();
-
-    const { sseBroadcasts } = handleSessionEvent(store, notifyAgent, undefined, "assistant.message", {
-      content: "should not appear",
-    });
-
-    expect(sseBroadcasts).toHaveLength(0);
-  });
-});
 
 describe("daemon onSessionEvent — session.idle with backgroundTasks", () => {
   it("inserts system message and notifies agent for each background agent", () => {
@@ -125,7 +191,7 @@ describe("daemon onSessionEvent — session.idle with backgroundTasks", () => {
     const channelId = store.createChannel().id;
     const notifyAgent = vi.fn();
 
-    handleSessionEvent(store, notifyAgent, channelId, "session.idle", {
+    handleSubagentEvent(store, notifyAgent, channelId, "session-1", "session.idle", {
       backgroundTasks: {
         agents: [
           { agentId: "worker-1", agentType: "worker" },
@@ -141,7 +207,7 @@ describe("daemon onSessionEvent — session.idle with backgroundTasks", () => {
     expect(msgs[0]!.message).toContain("[SUBAGENT IDLE]");
     expect(msgs[0]!.message).toContain("explorer-1");
     expect(msgs[1]!.message).toContain("worker-1");
-    expect(notifyAgent).toHaveBeenCalledWith(channelId);
+    expect(notifyAgent).toHaveBeenCalledWith("session-1");
   });
 
   it("does not notify on session.idle without backgroundTasks", () => {
@@ -149,7 +215,7 @@ describe("daemon onSessionEvent — session.idle with backgroundTasks", () => {
     const channelId = store.createChannel().id;
     const notifyAgent = vi.fn();
 
-    handleSessionEvent(store, notifyAgent, channelId, "session.idle", {});
+    handleSubagentEvent(store, notifyAgent, channelId, "session-1", "session.idle", {});
 
     const msgs = store.listMessages(channelId, 10);
     expect(msgs).toHaveLength(0);
@@ -161,7 +227,7 @@ describe("daemon onSessionEvent — session.idle with backgroundTasks", () => {
     const channelId = store.createChannel().id;
     const notifyAgent = vi.fn();
 
-    handleSessionEvent(store, notifyAgent, channelId, "session.idle", {
+    handleSubagentEvent(store, notifyAgent, channelId, "session-1", "session.idle", {
       backgroundTasks: { agents: [], shells: [] },
     });
 
@@ -177,7 +243,7 @@ describe("daemon onSessionEvent — subagent completion", () => {
     const channelId = store.createChannel().id;
     const notifyAgent = vi.fn();
 
-    handleSessionEvent(store, notifyAgent, channelId, "subagent.completed", {
+    handleSubagentEvent(store, notifyAgent, channelId, "session-1", "subagent.completed", {
       agentName: "worker",
     });
 
@@ -185,7 +251,7 @@ describe("daemon onSessionEvent — subagent completion", () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]!.sender).toBe("system");
     expect(pending[0]!.message).toBe("[SUBAGENT COMPLETED] worker completed");
-    expect(notifyAgent).toHaveBeenCalledWith(channelId);
+    expect(notifyAgent).toHaveBeenCalledWith("session-1");
   });
 
   it("inserts system message with error info on subagent.failed", () => {
@@ -193,7 +259,7 @@ describe("daemon onSessionEvent — subagent completion", () => {
     const channelId = store.createChannel().id;
     const notifyAgent = vi.fn();
 
-    handleSessionEvent(store, notifyAgent, channelId, "subagent.failed", {
+    handleSubagentEvent(store, notifyAgent, channelId, "session-1", "subagent.failed", {
       agentName: "worker",
       error: "timeout exceeded",
     });
@@ -202,7 +268,7 @@ describe("daemon onSessionEvent — subagent completion", () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]!.sender).toBe("system");
     expect(pending[0]!.message).toBe("[SUBAGENT FAILED] worker failed (error: timeout exceeded)");
-    expect(notifyAgent).toHaveBeenCalledWith(channelId);
+    expect(notifyAgent).toHaveBeenCalledWith("session-1");
   });
 
   it("does NOT insert system message for nested subagent (parentToolCallId present)", () => {
@@ -210,7 +276,7 @@ describe("daemon onSessionEvent — subagent completion", () => {
     const channelId = store.createChannel().id;
     const notifyAgent = vi.fn();
 
-    handleSessionEvent(store, notifyAgent, channelId, "subagent.completed", {
+    handleSubagentEvent(store, notifyAgent, channelId, "session-1", "subagent.completed", {
       agentName: "nested-worker",
       parentToolCallId: "outer-tool-call-123",
     });
@@ -224,7 +290,7 @@ describe("daemon onSessionEvent — subagent completion", () => {
     const store = new Store();
     const notifyAgent = vi.fn();
 
-    handleSessionEvent(store, notifyAgent, undefined, "subagent.completed", {
+    handleSubagentEvent(store, notifyAgent, undefined, "session-1", "subagent.completed", {
       agentName: "worker",
     });
 
@@ -236,13 +302,53 @@ describe("daemon onSessionEvent — subagent completion", () => {
     const channelId = store.createChannel().id;
     const notifyAgent = vi.fn();
 
-    handleSessionEvent(store, notifyAgent, channelId, "tool.invoked", {
+    handleSubagentEvent(store, notifyAgent, channelId, "session-1", "tool.invoked", {
       agentName: "worker",
     });
 
     const pending = store.drainPending(channelId);
     expect(pending).toHaveLength(0);
     expect(notifyAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("daemon onChannelMessage — agent sender senderMeta (via handleChannelMessageAgent)", () => {
+  const defaultMeta = { agentName: "channel-operator", agentDisplayName: "Channel Operator" };
+
+  function makeChanDeps(store: Store, overrides?: Partial<ChannelMessageAgentDeps>): ChannelMessageAgentDeps {
+    return { store, orchestrator: {}, channelOperatorMeta: defaultMeta, ...overrides };
+  }
+
+  it("stores agent message with channel-operator senderMeta", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+
+    const result = handleChannelMessageAgent("session-1", channelId, "Hello from IPC", makeChanDeps(store));
+
+    expect(result.senderMeta).toEqual({
+      agentId: "channel-operator",
+      agentDisplayName: "Channel Operator",
+      agentRole: "channel-operator",
+    });
+
+    const msgs = store.listMessages(channelId, 10);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.senderMeta?.agentRole).toBe("channel-operator");
+  });
+
+  it("broadcasts with senderMeta when sseBroadcast is provided", () => {
+    const store = new Store();
+    const channelId = store.createChannel().id;
+    const broadcasts: Array<Record<string, unknown>> = [];
+
+    handleChannelMessageAgent("session-1", channelId, "Broadcast me", {
+      ...makeChanDeps(store),
+      sseBroadcast: (e) => broadcasts.push(e),
+    });
+
+    expect(broadcasts).toHaveLength(1);
+    const data = (broadcasts[0]!["data"]) as Record<string, unknown>;
+    expect((data["senderMeta"] as Record<string, unknown>)["agentRole"]).toBe("channel-operator");
   });
 });
 
