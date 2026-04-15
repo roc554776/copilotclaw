@@ -296,9 +296,9 @@ vitest.config.ts           — vitest config; excludes test/browser/ (Playwright
 playwright.config.ts       — Playwright config for browser E2E tests
 ```
 
-### Test Suites (907 total: 825 vitest + 26 Playwright + 56 frontend vitest)
+### Test Suites (851 total: 825 vitest + 26 Playwright)
 
-Note: "frontend vitest" runs in a separate Vite environment from gateway vitest.
+Note: vitest 825 = 112 agent + 631 gateway (unit 284 + integration 272 + e2e 75) + 82 frontend. Frontend vitest runs in a separate Vite environment from gateway vitest.
 
 ```
 Gateway vitest (631 tests: unit 284 + integration 272 + e2e 75)   — split into test/unit/ (pure unit tests), test/integration/ (real DB/FS/server tests), and test/e2e/ (full HTTP server tests)
