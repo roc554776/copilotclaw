@@ -133,8 +133,11 @@ v0.72.0 で実現した部分:
 - `agent_status_change` / `agent_compatibility_change` の global SSE push（daemon の agent monitor が変化検知時に `broadcastGlobal` 送信）
 - `DashboardPage` / `StatusPage` が `/api/global-events` を subscribe し、上記 event 受信で UI 更新
 
+v0.73.0 で追加実現:
+- `log_appended` global event（`LogBuffer.setOnAppend` フックで `broadcastGlobal` を wire。`DashboardPage` の `log_appended` 受信処理と `logsVisible` 変化時の one-shot snapshot fetch）
+
 未実現のまま:
-- `quota_update` / `models_update` / `token_usage_update` / `log_appended` / `channel_list_change` / `config_change` 等の global event
+- `quota_update` / `models_update` / `token_usage_update` / `channel_list_change` / `config_change` 等の global event
 - これらに対応する backend broadcast 実装
 
 ### Req: ポーリング依存の解消（v0.72.0 で部分実現）
@@ -149,8 +152,10 @@ v0.72.0 で解消した部分:
 - `DashboardPage` の `GET /api/status` 5s ポーリング — 初回 snapshot fetch + `/api/global-events` 受信に置き換え済み
 - `StatusPage` の `GET /api/status` 5s ポーリング — 同様
 
+v0.73.0 で解消した部分:
+- `DashboardPage` の `GET /api/logs` 3s ポーリング — `log_appended` global SSE + `logsVisible` 変化時の one-shot snapshot fetch に置き換え済み
+
 未実現のまま:
-- `DashboardPage` の `GET /api/logs` 3s ポーリング
 - `StatusPage` の `GET /api/quota` / `GET /api/models` / `GET /api/token-usage` ポーリング
 - `SessionEventsPage` の `GET /api/sessions/{sessionId}/events` 2s ポーリング
 

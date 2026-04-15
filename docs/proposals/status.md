@@ -211,7 +211,7 @@
   - ポーリング置換（v0.72.0 で部分実現。全置換対象の網羅リストと置換先 SSE の設計判断は `docs/proposals/state-management-architecture.md` の「ポーリング置換対象（網羅リスト）」節を参照）:
     - `DashboardPage`: `GET /api/status` 5s ポーリング → global SSE（v0.72.0 で解消。初回マウント時の snapshot fetch + `/api/global-events` の `agent_status_change` / `agent_compatibility_change` 受信で更新）
     - `StatusPage`: `GET /api/status` 5s ポーリング → global SSE（v0.72.0 で解消。`DashboardPage` と同様）
-    - `DashboardPage`: `GET /api/logs` 3s ポーリング（Logs パネル表示中のみ）→ global SSE（新規 `log_appended` event）— 未実現
+    - `DashboardPage`: `GET /api/logs` 3s ポーリング（Logs パネル表示中のみ）→ global SSE（`log_appended` event）— v0.73.0 で解消済み（`LogBuffer.setOnAppend` フックで `broadcastGlobal({ type: "log_appended", entries: [entry] })` を wire。`DashboardPage` は `logsVisible` 変化時に one-shot snapshot fetch + SSE `log_appended` 受信でリアルタイム更新。周期ポーリングは削除済み）
     - `StatusPage`: `GET /api/quota` ポーリング → global SSE（新規 `quota_update` event）— 未実現
     - `StatusPage`: `GET /api/models` ポーリング → global SSE（新規 `models_update` event）— 未実現
     - `StatusPage`: `GET /api/token-usage` ポーリング → global SSE（新規 `token_usage_update` event）— 未実現

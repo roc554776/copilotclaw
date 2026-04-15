@@ -485,8 +485,8 @@ type GlobalSseEvent =
   | { type: "channel_list_change" }
   | { type: "config_change" }
   | { type: "system_status_change" }
-  // ポーリング置換のために追加される新規 event 型
-  | { type: "log_appended"; entries: LogEntry[] }                 // GET /api/logs 3s ポーリングの置換
+  // ポーリング置換のために追加される event 型
+  | { type: "log_appended"; entries: LogEntry[] }                 // GET /api/logs 3s ポーリングの置換（v0.73.0 実装済み）
   | { type: "quota_update"; quota: QuotaInfo }                     // GET /api/quota 5s ポーリングの置換
   | { type: "models_update"; models: ModelInfo[] }                 // GET /api/models 5s ポーリングの置換
   | { type: "token_usage_update"; summary: TokenUsageSummary }     // GET /api/token-usage ポーリングの置換
@@ -582,7 +582,7 @@ process state（実際の SSE ソケット）は effect runtime が管理し、w
 | ページ | ポーリング対象 API | 間隔 | 置換先 SSE | 置換方針 |
 |---|---|---|---|---|
 | `DashboardPage` | `GET /api/status` | ~~5s~~ | global SSE | **v0.72.0 で解消済み**。初回マウント時の snapshot fetch（gateway version 取得）+ `/api/global-events` の `agent_status_change` / `agent_compatibility_change` 受信で更新。周期ポーリングは削除済み |
-| `DashboardPage` | `GET /api/logs` | 3s（Logs パネル表示中のみ） | global SSE | 新規 global event `log_appended` を追加し、LogBuffer へのアペンド時に broadcast する。frontend は `log_appended` を受信して Logs パネルをリアルタイム更新する（未実現）|
+| `DashboardPage` | `GET /api/logs` | ~~3s（Logs パネル表示中のみ）~~ | global SSE | **v0.73.0 で解消済み**。`LogBuffer.setOnAppend` フックで `broadcastGlobal({ type: "log_appended", entries: [entry] })` を wire。`DashboardPage` は `logsVisible` 変化時に one-shot snapshot fetch + SSE `log_appended` 受信でリアルタイム更新。周期ポーリングは削除済み |
 | `StatusPage` | `GET /api/status` | ~~5s~~ | global SSE | **v0.72.0 で解消済み**。`DashboardPage` と同様に初回 snapshot + `/api/global-events` 受信に置き換え済み |
 | `StatusPage` | `GET /api/quota` | 5s | global SSE | 新規 global event `quota_update` を追加し、クォータ情報が更新された時点で broadcast する。`system_status_change` に含めるか独立 event にするかは実装時に決定する（未実現）|
 | `StatusPage` | `GET /api/models` | 5s | global SSE | 新規 global event `models_update` を追加する。モデル一覧は変化頻度が低いため、初回接続時の `SendReplayEvents` で最新値を受け取り、変化時のみ更新 event を受信する設計が合理的（未実現）|
@@ -590,7 +590,7 @@ process state（実際の SSE ソケット）は effect runtime が管理し、w
 | `StatusPage` | 複数期間の `GET /api/token-usage` | 60s | global SSE | 同上。`token_usage_update` を受信した frontend が最新データを pull するか、event payload にサマリーを含める形で対応する（実装時に決定）（未実現）|
 | `SessionEventsPage` | `GET /api/sessions/{sessionId}/events` | 2s | channel-scoped SSE または session-scoped SSE | 専用 session-scoped SSE エンドポイントを追加するか、既存の channel-scoped SSE（`/api/channels/{channelId}/events`）を拡張して session event の差分を `channel_timeline_event` として配信する設計を採用する（詳細は下記注を参照）（未実現）|
 
-各ポーリング置換に対応する新規 global event（`log_appended` / `quota_update` / `models_update` / `token_usage_update`）の型定義は「新設計: SseEvent 型定義」節の `GlobalSseEvent` を参照。
+各ポーリング置換に対応する global event（`log_appended`（v0.73.0 実装済み） / `quota_update` / `models_update` / `token_usage_update`）の型定義は「新設計: SseEvent 型定義」節の `GlobalSseEvent` を参照。
 
 **`SessionEventsPage` の置換方針注記**
 
