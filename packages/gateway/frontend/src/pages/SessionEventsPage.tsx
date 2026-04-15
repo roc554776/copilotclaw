@@ -81,6 +81,9 @@ export function SessionEventsPage() {
         if (data.type === "session_event_appended" && data.event) {
           setEvents((prev) => {
             const existingIds = new Set(prev.map((ev) => ev.id).filter((id): id is number => id !== undefined));
+            // Events without an id are always appended (not dedup-eligible).
+            // In practice, setOnAppend assigns an id to every event before broadcast,
+            // so id-less events should not occur in production.
             if (data.event!.id !== undefined && existingIds.has(data.event!.id)) return prev;
             return [...prev, data.event!];
           });

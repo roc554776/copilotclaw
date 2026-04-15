@@ -1,5 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { test, expect } from "@playwright/test";
 import { startServer, type ServerHandle } from "../../src/server.js";
 import { Store } from "../../src/store.js";
@@ -7,7 +7,8 @@ import { SessionEventStore } from "../../src/session-event-store.js";
 
 test("SessionEventsPage receives live events via SSE after session_event_appended broadcast", async ({ page }) => {
   const store = new Store();
-  const tmpDir = mkdtempSync(`${tmpdir()}/copilotclaw-se-sse-test-`);
+  mkdirSync(join(process.cwd(), "tmp"), { recursive: true });
+  const tmpDir = mkdtempSync(join(process.cwd(), "tmp/session-events-sse-test-"));
   const sessionEventStore = new SessionEventStore(tmpDir);
   const handle: ServerHandle = await startServer({ port: 0, store, agentManager: null, sessionEventStore });
   const baseUrl = `http://localhost:${handle.port}`;
@@ -46,7 +47,8 @@ test("SessionEventsPage receives live events via SSE after session_event_appende
 
 test("SessionEventsPage deduplicates events arriving via SSE that match initial snapshot", async ({ page }) => {
   const store = new Store();
-  const tmpDir = mkdtempSync(`${tmpdir()}/copilotclaw-se-dedup-test-`);
+  mkdirSync(join(process.cwd(), "tmp"), { recursive: true });
+  const tmpDir = mkdtempSync(join(process.cwd(), "tmp/session-events-dedup-test-"));
   const sessionEventStore = new SessionEventStore(tmpDir);
   const handle: ServerHandle = await startServer({ port: 0, store, agentManager: null, sessionEventStore });
   const baseUrl = `http://localhost:${handle.port}`;
