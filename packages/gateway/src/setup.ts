@@ -413,7 +413,10 @@ _Your curated long-term memory. Write significant events, decisions, lessons lea
 _Over time, review daily files in memory/ and distill what's worth keeping here._
 `;
 
-main().catch((err: unknown) => {
-  console.error("Error:", err);
-  process.exit(1);
-});
+const isDirectExecution = process.argv[1]?.endsWith("setup.js") === true;
+if (isDirectExecution) {
+  main().catch((err: unknown) => {
+    console.error("Error:", err);
+    process.exit(1);
+  });
+}
