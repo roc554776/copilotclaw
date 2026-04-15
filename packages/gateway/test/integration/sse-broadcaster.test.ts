@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type ServerHandle, startServer } from "../../src/server.js";
 import { Store } from "../../src/store.js";
+import { SseBroadcaster, formatSessionSseFrame } from "../../src/sse-broadcaster.js";
 
 let handle: ServerHandle;
 let baseUrl: string;
@@ -628,6 +629,137 @@ describe("SSE /api/sessions/:id/events/stream (session-scoped)", () => {
     controller.abort();
 
     expect(channelEvents).toHaveLength(0);
+
+    await freshHandle.close();
+  });
+});
+
+describe("formatSessionSseFrame", () => {
+  it("includes id: line when event.event.id is defined", () => {
+    const frame = formatSessionSseFrame({
+      type: "session_event_appended",
+      event: { id: 42, type: "tool.execution_start", timestamp: "2026-04-15T00:00:00Z", data: { toolName: "bash" } },
+    });
+    expect(frame).toMatch(/^id: 42\n/);
+    expect(frame).toContain("data: ");
+    expect(frame.endsWith("\n\n")).toBe(true);
+  });
+
+  it("omits id: line when event.event.id is undefined", () => {
+    const frame = formatSessionSseFrame({
+      type: "session_event_appended",
+      event: { type: "tool.execution_start", timestamp: "2026-04-15T00:00:00Z", data: {} },
+    });
+    expect(frame).not.toMatch(/^id:/);
+    expect(frame).toMatch(/^data: /);
+    expect(frame.endsWith("\n\n")).toBe(true);
+  });
+
+  it("data contains serialized SseSessionEvent JSON", () => {
+    const event = {
+      type: "session_event_appended" as const,
+      event: { id: 10, type: "assistant.message", timestamp: "2026-04-15T00:00:00Z", data: { content: "hello" } },
+    };
+    const frame = formatSessionSseFrame(event);
+    const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
+    expect(dataLine).toBeDefined();
+    const parsed = JSON.parse(dataLine!.slice(6)) as typeof event;
+    expect(parsed.type).toBe("session_event_appended");
+    expect(parsed.event.id).toBe(10);
+  });
+});
+
+describe("SseBroadcaster broadcastToSession id: line format", () => {
+  it("broadcasts session event with id: line when event has id", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+
+    const rawLines: string[] = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve) => {
+      fetch(`${freshUrl}/api/sessions/id-line-test/events/stream`, { signal: controller.signal })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                rawLines.push(line);
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    freshHandle.sseBroadcaster.broadcastToSession("id-line-test", {
+      type: "session_event_appended",
+      event: { id: 99, type: "tool.execution_start", timestamp: "2026-04-15T00:00:00Z", data: { toolName: "x" } },
+    });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    expect(rawLines).toContain("id: 99");
+    expect(rawLines.some((l) => l.startsWith("data: "))).toBe(true);
+
+    await freshHandle.close();
+  });
+
+  it("broadcasts session event without id: line when event has no id", async () => {
+    const freshHandle = await startServer({ port: 0, store: new Store(), agentManager: null });
+    const freshUrl = `http://localhost:${freshHandle.port}`;
+
+    const rawLines: string[] = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve) => {
+      fetch(`${freshUrl}/api/sessions/no-id-test/events/stream`, { signal: controller.signal })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                rawLines.push(line);
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 50); });
+
+    freshHandle.sseBroadcaster.broadcastToSession("no-id-test", {
+      type: "session_event_appended",
+      event: { type: "tool.execution_start", timestamp: "2026-04-15T00:00:00Z", data: {} },
+    });
+
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    expect(rawLines.some((l) => l.startsWith("id: "))).toBe(false);
+    expect(rawLines.some((l) => l.startsWith("data: "))).toBe(true);
 
     await freshHandle.close();
   });

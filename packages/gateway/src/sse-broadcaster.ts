@@ -44,6 +44,18 @@ export type GlobalSseEvent =
   | { type: "channel_list_change"; channels: Channel[] };
 
 /**
+ * Format a session-scoped SSE frame with the event ID line when available.
+ * Uses `id: <n>` from `event.event.id` so EventSource tracks Last-Event-ID automatically.
+ * Exported so `replaySessionEventsAfter` in daemon.ts can share the same format and prevent drift.
+ */
+export function formatSessionSseFrame(event: SseSessionEvent): string {
+  const id = event.event.id;
+  return id !== undefined
+    ? `id: ${id}\ndata: ${JSON.stringify(event)}\n\n`
+    : `data: ${JSON.stringify(event)}\n\n`;
+}
+
+/**
  * Server-Sent Events broadcaster. Uses SSE instead of WebSocket
  * because Node.js 22 has no built-in WebSocketServer and SSE
  * requires no external dependencies.
@@ -104,7 +116,7 @@ export class SseBroadcaster {
   }
 
   broadcastToSession(sessionId: string, event: SseSessionEvent): void {
-    const payload = `data: ${JSON.stringify(event)}\n\n`;
+    const payload = formatSessionSseFrame(event);
     for (const client of this.clients) {
       if (client.scope.type === "session" && client.scope.sessionId === sessionId) {
         client.res.write(payload);

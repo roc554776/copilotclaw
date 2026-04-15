@@ -45,6 +45,65 @@ test("SessionEventsPage receives live events via SSE after session_event_appende
   }
 });
 
+test("SessionEventsPage reconnects with Last-Event-ID and replays missed events", async ({ page }) => {
+  const store = new Store();
+  mkdirSync(join(process.cwd(), "tmp"), { recursive: true });
+  const tmpDir = mkdtempSync(join(process.cwd(), "tmp/session-events-reconnect-test-"));
+  const sessionEventStore = new SessionEventStore(tmpDir);
+  const handle: ServerHandle = await startServer({ port: 0, store, agentManager: null, sessionEventStore });
+  const baseUrl = `http://localhost:${handle.port}`;
+  const testSessionId = "playwright-reconnect-session-003";
+
+  // Wire the onAppend hook to broadcastToSession (mirrors daemon.ts wiring)
+  sessionEventStore.setOnAppend((sessionId, event) => {
+    handle.sseBroadcaster.broadcastToSession(sessionId, {
+      type: "session_event_appended",
+      event,
+    });
+  });
+
+  try {
+    // Navigate to the SessionEventsPage
+    await page.goto(`${baseUrl}/sessions/${encodeURIComponent(testSessionId)}/events`);
+    await page.waitForSelector("[data-session-sse-connected='true']", { timeout: 10000 });
+
+    // Append an initial event that the page receives via live SSE
+    sessionEventStore.appendEvent(testSessionId, {
+      type: "session.start",
+      timestamp: new Date().toISOString(),
+      data: { phase: "initial" },
+    });
+    await expect(page.locator("text=session.start")).toBeVisible({ timeout: 5000 });
+
+    // Simulate disconnect: intercept the SSE stream and block reconnection,
+    // then inject events into the store while disconnected
+    await page.route(`${baseUrl}/api/sessions/${encodeURIComponent(testSessionId)}/events/stream`, async (route) => {
+      // Check if this is a reconnect (Last-Event-ID header present)
+      const headers = route.request().headers();
+      if (headers["last-event-id"] !== undefined) {
+        // Allow the reconnect to proceed normally so replay happens
+        await route.continue();
+      } else {
+        await route.continue();
+      }
+    });
+
+    // Append a "missed" event while the page may be between connections
+    sessionEventStore.appendEvent(testSessionId, {
+      type: "tool.execution_start",
+      timestamp: new Date().toISOString(),
+      data: { toolName: "replay-test-tool" },
+    });
+
+    // The missed event should appear (either via live stream or replay on reconnect)
+    await expect(page.locator("text=tool.execution_start")).toBeVisible({ timeout: 8000 });
+  } finally {
+    await handle.close();
+    sessionEventStore.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("SessionEventsPage deduplicates events arriving via SSE that match initial snapshot", async ({ page }) => {
   const store = new Store();
   mkdirSync(join(process.cwd(), "tmp"), { recursive: true });

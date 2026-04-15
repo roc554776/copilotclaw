@@ -23,6 +23,9 @@ export interface SystemPromptSnapshot {
 
 const DEFAULT_MAX_EVENTS = 100_000; // max total events across all sessions
 
+/** Maximum number of events returned by listEventsAfterId in a single call. */
+export const SESSION_REPLAY_LIMIT = 500;
+
 export class SessionEventStore {
   private readonly db: Database.Database;
   private readonly promptDir: string;
@@ -110,6 +113,16 @@ export class SessionEventStore {
       ).all(sessionId, safeLimit) as typeof rows;
       rows.reverse(); // Return in ascending order
     }
+    return rows.map((r) => this.rowToEvent(r));
+  }
+
+  /** Get events for a session with id > afterId, in ascending order, up to limit (capped at SESSION_REPLAY_LIMIT). */
+  listEventsAfterId(sessionId: string, afterId: number, limit?: number): SessionEvent[] {
+    if (!Number.isFinite(afterId)) return [];
+    const safeLimit = (typeof limit === "number" && Number.isFinite(limit) && limit > 0) ? Math.min(limit, SESSION_REPLAY_LIMIT) : SESSION_REPLAY_LIMIT;
+    const rows = this.db.prepare(
+      "SELECT id, type, timestamp, data, parentId FROM session_events WHERE sessionId = ? AND id > ? ORDER BY id ASC LIMIT ?",
+    ).all(sessionId, afterId, safeLimit) as Array<{ id: number; type: string; timestamp: string; data: string; parentId: string | null }>;
     return rows.map((r) => this.rowToEvent(r));
   }
 

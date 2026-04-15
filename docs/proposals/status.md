@@ -217,6 +217,7 @@
     - `StatusPage`: `GET /api/token-usage` 60s ポーリング（期間別 tokenUsagePeriods）→ one-shot fetch に置換 / `GET /api/token-usage` 5h ウィンドウ → global SSE（`token_usage_update` event）— **v0.75.0 で解消済み**（`usePolling(refreshPeriods, 60000)` 削除、`refreshPeriods` は初回マウント時 1 度だけ呼び出す。`sessionEventStore.setOnAppend` hook に `assistant.usage` 分岐を追加し、append 時に 5h ウィンドウ集計結果を `broadcastGlobal({ type: "token_usage_update", summary })` で配信。StatusPage の SSE `onmessage` handler で `token_usage_update` を受信して `tokenUsage5h` を更新）
     - `SessionEventsPage`: `GET /api/sessions/{sessionId}/events` 2s ポーリング → session-scoped SSE（新規 `/api/sessions/{sessionId}/events/stream` エンドポイントを追加する方針を暫定とする）— **v0.74.0 で解消済み**（`SseClientScope` に `session` スコープ追加、`addSessionClient` / `broadcastToSession` / `SseSessionEvent` 実装、`sessionEventStore.setOnAppend` wire、`/api/sessions/:id/events/stream` エンドポイント追加、`SessionEventsPage` の EventSource 購読・dedup・`data-session-sse-connected` 属性）
     - `DashboardPage`: channel 作成・アーカイブ・モデル変更の後にチャンネルリストが自動更新されない問題 → `channel_list_change` global SSE event を新設 — **v0.76.0 で解消済み**（`Store.setOnChannelListChange` hook + `broadcastChannelListChange` helper（daemon.ts export）+ `DashboardPage` の `channel_list_change` 分岐追加。アクティブチャンネルが消えた場合は先頭チャンネルにフォールバック。`showArchived` の状態に応じてフィルタリングを適用）
+    - session-scoped SSE の Last-Event-ID reconnect replay — ネットワーク blip やタブスリープ後の再接続時に missed event を DB から catch-up 配信する — **v0.77.0 で解消済み**（`SessionEventStore.listEventsAfterId` メソッド追加・`SESSION_REPLAY_LIMIT=500` export、`sse-broadcaster.ts` の `formatSessionSseFrame` 関数 export と `broadcastToSession` での `id:` line 付与、`session-replay.ts` に `replaySessionEventsAfter` helper（daemon.ts から re-export）、`/api/sessions/:id/events/stream` での `Last-Event-ID` header parse と接続直後 catch-up 送信。channel / global SSE の replay は別 scope）
 
 **未実現:**
 - 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — gateway 側・agent 側・IPC/cross-cutting の全 subsystem を対象に、world state / process state 分離・subsystem ごとの reducer・event bus による subsystem 間通信を導入する。下記の個別未実現項目はすべて本 proposal の実装に包含される
@@ -230,7 +231,6 @@
   - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
   - イベント抽象化 — `copilotclaw_wait` 返却値の多型化（`WaitToolPayload` を複数イベント型の union に変更）、メッセージ以外のイベント型（subagent-completed / subagent-failed / keepalive）の追加（`docs/proposals/state-management-architecture.md` の「Gateway: AbstractSessionEvent の拡張 — イベント抽象化」節参照）
   - エージェントアイコン・プロフィールモーダル・collapse 表示 — タイムライン UI における sender の視覚化（アイコン + 表示名 + プロフィールモーダル、subagent メッセージの collapse 表示）（`docs/proposals/state-management-architecture.md` の「メッセージ sender 識別の設計」節参照）
-  - session-scoped SSE の Last-Event-ID reconnect replay — ネットワーク blip やタブスリープ後の再接続時に missed event を DB から catch-up 配信する。`SessionEventStore.listEventsAfterId` メソッド追加、SSE frame への `id:` line 付与、`/api/sessions/:id/events/stream` での `Last-Event-ID` header parse と接続直後の catch-up 送信が含まれる。channel / global SSE の replay は別 scope（`docs/proposals/state-management-architecture.md` の「session-scoped SSE の Last-Event-ID reconnect replay 設計」節参照）（2026-04-15 追加）
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）

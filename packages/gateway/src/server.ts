@@ -7,6 +7,7 @@ import { BuiltinChatChannel } from "./builtin-chat-channel.js";
 import type { ChannelProvider } from "./channel-provider.js";
 import { DEFAULT_PORT, getProfileName, getStateDir, loadConfig } from "./config.js";
 import { fetchGitHubModels, fetchPremiumRequestUsage } from "./github-api.js";
+import { replaySessionEventsAfter } from "./session-replay.js";
 import { getWorkspaceRoot } from "./workspace.js";
 import { LogBuffer } from "./log-buffer.js";
 import { renderEventsPage, renderSessionsListPage, renderStatusPage } from "./observability-pages.js";
@@ -590,7 +591,18 @@ function createRequestHandler(
     const eventsStreamMatch = /^\/api\/sessions\/([^/]+)\/events\/stream$/.exec(fullPathname);
     if (eventsStreamMatch !== null && method === "GET") {
       const sessionId = decodeURIComponent(eventsStreamMatch[1]!);
+      // Register SSE client first (sends headers and keepalive comment)
       sseBroadcaster.addSessionClient(res, sessionId);
+      // Replay missed events if Last-Event-ID header is present (reconnect scenario)
+      if (sessionEventStore !== null) {
+        const lastEventIdRaw = req.headers["last-event-id"];
+        if (typeof lastEventIdRaw === "string") {
+          const afterId = parseInt(lastEventIdRaw, 10);
+          if (Number.isFinite(afterId)) {
+            replaySessionEventsAfter(res, sessionId, afterId, sessionEventStore);
+          }
+        }
+      }
       return;
     }
 

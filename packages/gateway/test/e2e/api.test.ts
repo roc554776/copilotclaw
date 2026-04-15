@@ -959,3 +959,104 @@ describe("unknown routes", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("GET /api/sessions/:id/events/stream — Last-Event-ID replay", () => {
+  it("replays missed events when Last-Event-ID header is provided", async () => {
+    const replaySessionId = "e2e-replay-test-session";
+    // Prepopulate 3 events
+    sessionEventStore.appendEvent(replaySessionId, { type: "event-0", timestamp: "2026-04-15T00:00:00Z", data: {} });
+    sessionEventStore.appendEvent(replaySessionId, { type: "event-1", timestamp: "2026-04-15T00:00:01Z", data: {} });
+    sessionEventStore.appendEvent(replaySessionId, { type: "event-2", timestamp: "2026-04-15T00:00:02Z", data: {} });
+
+    const all = sessionEventStore.getEvents(replaySessionId);
+    const pivotId = all[0]!.id!; // Last-Event-ID = id of event-0, so should replay event-1, event-2
+
+    const received: Array<{ type: string }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve, reject) => {
+      fetch(`${baseUrl}/api/sessions/${encodeURIComponent(replaySessionId)}/events/stream`, {
+        signal: controller.signal,
+        headers: { "Last-Event-ID": String(pivotId) },
+      })
+        .then(async (res) => {
+          if (res.status !== 200) { reject(new Error(`status ${res.status}`)); return; }
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const parsed = JSON.parse(line.slice(6)) as { type: string; event: { type: string } };
+                    received.push({ type: parsed.event.type });
+                  } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    // Give time for replayed events to arrive (they are written synchronously after addSessionClient)
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    // Should have received event-1 and event-2 (not event-0, since Last-Event-ID was its id)
+    expect(received.length).toBeGreaterThanOrEqual(2);
+    expect(received.some((e) => e.type === "event-1")).toBe(true);
+    expect(received.some((e) => e.type === "event-2")).toBe(true);
+    expect(received.some((e) => e.type === "event-0")).toBe(false);
+  });
+
+  it("does not replay when Last-Event-ID header is absent", async () => {
+    const noReplaySessionId = "e2e-no-replay-session";
+    sessionEventStore.appendEvent(noReplaySessionId, { type: "pre-event", timestamp: "2026-04-15T00:00:00Z", data: {} });
+
+    const received: Array<{ type: string }> = [];
+    const controller = new AbortController();
+    const ready = new Promise<void>((resolve) => {
+      fetch(`${baseUrl}/api/sessions/${encodeURIComponent(noReplaySessionId)}/events/stream`, { signal: controller.signal })
+        .then(async (res) => {
+          if (res.status !== 200) return;
+          resolve();
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  try {
+                    const parsed = JSON.parse(line.slice(6)) as { type: string; event: { type: string } };
+                    received.push({ type: parsed.event.type });
+                  } catch {}
+                }
+              }
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    });
+
+    await ready;
+    await new Promise((r) => { setTimeout(r, 100); });
+    controller.abort();
+
+    // No pre-existing events should be replayed when no Last-Event-ID header
+    expect(received.some((e) => e.type === "pre-event")).toBe(false);
+  });
+});

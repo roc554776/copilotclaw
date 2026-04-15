@@ -178,13 +178,11 @@ v0.76.0 で解消した部分:
 未実現のまま:
 - `StatusPage` の `quota_update` / `models_update` global SSE event — `GET /api/quota` / `GET /api/models` は元々定期ポーリングでなく初回 snapshot fetch のみだが、変化時の push 配信が未実現
 
-### Req: session-scoped SSE の reconnect 時 event 欠損解消（未実現）
+### Req: session-scoped SSE の reconnect 時 event 欠損解消（v0.77.0 で実現済み）
 
-session-scoped SSE（`/api/sessions/:id/events/stream`）では、ネットワーク切断やタブのスリープ後に再接続した場合、切断期間中に発生した event が失われる。EventSource の Last-Event-ID 標準機能を使い、reconnect 時に missed event を自動 replay することで event 欠損を解消する。
+session-scoped SSE（`/api/sessions/:id/events/stream`）では、ネットワーク切断やタブのスリープ後に再接続した場合、切断期間中に発生した event が失われる。EventSource の Last-Event-ID 標準機能を使い、reconnect 時に missed event を自動 replay することで event 欠損を解消した。
 
-- **現状の問題**: session-scoped SSE（`/api/sessions/:id/events/stream`）は接続中のクライアントに event を push 配信するが、クライアントが切断している間に発生した event は失われる。`SessionEventStore` は DB に event を永続保存しているため、失われた event はサーバー側には存在するが、クライアントには届かない
-- **期待する動作**: EventSource が自動送信する `Last-Event-ID` request header を endpoint が読み取り、接続直後に DB から該当 ID 以降の event を catch-up 配信（replay）する。ネットワーク blip やタブスリープ後の再接続で missed event が自動的に戻ってくる
-- **標準機能の活用**: `EventSource` は最後に受信した `id:` フィールドを記憶し、reconnect 時に `Last-Event-ID` header として自動送信する。サーバー側は各 event の SSE frame に `id:` line を付与し、reconnect 時は header を読んで DB から catch-up する
+- **実装内容**: `SessionEventStore.listEventsAfterId(sessionId, afterId, limit?)` を追加し、`id > afterId` の event を昇順で最大 `SESSION_REPLAY_LIMIT`（500）件返す。`sse-broadcaster.ts` に `formatSessionSseFrame(event)` を export し `id: <n>` line を付与。`session-replay.ts` の `replaySessionEventsAfter` が `res.write()` で reconnect client に直接書き込む。`/api/sessions/:id/events/stream` endpoint で `Last-Event-ID` header を parse し接続直後に replay を実行する
 - **scope**: session-scoped SSE のみ対象。global SSE および channel-scoped SSE の replay は別 scope で後回し
 - **抽象セッションと物理セッション**: session-scoped SSE は **物理セッション（physicalSession）** を対象にする。`SessionEventStore` の event は物理セッション単位（`sessionId` = physical session の ID として DB に保存）で管理されており、replay も物理セッション単位で行う（抽象セッションに対する replay は本要件の scope 外）
 - **dedup**: `SessionEventsPage` は既存の `processedIds` Set による id ベース dedup を持つ。replay で重複配信が発生しても frontend 側で吸収される

@@ -91,6 +91,12 @@ export function handleIntentToolCall(
   return { acknowledged: true };
 }
 
+/**
+ * Re-exported from session-replay.ts so integration tests can import from daemon.ts
+ * following the same pattern as broadcastTokenUsageIfNeeded and broadcastChannelListChange.
+ */
+export { replaySessionEventsAfter } from "./session-replay.js";
+
 async function main(): Promise<void> {
   const forceAgentRestart = process.env["COPILOTCLAW_FORCE_AGENT_RESTART"] === "1";
 

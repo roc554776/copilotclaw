@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionEventStore } from "../../src/session-event-store.js";
+import { SESSION_REPLAY_LIMIT, SessionEventStore } from "../../src/session-event-store.js";
 import { broadcastTokenUsageIfNeeded } from "../../src/daemon.js";
 
 describe("SessionEventStore", () => {
@@ -515,6 +515,83 @@ describe("SessionEventStore", () => {
       }).not.toThrow();
 
       errorStore.close();
+    });
+  });
+
+  describe("listEventsAfterId", () => {
+    it("returns events with id > afterId in ascending order", () => {
+      for (let i = 0; i < 5; i++) {
+        store.appendEvent("sess-after", { type: `event-${i}`, timestamp: `2026-04-15T00:00:0${i}Z`, data: { i } });
+      }
+      const all = store.getEvents("sess-after");
+      const pivotId = all[1]!.id!; // event-1
+
+      const result = store.listEventsAfterId("sess-after", pivotId);
+      expect(result).toHaveLength(3);
+      expect(result[0]!.type).toBe("event-2");
+      expect(result[1]!.type).toBe("event-3");
+      expect(result[2]!.type).toBe("event-4");
+      // Ascending order
+      expect(result[0]!.id!).toBeLessThan(result[1]!.id!);
+    });
+
+    it("returns all events when afterId=0", () => {
+      for (let i = 0; i < 3; i++) {
+        store.appendEvent("sess-after0", { type: `event-${i}`, timestamp: `2026-04-15T00:00:0${i}Z`, data: {} });
+      }
+      const result = store.listEventsAfterId("sess-after0", 0);
+      expect(result).toHaveLength(3);
+    });
+
+    it("returns empty array when afterId is NaN", () => {
+      store.appendEvent("sess-after-nan", { type: "event-0", timestamp: "2026-04-15T00:00:00Z", data: {} });
+      expect(store.listEventsAfterId("sess-after-nan", NaN)).toHaveLength(0);
+    });
+
+    it("returns empty array when afterId is Infinity", () => {
+      store.appendEvent("sess-after-inf", { type: "event-0", timestamp: "2026-04-15T00:00:00Z", data: {} });
+      expect(store.listEventsAfterId("sess-after-inf", Infinity)).toHaveLength(0);
+    });
+
+    it("respects limit parameter", () => {
+      for (let i = 0; i < 10; i++) {
+        store.appendEvent("sess-after-limit", { type: `event-${i}`, timestamp: `2026-04-15T00:00:${String(i).padStart(2, "0")}Z`, data: {} });
+      }
+      const result = store.listEventsAfterId("sess-after-limit", 0, 3);
+      expect(result).toHaveLength(3);
+      expect(result[0]!.type).toBe("event-0");
+      expect(result[2]!.type).toBe("event-2");
+    });
+
+    it("caps limit at SESSION_REPLAY_LIMIT even when higher limit is requested", () => {
+      // Insert SESSION_REPLAY_LIMIT + 10 events
+      for (let i = 0; i < SESSION_REPLAY_LIMIT + 10; i++) {
+        store.appendEvent("sess-after-cap", { type: `event-${i}`, timestamp: "2026-04-15T00:00:00Z", data: {} });
+      }
+      const result = store.listEventsAfterId("sess-after-cap", 0, SESSION_REPLAY_LIMIT + 10);
+      expect(result).toHaveLength(SESSION_REPLAY_LIMIT);
+    });
+
+    it("does not return events from other sessions", () => {
+      store.appendEvent("sess-other-A", { type: "event-A", timestamp: "2026-04-15T00:00:00Z", data: {} });
+      store.appendEvent("sess-other-B", { type: "event-B", timestamp: "2026-04-15T00:00:01Z", data: {} });
+
+      const result = store.listEventsAfterId("sess-other-A", 0);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.type).toBe("event-A");
+    });
+
+    it("returns empty array for nonexistent session", () => {
+      expect(store.listEventsAfterId("nonexistent-session", 0)).toHaveLength(0);
+    });
+
+    it("returns empty array when afterId is beyond all event ids", () => {
+      store.appendEvent("sess-after-beyond", { type: "event-0", timestamp: "2026-04-15T00:00:00Z", data: {} });
+      const all = store.getEvents("sess-after-beyond");
+      const maxId = all[all.length - 1]!.id!;
+
+      const result = store.listEventsAfterId("sess-after-beyond", maxId + 1000);
+      expect(result).toHaveLength(0);
     });
   });
 
