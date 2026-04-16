@@ -5,7 +5,7 @@
  *   reducePendingQueue(state, event) → { newState, commands }
  *
  * Unifies the two drain paths (copilotclaw_wait tool path and drain_pending IPC path)
- * under a single DrainStarted / DrainCompleted / DrainAcknowledged sequence.
+ * under a single DrainStarted / DrainCompleted sequence.
  *
  * See docs/proposals/state-management-architecture.md "Gateway: PendingQueue subsystem".
  */
@@ -69,19 +69,6 @@ export function reducePendingQueue(
           { type: "PersistQueue", channelId: state.channelId, messages: remaining },
           { type: "SendAck", requestId: event.requestId },
         ],
-      };
-    }
-
-    case "DrainAcknowledged": {
-      // ACK received — no further state change needed (drain already completed)
-      return { newState: state, commands: [] };
-    }
-
-    case "MessageFlushed": {
-      const newMessages = state.messages.filter((m) => m.id !== event.messageId);
-      return {
-        newState: { ...state, messages: newMessages },
-        commands: [{ type: "PersistQueue", channelId: state.channelId, messages: newMessages }],
       };
     }
 

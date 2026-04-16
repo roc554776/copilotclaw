@@ -60,6 +60,7 @@ export type PhysicalSessionEvent =
   | { type: "StartRequested"; sessionId: string; model: string; physicalSessionId: string | undefined }
   | { type: "SessionCreated"; physicalSessionId: string }
   | { type: "SessionResumed"; physicalSessionId: string }
+  | { type: "SessionIdCleared" }
   | { type: "WaitToolCalled" }
   | { type: "WaitToolCompleted" }
   | { type: "ToolExecutionStarted"; toolName: string }

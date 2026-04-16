@@ -622,6 +622,194 @@ describe("reduceAbstractSession — MessageDelivered", () => {
   });
 });
 
+// ── Regression: "starting forever stuck" (Finding 2) ─────────────────────────
+//
+// Scenario: startPhysicalSession was called but the agent never responds.
+// The session stays in "starting" indefinitely unless MaxAgeExceeded or
+// PhysicalSessionEnded(error) forces it out.
+
+describe("regression — starting state escape paths", () => {
+  it("starting + PhysicalSessionEnded(error) → suspended (agent never responded)", () => {
+    const state = makeState({ status: "starting" });
+    const { newState, commands } = reduceAbstractSession(state, {
+      type: "PhysicalSessionEnded",
+      physicalSessionId: "",
+      reason: "error",
+      elapsedMs: 1000,
+    });
+
+    // Must not stay stuck in starting
+    expect(newState.status).toBe("suspended");
+    const types = commands.map((c) => c.type);
+    expect(types).toContain("PersistSession");
+    expect(types).toContain("BroadcastStatusChange");
+  });
+
+  it("starting + MaxAgeExceeded → suspended (safety net for stuck starting sessions)", () => {
+    const state = makeState({ status: "starting" });
+    const { newState, commands } = reduceAbstractSession(state, { type: "MaxAgeExceeded" });
+
+    expect(newState.status).toBe("suspended");
+    const types = commands.map((c) => c.type);
+    expect(types).toContain("StopPhysicalSession");
+    expect(types).toContain("PersistSession");
+  });
+
+  it("starting + StopRequested → no-op (stop while starting is intentionally ignored)", () => {
+    const state = makeState({ status: "starting" });
+    const { newState, commands } = reduceAbstractSession(state, { type: "StopRequested" });
+
+    // starting is explicitly excluded from StopRequested handling
+    expect(newState.status).toBe("starting");
+    expect(commands).toHaveLength(0);
+  });
+});
+
+// ── Regression: "processing deadlock / pending消費なし" (Finding 3) ──────────
+//
+// Scenario: a message is in the pending queue, session is processing,
+// then physical session ends unexpectedly. The pending message must be
+// flushed (not consumed = deadlock) and recovery must be possible.
+
+describe("regression — processing deadlock prevention", () => {
+  it("processing + PhysicalSessionEnded(error) → suspended + FlushPendingMessages emitted", () => {
+    const ps = makePhysicalSession();
+    const state = makeState({ status: "processing", physicalSession: ps, physicalSessionId: "phys-123" });
+    const { newState, commands } = reduceAbstractSession(state, {
+      type: "PhysicalSessionEnded",
+      physicalSessionId: "phys-123",
+      reason: "error",
+      elapsedMs: 1000,
+    });
+
+    // Session transitions out of processing (no deadlock)
+    expect(newState.status).toBe("suspended");
+    const types = commands.map((c) => c.type);
+    // FlushPendingMessages must be emitted so the pending message is not lost
+    expect(types).toContain("FlushPendingMessages");
+    expect(types).toContain("PersistSession");
+    expect(types).toContain("BroadcastStatusChange");
+  });
+
+  it("processing + PhysicalSessionEnded(aborted) → suspended + FlushPendingMessages emitted", () => {
+    const ps = makePhysicalSession();
+    const state = makeState({ status: "processing", physicalSession: ps, channelId: "channel-xyz" });
+    const { newState, commands } = reduceAbstractSession(state, {
+      type: "PhysicalSessionEnded",
+      physicalSessionId: "phys-123",
+      reason: "aborted",
+      elapsedMs: 5000,
+    });
+
+    expect(newState.status).toBe("suspended");
+    // FlushPendingMessages must be present to unblock pending queue
+    expect(commands.map((c) => c.type)).toContain("FlushPendingMessages");
+  });
+
+  it("suspended + ReviveRequested → starting (recovery path from processing deadlock)", () => {
+    const state = makeState({ status: "suspended" });
+    const { newState, commands } = reduceAbstractSession(state, { type: "ReviveRequested" });
+
+    // After deadlock recovery (suspended), the session can be revived
+    expect(newState.status).toBe("starting");
+    expect(commands.map((c) => c.type)).toContain("PersistSession");
+    expect(commands.map((c) => c.type)).toContain("BroadcastStatusChange");
+  });
+
+  it("full deadlock-free sequence: message → processing → session ended → suspended → new message → starting", () => {
+    // Start: session waiting, message arrives
+    const ps = makePhysicalSession();
+    let state = makeState({ status: "waiting", physicalSession: ps });
+
+    // Message delivered → notified
+    const { newState: notifiedState } = reduceAbstractSession(state, {
+      type: "MessageDelivered",
+      channelId: "channel-xyz",
+      messageId: "msg-1",
+    });
+    expect(notifiedState.status).toBe("notified");
+
+    // Tool starts → processing
+    const { newState: processingState } = reduceAbstractSession(notifiedState, {
+      type: "ToolExecutionStarted",
+      toolName: "bash",
+    });
+    expect(processingState.status).toBe("processing");
+
+    // Session ends unexpectedly
+    const { newState: suspendedState, commands: suspendedCmds } = reduceAbstractSession(processingState, {
+      type: "PhysicalSessionEnded",
+      physicalSessionId: "phys-123",
+      reason: "error",
+      elapsedMs: 1000,
+    });
+    expect(suspendedState.status).toBe("suspended");
+    // Pending queue must be flushed to prevent deadlock
+    expect(suspendedCmds.map((c) => c.type)).toContain("FlushPendingMessages");
+
+    // New message arrives → ReviveRequested leads to starting
+    const { newState: startingState } = reduceAbstractSession(suspendedState, {
+      type: "ReviveRequested",
+    });
+    expect(startingState.status).toBe("starting");
+    // No deadlock: session has escaped and can start again
+  });
+});
+
+// ── Regression: Reconcile event (Finding 1) ──────────────────────────────────
+
+describe("reduceAbstractSession — Reconcile", () => {
+  it("suspended → waiting via Reconcile (agent reports session still running)", () => {
+    const state = makeState({ status: "suspended" });
+    const { newState, commands } = reduceAbstractSession(state, {
+      type: "Reconcile",
+      targetStatus: "waiting",
+    });
+
+    expect(newState.status).toBe("waiting");
+    const types = commands.map((c) => c.type);
+    expect(types).toContain("PersistSession");
+    expect(types).toContain("BroadcastStatusChange");
+    expect(commands.find((c) => c.type === "BroadcastStatusChange")).toMatchObject({
+      status: "waiting",
+    });
+  });
+
+  it("suspended → processing via Reconcile sets processingStartedAt", () => {
+    const state = makeState({ status: "suspended" });
+    const { newState } = reduceAbstractSession(state, {
+      type: "Reconcile",
+      targetStatus: "processing",
+    });
+
+    expect(newState.status).toBe("processing");
+    expect(newState.processingStartedAt).toBeDefined();
+  });
+
+  it("idle → starting via Reconcile (agent reports session running after idle)", () => {
+    const state = makeState({ status: "idle" });
+    const { newState, commands } = reduceAbstractSession(state, {
+      type: "Reconcile",
+      targetStatus: "starting",
+    });
+
+    expect(newState.status).toBe("starting");
+    expect(commands.map((c) => c.type)).toContain("BroadcastStatusChange");
+  });
+
+  it("already active (processing): Reconcile is no-op", () => {
+    const state = makeState({ status: "processing" });
+    const { newState, commands } = reduceAbstractSession(state, {
+      type: "Reconcile",
+      targetStatus: "waiting",
+    });
+
+    // Already active — Reconcile must not change status
+    expect(newState.status).toBe("processing");
+    expect(commands).toHaveLength(0);
+  });
+});
+
 // ── Immutability ──────────────────────────────────────────────────────────────
 
 describe("reduceAbstractSession — immutability", () => {

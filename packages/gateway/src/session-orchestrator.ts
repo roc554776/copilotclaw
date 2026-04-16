@@ -377,24 +377,34 @@ export class SessionOrchestrator {
     return session !== undefined && session.status !== "suspended" && session.status !== "idle" && session.status !== "new";
   }
 
-  /** Whether the channel is currently in a backoff period. */
+  /** Whether the channel is currently in a backoff period.
+   *  When backoff has expired, clears it via the channel reducer (BackoffReset event). */
   isChannelInBackoff(channelId: string): boolean {
     const expiresAt = this.channelBackoff.get(channelId);
     if (expiresAt === undefined) return false;
     if (Date.now() >= expiresAt) {
       this.channelBackoff.delete(channelId);
-      this.store?.clearChannelBackoff(channelId);
+      // Route through channel reducer: BackoffReset event emits ClearBackoff command (SQL delete).
+      this.store?.dispatchChannelEvent(channelId, { type: "BackoffReset" });
       return false;
     }
     return true;
   }
 
-  /** Record a backoff period for the channel. Persists to store if available. */
+  /** Record a backoff period for the channel. Persists to store if available.
+   *  Routes through the channel reducer (SessionStartFailed event) so the reducer
+   *  accumulates failure counts and emits the PersistBackoff command. */
   recordBackoff(channelId: string, durationMs: number): void {
     const expiresAt = Date.now() + durationMs;
     this.channelBackoff.set(channelId, expiresAt);
-    // Persist via store (v0.82.0 — replaces ephemeral-only backoff)
-    this.store?.persistChannelBackoff(channelId, 1, expiresAt, `backoff ${durationMs}ms`);
+    // Route through channel reducer: SessionStartFailed event handles failure count
+    // accumulation + PersistBackoff command (SQL write). Direct persistChannelBackoff
+    // call is no longer needed — the reducer emits PersistBackoff which the store executes.
+    this.store?.dispatchChannelEvent(channelId, {
+      type: "SessionStartFailed",
+      reason: `backoff ${durationMs}ms`,
+      backoffDurationMs: durationMs,
+    });
   }
 
   /** Load persisted channel backoffs from store on startup (v0.82.0). */
@@ -406,8 +416,8 @@ export class SessionOrchestrator {
       if (b.nextRetryAt > now) {
         this.channelBackoff.set(b.channelId, b.nextRetryAt);
       } else {
-        // Expired backoff — clean it up
-        this.store.clearChannelBackoff(b.channelId);
+        // Expired backoff — clear via channel reducer (BackoffReset event emits ClearBackoff command).
+        this.store.dispatchChannelEvent(b.channelId, { type: "BackoffReset" });
       }
     }
   }
@@ -483,7 +493,7 @@ export class SessionOrchestrator {
    *   - Unknown sessionIds are logged and skipped (orphaned agent sessions)
    * This ensures the orchestrator knows about sessions that survived a gateway restart.
    */
-  reconcileWithAgent(runningSessions: Array<{ sessionId: string; status: string }>): void {
+  reconcileWithAgent(runningSessions: Array<{ sessionId: string; status: string }>): Array<{ sessionId: string; targetStatus: AbstractSessionStatus }> {
     const reportedIds = new Set(runningSessions.map((r) => r.sessionId));
 
     // Idle any sessions that orchestrator thinks are active but agent doesn't report.
@@ -504,6 +514,9 @@ export class SessionOrchestrator {
     }
 
     // Revive suspended/idle sessions that agent reports as running.
+    // Returns the list of sessions that need revival so SessionController can route them
+    // through the reducer (Reconcile event → BroadcastStatusChange + PersistSession commands).
+    const toRevive: Array<{ sessionId: string; targetStatus: AbstractSessionStatus }> = [];
     for (const running of runningSessions) {
       const existing = this.sessions.get(running.sessionId);
       if (existing !== undefined) {
@@ -513,20 +526,13 @@ export class SessionOrchestrator {
             running.status === "waiting" ? "waiting"
             : running.status === "processing" ? "processing"
             : "starting";
-          const state = this.sessionToWorldState(existing);
-          // Apply directly since reducer may not have a direct "revive to arbitrary status" path
-          const revivedState: AbstractSessionWorldState = {
-            ...state,
-            status: targetStatus,
-            processingStartedAt: targetStatus === "processing" ? new Date().toISOString() : undefined,
-          };
-          this.applyWorldState(revivedState);
-          console.error(`[orchestrator] reconciled: revived session ${running.sessionId.slice(0, 8)}`);
+          toRevive.push({ sessionId: running.sessionId, targetStatus });
         }
       } else {
         console.error(`[orchestrator] reconciled: unknown session ${running.sessionId.slice(0, 8)}, skipping`);
       }
     }
+    return toRevive;
   }
 
   /** Close the database connection. */

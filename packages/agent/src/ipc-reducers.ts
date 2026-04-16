@@ -56,7 +56,7 @@ export function reduceSendQueue(
           flushInProgress: true,
           pendingAckIds: newPendingAckIds,
         },
-        commands: [{ type: "FlushBatch", messages: toFlush }],
+        commands: [],
       };
     }
 
@@ -91,17 +91,10 @@ export function reduceSendQueue(
     }
 
     case "ConnectionRestored": {
-      const allToFlush = [
-        // Re-add pendingAck messages (they need resending since ACKs are lost)
-        ...state.messages,
-      ];
-      if (allToFlush.length === 0 && state.pendingAckIds.length === 0) {
-        return { newState: state, commands: [] };
-      }
-      return {
-        newState: state,
-        commands: allToFlush.length > 0 ? [{ type: "FlushBatch", messages: allToFlush }] : [],
-      };
+      // No commands emitted: actual flushing is performed by the explicit flushSendQueue()
+      // call in index.ts on the stream_connected event. Emitting FlushBatch here would
+      // create a duplicate flush since the command was not handled by dispatchSendQueueEvent.
+      return { newState: state, commands: [] };
     }
 
     case "QueueOverflowed": {

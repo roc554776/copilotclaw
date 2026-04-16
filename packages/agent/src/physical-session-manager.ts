@@ -460,8 +460,7 @@ export class PhysicalSessionManager {
         session = await this.getClient().resumeSession(entry.physicalSessionId, baseConfig);
       } catch (resumeErr: unknown) {
         this.log(`resumeSession failed for ${entry.physicalSessionId.slice(0, 12)}, creating new session: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
-        entry.physicalSessionId = undefined;
-        entry.worldState = { ...entry.worldState, physicalSessionId: undefined };
+        this.dispatchPhysicalEvent(entry, { type: "SessionIdCleared" });
         session = await this.getClient().createSession(baseConfig);
       }
     } else {
@@ -724,9 +723,8 @@ export class PhysicalSessionManager {
 
       if (decision.clearCopilotSessionId && entry.worldState.physicalSessionId !== undefined) {
         this.log(`clearing physicalSessionId ${entry.worldState.physicalSessionId.slice(0, 12)}`);
-        // Clear physicalSessionId in worldState (the sole source of truth) and sync entry
-        entry.worldState = { ...entry.worldState, physicalSessionId: undefined };
-        entry.physicalSessionId = undefined;
+        // Clear physicalSessionId via reducer (SessionIdCleared event → applyWorldState syncs entry.physicalSessionId)
+        this.dispatchPhysicalEvent(entry, { type: "SessionIdCleared" });
       }
 
       // Cap reinject depth to prevent unbounded recursion when gateway persistently

@@ -699,6 +699,16 @@ type PhysicalSessionCommand =
 - `ReinjectDecided` で `reinjectCount` をインクリメント。`maxReinject` 超過時は `StopRequested` を command として出力
 - `WaitToolCalled` で status を `waiting_on_wait_tool` に遷移
 
+**設計判断: agent 側 reducer の command は破棄する（二層構造）**
+
+agent 側の `dispatchPhysicalEvent()` は reducer の `commands` 出力を意図的に破棄する。理由:
+
+- **agent は薄く保つ原則**: gateway 側には effect runtime（`effect-runtime.ts`）という副作用実行層を持つが、agent 側に同等の重い実行層を追加することは「agent は薄く」設計方針に反する。
+- **副作用は既存命令型コードが担う**: `attachSessionLifecycle()` / `runSession()` の命令型コードが実際の副作用（session 作成・abort・lifecycle 通知等）を実行する。reducer はその状態遷移が正しいことを保証する純関数として機能し、命令型コードは reducer の `newState` を読んで判断する。
+- **状態遷移の正確性は保証される**: 副作用の実行タイミングは命令型コードが制御するが、状態モデルの整合性（どの状態からどの状態へ遷移可能か、どのフィールドをどう更新するか）は reducer が唯一の真実源として保証する。
+
+command 型定義（`PhysicalSessionCommand`）は将来 agent 側 effect runtime を導入する際の blueprint として残す。現時点では型定義のみ存在し、production code から実行されることはない。
+
 ### Agent: CopilotClient singleton subsystem
 
 **現状**

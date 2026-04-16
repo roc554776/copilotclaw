@@ -50,7 +50,7 @@ describe("reduceSendQueue — MessageEnqueued", () => {
 });
 
 describe("reduceSendQueue — FlushStarted", () => {
-  it("moves matching messages to pendingAckIds and emits FlushBatch", () => {
+  it("moves matching messages to pendingAckIds", () => {
     const m1 = makeQueuedMessage("q-1");
     const m2 = makeQueuedMessage("q-2");
     const state = makeSendQueueState({ messages: [m1, m2] });
@@ -62,7 +62,7 @@ describe("reduceSendQueue — FlushStarted", () => {
     expect(newState.messages[0]._queueId).toBe("q-2");
     expect(newState.flushInProgress).toBe(true);
     expect(newState.pendingAckIds).toContain("q-1");
-    expect(commands[0].type).toBe("FlushBatch");
+    expect(commands).toHaveLength(0);
   });
 
   it("no-op when flush already in progress", () => {
@@ -112,10 +112,14 @@ describe("reduceSendQueue — ConnectionLost", () => {
 });
 
 describe("reduceSendQueue — ConnectionRestored", () => {
-  it("emits FlushBatch for queued messages", () => {
+  it("emits no commands (actual flush is performed by flushSendQueue() called from stream_connected handler in index.ts)", () => {
+    // ConnectionRestored no longer emits FlushBatch: the explicit flushSendQueue() call
+    // in index.ts on stream_connected is the canonical flush trigger, avoiding duplicate flush.
     const state = makeSendQueueState({ messages: [makeQueuedMessage("q-1")] });
-    const { commands } = reduceSendQueue(state, { type: "ConnectionRestored" });
-    expect(commands[0].type).toBe("FlushBatch");
+    const { newState, commands } = reduceSendQueue(state, { type: "ConnectionRestored" });
+    // State unchanged, no commands emitted
+    expect(newState).toBe(state);
+    expect(commands).toHaveLength(0);
   });
 
   it("no-op when queue is empty and no pending ACKs", () => {

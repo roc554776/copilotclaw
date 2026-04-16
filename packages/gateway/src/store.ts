@@ -249,14 +249,21 @@ export class Store {
     this.onChannelListChange = cb;
   }
 
-  /** Convert a Channel SQL row to ChannelWorldState for the channel reducer. */
+  /** Convert a Channel SQL row to ChannelWorldState for the channel reducer.
+   *  Also loads the current backoff state from the channel_backoff table so the
+   *  channel reducer can correctly accumulate failure counts across restarts. */
   private channelToWorldState(ch: Channel): ChannelWorldState {
+    const backoffRow = this.db.prepare(
+      "SELECT failureCount, nextRetryAt, lastFailureReason FROM channel_backoff WHERE channelId = ?",
+    ).get(ch.id) as { failureCount: number; nextRetryAt: number; lastFailureReason: string } | undefined;
     return {
       channelId: ch.id,
       archivedAt: ch.archivedAt != null ? Date.parse(ch.archivedAt) : undefined,
       model: ch.model ?? undefined,
       draft: ch.draft ?? undefined,
-      backoff: undefined, // backoff is managed separately via persistChannelBackoff/clearChannelBackoff
+      backoff: backoffRow !== undefined
+        ? { failureCount: backoffRow.failureCount, nextRetryAt: backoffRow.nextRetryAt, lastFailureReason: backoffRow.lastFailureReason }
+        : undefined,
     };
   }
 
@@ -264,10 +271,8 @@ export class Store {
    * Dispatch a ChannelEvent through the channel reducer for a given channel.
    * Loads current state from SQL, reduces, executes persistence commands, and returns the new state.
    * Returns undefined if the channel does not exist or the transition is a no-op (state unchanged).
-   *
-   * The caller is responsible for running any SQL writes derived from the new state.
    */
-  private dispatchChannelEvent(channelId: string, event: ChannelEvent): ChannelWorldState | undefined {
+  dispatchChannelEvent(channelId: string, event: ChannelEvent): ChannelWorldState | undefined {
     const ch = this.getChannel(channelId);
     if (ch === undefined) return undefined;
     const state = this.channelToWorldState(ch);
@@ -383,6 +388,18 @@ export class Store {
         this.db.prepare("INSERT INTO pending_queue (channelId, messageId) VALUES (?, ?)").run(channelId, msg.id);
       }
     })();
+    // Notify channel reducer of message post (clears draft on message arrival).
+    this.dispatchChannelEvent(channelId, { type: "MessagePosted", sender, content: message });
+    // Notify pending queue reducer of enqueue (state observability; SQL row already inserted above).
+    if (sender === "user" || sender === "cron" || sender === "system") {
+      const queueState = this.loadPendingQueueState(channelId);
+      const { commands } = reducePendingQueue(queueState, { type: "MessageEnqueued", message: msg });
+      // PersistQueue command from MessageEnqueued is a no-op here since the message
+      // was already inserted by the transaction above. Skip to avoid redundant SQL rebuild.
+      // Only execute non-PersistQueue commands (currently none defined for MessageEnqueued).
+      const nonPersistCmds = commands.filter((c) => c.type !== "PersistQueue");
+      this.executePendingQueueCommands(nonPersistCmds);
+    }
     return msg;
   }
 

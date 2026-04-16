@@ -84,6 +84,13 @@ export function reducePhysicalSession(
       return { newState, commands: [command] };
     }
 
+    case "SessionIdCleared": {
+      return {
+        newState: { ...state, physicalSessionId: undefined },
+        commands: [],
+      };
+    }
+
     case "SessionCreated":
     case "SessionResumed": {
       const newState: PhysicalSessionWorldState = {

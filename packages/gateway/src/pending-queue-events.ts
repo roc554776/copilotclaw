@@ -23,8 +23,6 @@ export type PendingQueueEvent =
   | { type: "MessageEnqueued"; message: Message }
   | { type: "DrainStarted"; requestId: string }
   | { type: "DrainCompleted"; requestId: string; drainedIds: string[] }
-  | { type: "DrainAcknowledged"; requestId: string }
-  | { type: "MessageFlushed"; messageId: string; reason: FlushReason }
   | { type: "QueueFlushed"; reason: FlushReason };
 
 // ── Commands ──────────────────────────────────────────────────────────────────

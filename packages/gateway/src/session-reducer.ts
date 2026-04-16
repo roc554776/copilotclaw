@@ -396,6 +396,29 @@ export function reduceAbstractSession(
       return applyTransition(withCleanup, "suspended");
     }
 
+    case "Reconcile": {
+      // Revive a suspended/idle session to the target status reported by the agent.
+      // Only valid from suspended or idle (the session was thought to be inactive but agent
+      // reports it is still running).
+      // Note: this bypasses VALID_TRANSITIONS since reconciliation restores actual runtime state
+      // that may include waiting/processing — not a normal lifecycle path.
+      if (state.status !== "suspended" && state.status !== "idle") {
+        return { newState: state, commands: [] };
+      }
+      const newState: AbstractSessionWorldState = {
+        ...state,
+        status: event.targetStatus,
+        processingStartedAt: event.targetStatus === "processing" ? new Date().toISOString() : undefined,
+      };
+      return {
+        newState,
+        commands: [
+          { type: "PersistSession", state: newState },
+          { type: "BroadcastStatusChange", sessionId: state.sessionId, status: event.targetStatus },
+        ],
+      };
+    }
+
     // ── Observability events (no status transition) ────────────────────────
 
     case "UsageUpdated": {

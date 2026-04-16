@@ -137,7 +137,6 @@ function dispatchSendQueueEvent(event: SendQueueEvent): void {
         try { writeFileSync(sendQueuePath, "", "utf-8"); } catch { /* non-fatal */ }
       }
     }
-    // FlushBatch is handled by the caller
   }
 }
 

@@ -602,18 +602,33 @@ describe("SessionOrchestrator", () => {
   });
 
   describe("reconcileWithAgent", () => {
-    it("revives suspended session when agent reports it running", () => {
+    it("returns toRevive list when agent reports suspended session is running", () => {
+      // reconcileWithAgent now returns the list of sessions to revive instead of
+      // applying the transitions directly. SessionController.onReconcile applies
+      // the transitions via dispatchEvent(Reconcile) so reducer + SSE broadcast are used.
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
       setStatus(orch, sessionId, "waiting");
       suspendSession(orch, sessionId);
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);
 
-      orch.reconcileWithAgent([{ sessionId, status: "waiting" }]);
+      const toRevive = orch.reconcileWithAgent([{ sessionId, status: "waiting" }]);
+
+      // Orchestrator returns the list — it does NOT apply the transition itself
+      expect(toRevive).toHaveLength(1);
+      expect(toRevive[0]).toMatchObject({ sessionId, targetStatus: "waiting" });
+      // Session is still suspended (caller must apply via reducer)
+      expect(orch.getSession(sessionId)?.status).toBe("suspended");
+
+      // Simulate what SessionController.onReconcile does: apply via reducer
+      const { newState } = reduceAbstractSession(getWorldState(orch, sessionId), {
+        type: "Reconcile",
+        targetStatus: toRevive[0]!.targetStatus,
+      });
+      orch.applyWorldState(newState);
 
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(true);
-      const session = orch.getSessionStatuses()[sessionId];
-      expect(session.status).toBe("waiting");
+      expect(orch.getSession(sessionId)?.status).toBe("waiting");
     });
 
     it("skips unknown session reported by agent", () => {

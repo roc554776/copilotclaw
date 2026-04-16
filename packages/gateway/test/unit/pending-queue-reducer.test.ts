@@ -113,38 +113,6 @@ describe("reducePendingQueue — DrainCompleted", () => {
   });
 });
 
-// ── DrainAcknowledged ─────────────────────────────────────────────────────────
-
-describe("reducePendingQueue — DrainAcknowledged", () => {
-  it("no state change (ACK is informational after drain completion)", () => {
-    const state = makeState();
-    const { newState, commands } = reducePendingQueue(state, {
-      type: "DrainAcknowledged",
-      requestId: "req-1",
-    });
-    expect(newState).toEqual(state);
-    expect(commands).toHaveLength(0);
-  });
-});
-
-// ── MessageFlushed ────────────────────────────────────────────────────────────
-
-describe("reducePendingQueue — MessageFlushed", () => {
-  it("removes specific message and emits PersistQueue", () => {
-    const m1 = makeMessage({ id: "m1" });
-    const m2 = makeMessage({ id: "m2" });
-    const state = makeState({ messages: [m1, m2] });
-    const { newState, commands } = reducePendingQueue(state, {
-      type: "MessageFlushed",
-      messageId: "m1",
-      reason: "session-ended",
-    });
-    expect(newState.messages).toHaveLength(1);
-    expect(newState.messages[0].id).toBe("m2");
-    expect(commands[0].type).toBe("PersistQueue");
-  });
-});
-
 // ── QueueFlushed ──────────────────────────────────────────────────────────────
 
 describe("reducePendingQueue — QueueFlushed", () => {

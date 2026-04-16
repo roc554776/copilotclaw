@@ -35,7 +35,6 @@ export type SendQueueEvent =
   | { type: "Initialized"; messages: QueuedMessage[] };
 
 export type SendQueueCommand =
-  | { type: "FlushBatch"; messages: QueuedMessage[] }
   | { type: "PersistQueue"; messages: QueuedMessage[] }
   | { type: "ClearDisk" };
 

@@ -314,7 +314,13 @@ export class SessionController {
   // --- Reconciliation ---
 
   onReconcile(runningSessions: Array<{ sessionId: string; status: string }>): void {
-    this.orchestrator.reconcileWithAgent(runningSessions);
+    const toRevive = this.orchestrator.reconcileWithAgent(runningSessions);
+    // Route revived sessions through the reducer so status transitions emit
+    // BroadcastStatusChange + PersistSession commands (SSE broadcast included).
+    for (const { sessionId, targetStatus } of toRevive) {
+      this.dispatchEvent(sessionId, { type: "Reconcile", targetStatus });
+      console.error(`[session-controller] reconciled: revived session ${sessionId.slice(0, 8)} → ${targetStatus}`);
+    }
     // After reconciliation, check for pending messages
     this.checkAllChannelsPending();
   }

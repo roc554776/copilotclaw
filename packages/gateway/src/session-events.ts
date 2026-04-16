@@ -87,6 +87,7 @@ export type AbstractSessionEvent =
   | { type: "MessagesDrained"; messageIds: string[] }
   | { type: "PhysicalSessionAliveConfirmed" }
   | { type: "PhysicalSessionAliveRefuted" }
+  | { type: "Reconcile"; targetStatus: AbstractSessionStatus }
   // Observability (no status transition, only field updates)
   | { type: "UsageUpdated"; inputTokens: number; outputTokens: number; quotaSnapshots?: Record<string, unknown> }
   | { type: "TokensAccumulated"; currentTokens: number; tokenLimit: number }
