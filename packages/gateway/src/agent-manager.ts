@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAgentModels, getAgentQuota, getAgentSessionMessages, getAgentStatus, stopAgent } from "./ipc-client.js";
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
+import type { AgentToGatewayEvent, GatewayToAgentEvent } from "./ipc-types.js";
 
 export const MIN_AGENT_VERSION = "0.83.0";
 
@@ -105,7 +106,8 @@ export class AgentManager {
     this.configToSend = config;
     // If stream is already connected, send immediately
     if (this.stream !== null && this.stream.isConnected() && this.configToSend !== null) {
-      this.stream.send({ type: "config", config: this.configToSend });
+      const msg: GatewayToAgentEvent = { type: "config", config: this.configToSend };
+      this.stream.send(msg as Record<string, unknown>);
     }
   }
 
@@ -119,7 +121,8 @@ export class AgentManager {
       console.error("[gateway] IPC stream connected to agent");
       // Push config immediately on connect
       if (this.configToSend !== null) {
-        this.stream!.send({ type: "config", config: this.configToSend });
+        const configMsg: GatewayToAgentEvent = { type: "config", config: this.configToSend };
+        this.stream!.send(configMsg as Record<string, unknown>);
       }
       // Fire registered connected callbacks
       for (const cb of this.streamConnectedCallbacks) {
@@ -151,26 +154,30 @@ export class AgentManager {
 
   /** Send message_acknowledged IPC to agent if the message was buffered (has _queueId).
    *  This lets the agent remove the message from its persistent disk queue. */
-  private sendAckIfQueued(msg: Record<string, unknown>): void {
-    const queueId = msg["_queueId"];
+  private sendAckIfQueued(msg: AgentToGatewayEvent): void {
+    const queueId = "_queueId" in msg ? (msg as Record<string, unknown>)["_queueId"] : undefined;
     if (typeof queueId === "string" && this.stream !== null && this.stream.isConnected()) {
-      this.stream.send({ type: "message_acknowledged", queueId });
+      const ack: GatewayToAgentEvent = { type: "message_acknowledged", queueId };
+      this.stream.send(ack as Record<string, unknown>);
     }
   }
 
   /** Handle an incoming message from the agent on the stream. */
-  private handleAgentMessage(msg: Record<string, unknown>): void {
-    const type = msg["type"] as string | undefined;
+  private handleAgentMessage(rawMsg: Record<string, unknown>): void {
+    const type = rawMsg["type"] as string | undefined;
     const handler = this.streamMessageHandler;
     if (type === undefined || handler === null) return;
 
+    // Cast to typed union for structured access in event cases below.
+    const msg = rawMsg as AgentToGatewayEvent;
+
     switch (type) {
       case "tool_call": {
-        const id = msg["id"] as string;
+        const m = msg as Extract<AgentToGatewayEvent, { type: "tool_call" }>;
         const toolCallRequest: ToolCallRequest = {
-          toolName: msg["toolName"] as string,
-          sessionId: msg["sessionId"] as string,
-          args: (msg["args"] as Record<string, unknown>) ?? {},
+          toolName: m.toolName,
+          sessionId: m.sessionId,
+          args: m.args ?? {},
         };
         // Await the result to support async tool handlers. Sending the response
         // synchronously when the handler returns a Promise would serialize the
@@ -178,130 +185,117 @@ export class AgentManager {
         // receive garbage data without any error.
         Promise.resolve(handler.onToolCall?.(toolCallRequest) ?? null)
           .then((toolResult) => {
-            this.stream?.send({ type: "response", id, data: toolResult });
+            this.stream?.send({ type: "response", id: m.id, data: toolResult });
           })
           .catch(() => {
-            this.stream?.send({ type: "response", id, data: { error: "Tool handler failed" } });
+            this.stream?.send({ type: "response", id: m.id, data: { error: "Tool handler failed" } });
           });
         break;
       }
       case "lifecycle": {
-        const id = msg["id"] as string;
+        const m = msg as Extract<AgentToGatewayEvent, { type: "lifecycle" }>;
         const lifecycleRequest: LifecycleRequest = {
-          event: msg["event"] as "idle" | "error",
-          sessionId: msg["sessionId"] as string,
-          elapsedMs: (msg["elapsedMs"] as number) ?? 0,
-          error: typeof msg["error"] === "string" ? msg["error"] : undefined,
+          event: m.event,
+          sessionId: m.sessionId,
+          elapsedMs: m.elapsedMs ?? 0,
+          error: m.error,
         };
         const response = handler.onLifecycle?.(lifecycleRequest) ?? { action: "stop" };
-        this.stream?.send({ type: "response", id, data: response });
+        this.stream?.send({ type: "response", id: m.id, data: response });
         break;
       }
       case "hook": {
-        const id = msg["id"] as string;
+        const m = msg as Extract<AgentToGatewayEvent, { type: "hook" }>;
         const hookRequest: HookRequest = {
-          hookName: msg["hookName"] as string,
-          sessionId: msg["sessionId"] as string,
-          copilotSessionId: msg["copilotSessionId"] as string | undefined,
-          input: (msg["input"] as Record<string, unknown>) ?? {},
+          hookName: m.hookName,
+          sessionId: m.sessionId,
+          copilotSessionId: m.copilotSessionId,
+          input: m.input ?? {},
         };
         const result = handler.onHook?.(hookRequest) ?? null;
-        this.stream?.send({ type: "response", id, data: result });
+        this.stream?.send({ type: "response", id: m.id, data: result });
         break;
       }
       case "channel_message": {
-        const sessionId = msg["sessionId"] as string;
-        const sender = msg["sender"] as string;
-        const message = msg["message"] as string;
-        handler.onChannelMessage?.(sessionId, sender, message);
-        this.sendAckIfQueued(msg);
+        const m = msg as Extract<AgentToGatewayEvent, { type: "channel_message" }>;
+        handler.onChannelMessage?.(m.sessionId, m.sender, m.message);
+        this.sendAckIfQueued(m);
         break;
       }
       case "session_event": {
-        const sessionId = msg["sessionId"] as string;
-        const copilotSessionId = typeof msg["copilotSessionId"] === "string" ? msg["copilotSessionId"] as string : undefined;
-        const eventType = (msg["eventType"] as string) ?? "unknown";
-        const timestamp = (msg["timestamp"] as string) ?? new Date().toISOString();
-        const data = (typeof msg["data"] === "object" && msg["data"] !== null ? msg["data"] : {}) as Record<string, unknown>;
-        handler.onSessionEvent?.(sessionId, copilotSessionId, eventType, timestamp, data);
-        this.sendAckIfQueued(msg);
+        const m = msg as Extract<AgentToGatewayEvent, { type: "session_event" }>;
+        const eventType = m.eventType ?? "unknown";
+        const timestamp = m.timestamp ?? new Date().toISOString();
+        const data = (typeof m.data === "object" && m.data !== null ? m.data : {}) as Record<string, unknown>;
+        handler.onSessionEvent?.(m.sessionId, m.copilotSessionId, eventType, timestamp, data);
+        this.sendAckIfQueued(m);
         break;
       }
       case "system_prompt_original": {
-        const model = msg["model"] as string;
-        const prompt = msg["prompt"] as string;
-        const capturedAt = (msg["capturedAt"] as string) ?? new Date().toISOString();
-        handler.onSystemPromptOriginal?.(model, prompt, capturedAt);
-        this.sendAckIfQueued(msg);
+        const m = msg as Extract<AgentToGatewayEvent, { type: "system_prompt_original" }>;
+        const capturedAt = m.capturedAt ?? new Date().toISOString();
+        handler.onSystemPromptOriginal?.(m.model, m.prompt, capturedAt);
+        this.sendAckIfQueued(m);
         break;
       }
       case "system_prompt_session": { // IPC type retained for compatibility; internally this is the "effective system prompt"
-        const sessionId = msg["sessionId"] as string;
-        const model = msg["model"] as string;
-        const prompt = msg["prompt"] as string;
-        handler.onSystemPromptSession?.(sessionId, model, prompt);
-        this.sendAckIfQueued(msg);
+        const m = msg as Extract<AgentToGatewayEvent, { type: "system_prompt_session" }>;
+        handler.onSystemPromptSession?.(m.sessionId, m.model, m.prompt);
+        this.sendAckIfQueued(m);
         break;
       }
       case "drain_pending": {
-        const sessionId = msg["sessionId"] as string;
-        const id = msg["id"] as string;
-        const data = handler.onDrainPending?.(sessionId) ?? [];
-        this.stream?.send({ type: "response", id, data });
+        const m = msg as Extract<AgentToGatewayEvent, { type: "drain_pending" }>;
+        const data = handler.onDrainPending?.(m.sessionId) ?? [];
+        this.stream?.send({ type: "response", id: m.id, data });
         break;
       }
       case "peek_pending": {
-        const sessionId = msg["sessionId"] as string;
-        const id = msg["id"] as string;
-        const data = handler.onPeekPending?.(sessionId) ?? null;
-        this.stream?.send({ type: "response", id, data });
+        const m = msg as Extract<AgentToGatewayEvent, { type: "peek_pending" }>;
+        const data = handler.onPeekPending?.(m.sessionId) ?? null;
+        this.stream?.send({ type: "response", id: m.id, data });
         break;
       }
       case "flush_pending": {
-        const sessionId = msg["sessionId"] as string;
-        const id = msg["id"] as string;
-        const flushed = handler.onFlushPending?.(sessionId) ?? 0;
-        this.stream?.send({ type: "response", id, data: { flushed } });
+        const m = msg as Extract<AgentToGatewayEvent, { type: "flush_pending" }>;
+        const flushed = handler.onFlushPending?.(m.sessionId) ?? 0;
+        this.stream?.send({ type: "response", id: m.id, data: { flushed } });
         break;
       }
       case "list_messages": {
-        const sessionId = msg["sessionId"] as string;
-        const id = msg["id"] as string;
-        const limit = typeof msg["limit"] === "number" ? msg["limit"] as number : 5;
-        const data = handler.onListMessages?.(sessionId, limit) ?? [];
-        this.stream?.send({ type: "response", id, data });
+        const m = msg as Extract<AgentToGatewayEvent, { type: "list_messages" }>;
+        const limit = typeof m.limit === "number" ? m.limit : 5;
+        const data = handler.onListMessages?.(m.sessionId, limit) ?? [];
+        this.stream?.send({ type: "response", id: m.id, data });
         break;
       }
       case "running_sessions": {
         // Legacy self-initiated report (pre-v0.83.0 agent compatibility).
         // v0.83.0+ agents respond to request_running_sessions with running_sessions_report instead.
-        const sessions = (msg["sessions"] as RunningSessionReport[]) ?? [];
+        const m = msg as Extract<AgentToGatewayEvent, { type: "running_sessions" }>;
+        const sessions = m.sessions ?? [];
         handler.onRunningSessionsReport?.(sessions);
-        this.sendAckIfQueued(msg);
+        this.sendAckIfQueued(m);
         break;
       }
       case "running_sessions_report": {
         // Item F (v0.83.0): response to gateway's request_running_sessions.
-        const physicalSessionIds = (msg["physicalSessionIds"] as string[]) ?? [];
+        const m = msg as Extract<AgentToGatewayEvent, { type: "running_sessions_report" }>;
+        const physicalSessionIds = m.physicalSessionIds ?? [];
         handler.onRunningSessionsReport?.(physicalSessionIds.map((id) => ({ sessionId: id, status: "running" })));
         break;
       }
       case "physical_session_started": {
-        const sessionId = msg["sessionId"] as string;
-        const copilotSessionId = msg["copilotSessionId"] as string;
-        const model = msg["model"] as string;
-        handler.onPhysicalSessionStarted?.(sessionId, copilotSessionId, model);
-        this.sendAckIfQueued(msg);
+        const m = msg as Extract<AgentToGatewayEvent, { type: "physical_session_started" }>;
+        handler.onPhysicalSessionStarted?.(m.sessionId, m.copilotSessionId, m.model);
+        this.sendAckIfQueued(m);
         break;
       }
       case "physical_session_ended": {
-        const sessionId = msg["sessionId"] as string;
-        const reason = msg["reason"] as "idle" | "error" | "aborted";
-        const copilotSessionId = msg["copilotSessionId"] as string;
-        const elapsedMs = msg["elapsedMs"] as number;
-        const error = typeof msg["error"] === "string" ? msg["error"] as string : undefined;
-        handler.onPhysicalSessionEnded?.(sessionId, reason, copilotSessionId, elapsedMs, error);
-        this.sendAckIfQueued(msg);
+        const m = msg as Extract<AgentToGatewayEvent, { type: "physical_session_ended" }>;
+        const error = typeof m.error === "string" ? m.error : undefined;
+        handler.onPhysicalSessionEnded?.(m.sessionId, m.reason, m.copilotSessionId, m.elapsedMs, error);
+        this.sendAckIfQueued(m);
         break;
       }
       default:
@@ -315,28 +309,29 @@ export class AgentManager {
    *  Agent side listens for this single event type and drains pending queue. */
   notifyAgent(sessionId: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
-    this.stream.send({ type: "agent_notify", sessionId });
+    const msg: GatewayToAgentEvent = { type: "agent_notify", sessionId };
+    this.stream.send(msg as Record<string, unknown>);
   }
 
   /** Send a start_physical_session command to the agent via the stream. */
   startPhysicalSession(sessionId: string, physicalSessionId?: string, model?: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
-    const msg: Record<string, unknown> = { type: "start_physical_session", sessionId };
-    if (physicalSessionId !== undefined) msg["physicalSessionId"] = physicalSessionId;
-    if (model !== undefined) msg["model"] = model;
-    this.stream.send(msg);
+    const msg: GatewayToAgentEvent = { type: "start_physical_session", sessionId, physicalSessionId, model };
+    this.stream.send(msg as Record<string, unknown>);
   }
 
   /** Send a stop_physical_session command to the agent via the stream. */
   stopPhysicalSession(sessionId: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
-    this.stream.send({ type: "stop_physical_session", sessionId });
+    const msg: GatewayToAgentEvent = { type: "stop_physical_session", sessionId };
+    this.stream.send(msg as Record<string, unknown>);
   }
 
   /** Send a disconnect_physical_session command (end-turn-run: disconnect but keep CLI alive for resume). */
   disconnectPhysicalSession(sessionId: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
-    this.stream.send({ type: "disconnect_physical_session", sessionId });
+    const msg: GatewayToAgentEvent = { type: "disconnect_physical_session", sessionId };
+    this.stream.send(msg as Record<string, unknown>);
   }
 
   /**
@@ -346,7 +341,8 @@ export class AgentManager {
    */
   requestRunningSessions(): void {
     if (this.stream === null || !this.stream.isConnected()) return;
-    this.stream.send({ type: "request_running_sessions" });
+    const msg: GatewayToAgentEvent = { type: "request_running_sessions" };
+    this.stream.send(msg as Record<string, unknown>);
   }
 
   /** Ensure agent process is running and compatible.

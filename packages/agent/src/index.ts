@@ -5,6 +5,7 @@ import { flushSendQueue, initSendQueue, listenIpc, sendToGateway, setMaxQueueSiz
 import { initOtel, getLogger, shutdownOtel } from "./otel.js";
 import { StructuredLogger } from "./structured-logger.js";
 import { type AuthConfig, resolveToken } from "./token-resolver.js";
+import type { GatewayToAgentEvent } from "./ipc-types.js";
 
 interface OtelConfig {
   endpoints?: string[];
@@ -89,8 +90,9 @@ function waitForConfig(timeoutMs = 30_000): Promise<GatewayConfig> {
     }, timeoutMs);
     timer.unref();
 
-    const onConfig = (msg: Record<string, unknown>) => {
-      const config = msg["config"] as GatewayConfig | undefined;
+    const onConfig = (rawMsg: Record<string, unknown>) => {
+      const msg = rawMsg as Extract<GatewayToAgentEvent, { type: "config" }>;
+      const config = msg.config as unknown as GatewayConfig | undefined;
       if (config !== undefined) {
         settle(config);
       }
@@ -197,11 +199,12 @@ async function main(): Promise<void> {
   flushSendQueue();
 
   // Gateway-driven physical session commands (Phase 3)
-  const startPhysicalSessionHandler = (msg: Record<string, unknown>) => {
-    const sessionId = msg["sessionId"] as string;
+  const startPhysicalSessionHandler = (rawMsg: Record<string, unknown>) => {
+    const msg = rawMsg as Extract<GatewayToAgentEvent, { type: "start_physical_session" }>;
+    const sessionId = msg.sessionId;
     // Accept both "physicalSessionId" (new) and "copilotSessionId" (legacy) from gateway
-    const physicalSessionId = (msg["physicalSessionId"] ?? msg["copilotSessionId"]) as string | undefined;
-    const resolvedModel = msg["model"] as string | undefined;
+    const physicalSessionId = (msg.physicalSessionId ?? (rawMsg["copilotSessionId"] as string | undefined));
+    const resolvedModel = msg.model;
     log(`start_physical_session: session=${sessionId.slice(0, 8)}, physicalSession=${physicalSessionId ?? "(new)"}, model=${resolvedModel ?? "(auto)"}`);
     const opts: import("./physical-session-manager.js").StartPhysicalSessionOptions = { sessionId };
     if (physicalSessionId !== undefined) opts.physicalSessionId = physicalSessionId;
@@ -210,8 +213,9 @@ async function main(): Promise<void> {
   };
   streamEvents.on("start_physical_session", startPhysicalSessionHandler);
 
-  const stopPhysicalSessionHandler = (msg: Record<string, unknown>) => {
-    const sessionId = msg["sessionId"] as string;
+  const stopPhysicalSessionHandler = (rawMsg: Record<string, unknown>) => {
+    const msg = rawMsg as Extract<GatewayToAgentEvent, { type: "stop_physical_session" }>;
+    const { sessionId } = msg;
     log(`stop_physical_session: session=${sessionId.slice(0, 8)}`);
     const status = sessionManager!.getPhysicalSessionStatus(sessionId);
     if (status !== undefined) {
@@ -222,8 +226,9 @@ async function main(): Promise<void> {
   };
   streamEvents.on("stop_physical_session", stopPhysicalSessionHandler);
 
-  const disconnectPhysicalSessionHandler = (msg: Record<string, unknown>) => {
-    const sessionId = msg["sessionId"] as string;
+  const disconnectPhysicalSessionHandler = (rawMsg: Record<string, unknown>) => {
+    const msg = rawMsg as Extract<GatewayToAgentEvent, { type: "disconnect_physical_session" }>;
+    const { sessionId } = msg;
     log(`disconnect_physical_session: session=${sessionId.slice(0, 8)}`);
     const status = sessionManager!.getPhysicalSessionStatus(sessionId);
     if (status !== undefined) {
@@ -237,7 +242,7 @@ async function main(): Promise<void> {
   // Item F (v0.83.0): reconcile coordinator request-response protocol.
   // Gateway sends request_running_sessions when it needs to reconcile;
   // agent responds with running_sessions_report listing all non-suspended physical session IDs.
-  const requestRunningSessionsHandler = () => {
+  const requestRunningSessionsHandler = (_rawMsg: Record<string, unknown>) => {
     const running = sessionManager!.getRunningPhysicalSessionsSummary();
     log(`request_running_sessions received, reporting ${running.length} session(s)`);
     // RunningSessionsReport: physicalSessionIds are the physical (Copilot) session IDs.

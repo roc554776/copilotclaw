@@ -30,6 +30,7 @@ export type AgentToGatewayEvent =
   | { type: "channel_message"; sessionId: string; sender: string; message: string; _queueId?: string }
   | { type: "system_prompt_original"; model: string; prompt: string; capturedAt: string; _queueId?: string }
   | { type: "system_prompt_session"; sessionId: string; model: string; prompt: string; _queueId?: string }
+  /** @deprecated Use running_sessions_report in response to request_running_sessions instead */
   | { type: "running_sessions"; sessions: Array<{ sessionId: string; status: string }>; _queueId?: string }
   /** Response to gateway's request_running_sessions — returns all non-suspended physical session IDs. */
   | { type: "running_sessions_report"; physicalSessionIds: string[] };

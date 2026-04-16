@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionController } from "../../src/session-controller.js";
 import { SessionOrchestrator } from "../../src/session-orchestrator.js";
 import { Store } from "../../src/store.js";
@@ -678,6 +678,59 @@ describe("SessionController — wait/idle race regression (v0.79.0)", () => {
     // Now idle is accepted
     controller.onSessionIdle(sessionId, false);
     expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("idle");
+  });
+});
+
+describe("SessionController — scheduleStartTimeout / cancelStartTimeout (Item A, v0.83.0)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("ensureSessionForChannel schedules a start timeout that fires after 30s and transitions to suspended", async () => {
+    vi.useFakeTimers();
+    const { controller, orchestrator, channelId } = makeController();
+
+    await controller.ensureSessionForChannel(channelId);
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("starting");
+
+    // Advance past START_PHYSICAL_SESSION_TIMEOUT_MS (30_000 ms)
+    vi.advanceTimersByTime(30_001);
+
+    // Session should have transitioned to suspended via StartTimeout event
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("suspended");
+  });
+
+  it("onPhysicalSessionStarted cancels the start timeout", async () => {
+    vi.useFakeTimers();
+    const { controller, orchestrator, channelId } = makeController();
+
+    await controller.ensureSessionForChannel(channelId);
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("starting");
+
+    // ACK arrives — timeout should be cancelled
+    controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("waiting");
+
+    // Advancing past the timeout window should NOT transition to suspended
+    vi.advanceTimersByTime(30_001);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("waiting");
+  });
+
+  it("timeout does not fire if session is no longer in starting state", async () => {
+    vi.useFakeTimers();
+    const { controller, orchestrator, channelId } = makeController();
+
+    await controller.ensureSessionForChannel(channelId);
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+
+    // Manually transition session away from starting before timeout fires
+    setStatus(orchestrator, sessionId, "suspended");
+
+    vi.advanceTimersByTime(30_001);
+    // Should remain suspended (timeout guard checks status === "starting")
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("suspended");
   });
 });
 
