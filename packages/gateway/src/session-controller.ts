@@ -6,12 +6,20 @@
  *
  * All session status changes MUST go through this controller — direct calls to
  * orchestrator.updateSessionStatus() from outside this class are prohibited.
+ *
+ * v0.80.0: Key state transitions now route through the AbstractSession reducer
+ * (session-reducer.ts) for pure-function state derivation. The effect runtime
+ * (effect-runtime.ts) executes the resulting commands. This eliminates direct
+ * mutation of orchestrator state from outside the reducer.
  */
 
 import type { AgentManager } from "./agent-manager.js";
 import type { SessionOrchestrator, AbstractSessionStatus } from "./session-orchestrator.js";
 import type { Store, Message } from "./store.js";
 import { selectDerivedChannelStatus } from "./channel-status-selector.js";
+import { reduceAbstractSession } from "./session-reducer.js";
+import type { AbstractSessionEvent } from "./session-events.js";
+import { executeCommands, sessionToWorldState } from "./effect-runtime.js";
 
 export interface SseBroadcastFn {
   (event: { type: string; channelId?: string; data?: unknown }): void;
@@ -57,7 +65,6 @@ export class SessionController {
   private sseBroadcast: SseBroadcastFn | undefined;
   private readonly resolveModelForChannel: (channelId: string) => Promise<string | undefined>;
   private readonly contexts = new Map<string, SessionContext>();
-  private reconciled = false;
 
   constructor(deps: SessionControllerDeps) {
     this.orchestrator = deps.orchestrator;
@@ -69,6 +76,37 @@ export class SessionController {
 
   setSseBroadcast(fn: SseBroadcastFn): void {
     this.sseBroadcast = fn;
+  }
+
+  // --- Reducer dispatch (v0.80.0) ---
+
+  /**
+   * Dispatch an AbstractSessionEvent through the pure reducer and execute the
+   * resulting commands via the effect runtime. This is the canonical path for
+   * all state mutations that the reducer covers.
+   *
+   * Falls back gracefully if the session is not found in the orchestrator.
+   */
+  dispatchEvent(sessionId: string, event: AbstractSessionEvent): void {
+    const session = this.orchestrator.getSession(sessionId);
+    if (session === undefined) return;
+
+    const state = sessionToWorldState(session);
+    const { newState, commands } = reduceAbstractSession(state, event);
+
+    // Apply new state (if different) via orchestrator
+    if (newState !== state) {
+      this.orchestrator.applyWorldState(newState);
+    }
+
+    // Execute commands via effect runtime
+    executeCommands(commands, {
+      orchestrator: this.orchestrator,
+      agentManager: this.agentManager,
+      store: this.store,
+      ...(this.sseBroadcast !== undefined ? { sseBroadcast: this.sseBroadcast } : {}),
+      resolveModelForChannel: this.resolveModelForChannel,
+    });
   }
 
   // --- State transition methods ---
@@ -185,16 +223,9 @@ export class SessionController {
   /** Called when agent reports physical session started. */
   onPhysicalSessionStarted(sessionId: string, physicalSessionId: string, model: string): void {
     console.error(`[session-controller] physical session started: session=${sessionId.slice(0, 8)}, physicalSession=${physicalSessionId.slice(0, 12)}, model=${model}`);
-    // updatePhysicalSession must be called before transition so that broadcastStatusChange
-    // reads a fully-populated physicalSession and derives the correct DerivedChannelStatus.
-    // updatePhysicalSession also sets hasHadPhysicalSession = true.
-    this.orchestrator.updatePhysicalSession(sessionId, {
-      sessionId: physicalSessionId,
-      model,
-      startedAt: new Date().toISOString(),
-      currentState: "idle",
-    });
-    this.transition(sessionId, "waiting");
+    // Route through reducer: PhysicalSessionStarted event handles the full transition
+    // (updates physicalSession, hasHadPhysicalSession, transitions to waiting, persists, broadcasts)
+    this.dispatchEvent(sessionId, { type: "PhysicalSessionStarted", physicalSessionId, model });
   }
 
   /** Called when agent reports physical session ended. */
@@ -203,40 +234,21 @@ export class SessionController {
 
     this.clearContext(sessionId);
 
-    const session = this.orchestrator.getSessionStatuses()[sessionId];
-    const channelId = session?.channelId;
+    const endReason: import("./session-events.js").EndReason =
+      reason === "idle" ? "idle" : reason === "aborted" ? "aborted" : "error";
 
-    // Backoff for rapid failure (only on error/abort, not clean idle)
-    if (channelId !== undefined && reason !== "idle" && elapsedMs < 30_000) {
-      this.orchestrator.recordBackoff(channelId, 60_000);
-      console.error(`[session-controller] channel ${channelId.slice(0, 8)} entering 60s backoff after rapid failure (${elapsedMs}ms)`);
-    }
+    const session = this.orchestrator.getSession(sessionId);
 
-    this.orchestrator.updatePhysicalSessionState(sessionId, "stopped");
-
-    // Skip if API already transitioned (end-turn-run → idle, stop → suspended)
-    if (session?.status === "idle" || session?.status === "suspended") {
-      // no-op — broadcast already happened via the API path
-    } else if (reason === "idle") {
-      this.orchestrator.idleSession(sessionId);
-      this.broadcastStatusChange(sessionId, "idle");
-    } else {
-      this.orchestrator.suspendSession(sessionId);
-      this.broadcastStatusChange(sessionId, "suspended");
-      if (channelId !== undefined) {
-        const detail = error !== undefined ? `: ${error}` : "";
-        this.store.addMessage(channelId, "system", `[SYSTEM] Agent session stopped unexpectedly${detail}. A new session will start when you send a message.`);
-      }
-    }
-
-    // Flush pending messages (state reset). Safe because deliverMessage will
-    // immediately start a new session if a new message arrives.
-    if (channelId !== undefined) {
-      const flushed = this.store.flushPending(channelId);
-      if (flushed > 0) {
-        console.error(`[session-controller] flushed ${flushed} pending message(s) for channel ${channelId.slice(0, 8)}`);
-      }
-    }
+    // Route through reducer: PhysicalSessionEnded event handles the full transition
+    // (backoff, accumulate tokens, archive physical session, transition to idle/suspended,
+    //  add system message, flush pending messages, persist, broadcast)
+    this.dispatchEvent(sessionId, {
+      type: "PhysicalSessionEnded",
+      physicalSessionId: session?.physicalSessionId ?? "",
+      reason: endReason,
+      elapsedMs,
+      ...(error !== undefined ? { error } : {}),
+    });
   }
 
   /**
@@ -274,36 +286,26 @@ export class SessionController {
 
   /** Called from onSessionEvent when a tool starts executing. */
   onToolExecutionStart(sessionId: string, toolName: string): void {
-    this.orchestrator.updatePhysicalSessionState(sessionId, `tool:${toolName}`);
-    if (toolName === "copilotclaw_wait") {
-      this.orchestrator.setWaitingOnWaitTool(sessionId, true);
-      this.transition(sessionId, "waiting");
-    } else {
-      this.transition(sessionId, "processing");
-    }
+    // Route through reducer: ToolExecutionStarted event handles currentState update,
+    // waitingOnWaitTool flag, and status transition (waiting → processing or → waiting for copilotclaw_wait)
+    this.dispatchEvent(sessionId, { type: "ToolExecutionStarted", toolName });
   }
 
   /** Called from onSessionEvent when a tool finishes executing. */
   onToolExecutionComplete(sessionId: string): void {
-    this.orchestrator.updatePhysicalSessionState(sessionId, "idle");
-    // If copilotclaw_wait drain completed (tool completion = drain done), reset the flag
-    this.orchestrator.setWaitingOnWaitTool(sessionId, false);
+    // Route through reducer: WaitToolCompleted clears waitingOnWaitTool and updates currentState
+    this.dispatchEvent(sessionId, { type: "WaitToolCompleted" });
   }
 
   /** Called from onSessionEvent on session.idle. */
   onSessionIdle(sessionId: string, hasBackgroundTasks: boolean): void {
-    if (hasBackgroundTasks) {
-      // backgroundTasks idle means a subagent stopped but the session is still running
-      return;
-    }
-    // Check if copilotclaw_wait is still active — if so, don't transition to idle
-    const session = this.orchestrator.getSessionStatuses()[sessionId];
+    // Route through reducer: IdleDetected event enforces wait/idle race prevention
+    // (the reducer rejects the idle signal when waitingOnWaitTool=true or hasBackgroundTasks=true)
+    const session = this.orchestrator.getSession(sessionId);
     if (session?.waitingOnWaitTool === true) {
       console.error(`[session-controller] session.idle received while waitingOnWaitTool=true for ${sessionId.slice(0, 8)}, ignoring idle transition`);
-      return;
     }
-    // True idle — update physical state.
-    this.orchestrator.updatePhysicalSessionState(sessionId, "idle");
+    this.dispatchEvent(sessionId, { type: "IdleDetected", hasBackgroundTasks });
   }
 
   // --- Lifecycle decision ---
@@ -324,18 +326,21 @@ export class SessionController {
   // --- Explicit API operations ---
 
   stopSession(sessionId: string): void {
-    this.agentManager.stopPhysicalSession(sessionId);
-    this.transition(sessionId, "suspended");
     this.clearContext(sessionId);
+    // Route through reducer: StopRequested event handles stop + suspend + flush pending
+    this.dispatchEvent(sessionId, { type: "StopRequested" });
   }
 
   /** End turn run: disconnect (not stop) the physical session.
-   *  The SDK session is disconnected but copilotSessionId is preserved
+   *  The SDK session is disconnected but physicalSessionId is preserved
    *  so that the next message can resumeSession with the same context. */
   idleSession(sessionId: string): void {
-    this.agentManager.disconnectPhysicalSession(sessionId);
-    this.orchestrator.idleSession(sessionId);
     this.clearContext(sessionId);
+    // Disconnect physical session (preserve physicalSessionId for resume)
+    this.agentManager.disconnectPhysicalSession(sessionId);
+    // Directly idle the orchestrator session (end-turn-run API path —
+    // we use the legacy idleSession method which handles token accumulation)
+    this.orchestrator.idleSession(sessionId);
     this.broadcastStatusChange(sessionId, "idle");
   }
 
@@ -343,14 +348,12 @@ export class SessionController {
 
   onReconcile(runningSessions: Array<{ sessionId: string; status: string }>): void {
     this.orchestrator.reconcileWithAgent(runningSessions);
-    this.reconciled = true;
     // After reconciliation, check for pending messages
     this.checkAllChannelsPending();
   }
 
   onStreamDisconnected(): void {
     this.orchestrator.idleAllActive();
-    this.reconciled = false;
   }
 
   /** Safety net: check all channels for pending messages and start sessions. */
@@ -376,46 +379,49 @@ export class SessionController {
       if (session.status === "suspended") continue;
       if (this.orchestrator.checkSessionMaxAge(sessionId, maxAgeMs)) {
         console.error(`[session-controller] session ${sessionId.slice(0, 8)} exceeded max age, stopping`);
-        this.stopSession(sessionId);
+        this.clearContext(sessionId);
+        // Route through reducer: MaxAgeExceeded event handles stop + suspend
+        this.dispatchEvent(sessionId, { type: "MaxAgeExceeded" });
       }
     }
   }
 
-  // --- Observability delegation methods (C item) ---
-  // These delegate to orchestrator, centralizing all session mutation through SessionController.
+  // --- Observability delegation methods ---
+  // These route through the reducer so all state mutation goes through a single path.
 
   /** Delegate: update physical session token usage from session.usage_info events. */
   onUsageInfo(sessionId: string, currentTokens: number, tokenLimit: number): void {
-    this.orchestrator.updatePhysicalSessionTokens(sessionId, currentTokens, tokenLimit);
+    this.dispatchEvent(sessionId, { type: "TokensAccumulated", currentTokens, tokenLimit });
   }
 
   /** Delegate: accumulate assistant.usage tokens on the physical session. */
   onAssistantUsage(sessionId: string, inputTokens: number, outputTokens: number, quotaSnapshots?: Record<string, unknown>): void {
-    this.orchestrator.accumulateUsageTokens(sessionId, inputTokens, outputTokens, quotaSnapshots);
+    this.dispatchEvent(sessionId, {
+      type: "UsageUpdated",
+      inputTokens,
+      outputTokens,
+      ...(quotaSnapshots !== undefined ? { quotaSnapshots } : {}),
+    });
   }
 
   /** Delegate: update model on physical session from model_change events. */
   onModelChange(sessionId: string, newModel: string): void {
-    this.orchestrator.updatePhysicalSessionModel(sessionId, newModel);
+    this.dispatchEvent(sessionId, { type: "ModelResolved", model: newModel });
   }
 
   /** Delegate: track a subagent session start. */
   onSubagentStarted(sessionId: string, info: import("./ipc-client.js").SubagentInfo): void {
-    this.orchestrator.addSubagentSession(sessionId, info);
+    this.dispatchEvent(sessionId, { type: "SubagentStarted", info });
   }
 
   /** Delegate: update a subagent session status. */
   onSubagentStatusChanged(sessionId: string, toolCallId: string, status: "completed" | "failed"): void {
-    this.orchestrator.updateSubagentStatus(sessionId, toolCallId, status);
+    this.dispatchEvent(sessionId, { type: "SubagentStatusChanged", toolCallId, status });
   }
 
   // --- Accessors for daemon.ts wiring ---
 
   getOrchestrator(): SessionOrchestrator {
     return this.orchestrator;
-  }
-
-  isReconciled(): boolean {
-    return this.reconciled;
   }
 }

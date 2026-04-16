@@ -29,7 +29,7 @@ interface PhysicalSessionEntry {
   info: PhysicalSessionInfo;
   abortController: AbortController;
   sessionPromise: Promise<void>;
-  generation: number;
+  // generation was removed in v0.80.0 (dead field — never referenced after assignment)
   reinjectCount: number;
 }
 
@@ -92,7 +92,6 @@ export class PhysicalSessionManager {
   private readonly toolDefinitions: Array<{ name: string; description: string; parameters: Record<string, unknown>; skipPermission?: boolean }>;
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
-  private generationCounter = 0;
 
   constructor(options: PhysicalSessionManagerOptions) {
     this.workingDirectory = options.workingDirectory;
@@ -222,7 +221,6 @@ export class PhysicalSessionManager {
     const { sessionId, physicalSessionId, resolvedModel } = options;
 
     const abortController = new AbortController();
-    const generation = ++this.generationCounter;
     const entry: PhysicalSessionEntry = {
       sessionId,
       info: {
@@ -231,7 +229,6 @@ export class PhysicalSessionManager {
       },
       abortController,
       sessionPromise: Promise.resolve(),
-      generation,
       reinjectCount: 0,
     };
 

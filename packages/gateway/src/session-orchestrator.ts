@@ -617,4 +617,53 @@ export class SessionOrchestrator {
   close(): void {
     this.db.close();
   }
+
+  /**
+   * Get a single session by ID (direct reference, not a copy).
+   * Used by the effect runtime to read current state without cloning.
+   */
+  getSession(sessionId: string): AbstractSession | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  /**
+   * Apply a world state snapshot to the in-memory map and persist it to SQLite.
+   * This is the single write path used by the effect runtime after reducer execution.
+   * Replaces the scattered direct-mutate pattern throughout session-orchestrator.ts.
+   *
+   * The orchestrator's channelBindings map is kept consistent: if the channelId
+   * changes (e.g., a session becomes unbound), the binding is updated accordingly.
+   */
+  applyWorldState(state: import("./session-events.js").AbstractSessionWorldState): void {
+    const existing = this.sessions.get(state.sessionId);
+
+    const session: AbstractSession = {
+      sessionId: state.sessionId,
+      status: state.status,
+      channelId: state.channelId,
+      startedAt: state.startedAt,
+      physicalSessionId: state.physicalSessionId,
+      cumulativeInputTokens: state.cumulativeInputTokens,
+      cumulativeOutputTokens: state.cumulativeOutputTokens,
+      physicalSession: state.physicalSession,
+      physicalSessionHistory: state.physicalSessionHistory,
+      subagentSessions: state.subagentSessions,
+      processingStartedAt: state.processingStartedAt,
+      waitingOnWaitTool: state.waitingOnWaitTool,
+      hasHadPhysicalSession: state.hasHadPhysicalSession,
+    };
+
+    // Update channel bindings if channelId changed
+    if (existing?.channelId !== state.channelId) {
+      if (existing?.channelId !== undefined) {
+        this.channelBindings.delete(existing.channelId);
+      }
+      if (state.channelId !== undefined) {
+        this.channelBindings.set(state.channelId, state.sessionId);
+      }
+    }
+
+    this.sessions.set(state.sessionId, session);
+    this.persistSession(session);
+  }
 }

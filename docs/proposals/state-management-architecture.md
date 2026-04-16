@@ -4,6 +4,8 @@
 
 本 proposal は copilotclaw の全 subsystem にまたがる状態管理の根本的な再設計を定義する。session lifecycle のみを対象とした局所的な改善ではなく、gateway 側・agent 側・IPC/cross-cutting のすべてを射程に含める。
 
+**v0.80.0 実装済み（Phase A-E）**: World state / process state の型分離（`session-events.ts`）、event 型定義（discriminated union）、AbstractSession reducer（`session-reducer.ts`、gateway）、PhysicalSession + CopilotClient reducer（`session-reducer.ts`、agent）、effect runtime（`effect-runtime.ts`）、SessionController の key メソッドを `dispatchEvent()` 経由の reducer 呼び出しに置き換え。未実装: channel subsystem、PendingQueue subsystem、SSE Broadcaster subsystem、IPC event 型付け、event bus。
+
 既存の `docs/proposals/channel.md` の SessionController 設計（v0.64.0 で実現済み）は gateway 側の session lifecycle に scope を限定したものだった。本 proposal はその上位に位置し、全 subsystem を横断するアーキテクチャとして整理し直す。
 
 ---

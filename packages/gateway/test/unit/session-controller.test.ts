@@ -31,16 +31,18 @@ function makeController(overrides?: { store?: Store; orchestrator?: SessionOrche
 }
 
 describe("SessionController — state transitions", () => {
-  it("rejects invalid transition and logs", () => {
+  it("rejects invalid transition (idle → waiting) — status remains idle", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
     // Put session in "idle" state
     orchestrator.updateSessionStatus(sessionId, "idle");
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    // idle → waiting is not valid (must go through starting first)
+    // idle → waiting is not a valid transition (must go through starting first).
+    // With the reducer-based path, the invalid transition is silently no-opped;
+    // status must remain "idle" after the call.
+    vi.spyOn(console, "error").mockImplementation(() => {});
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("rejected transition"));
-    consoleSpy.mockRestore();
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("idle");
+    vi.restoreAllMocks();
   });
 
   it("allows valid transition: starting → waiting via onPhysicalSessionStarted", () => {

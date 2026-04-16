@@ -233,8 +233,17 @@
     - `DashboardPage`: channel 作成・アーカイブ・モデル変更の後にチャンネルリストが自動更新されない問題 → `channel_list_change` global SSE event を新設 — **v0.76.0 で解消済み**（`Store.setOnChannelListChange` hook + `broadcastChannelListChange` helper（daemon.ts export）+ `DashboardPage` の `channel_list_change` 分岐追加。アクティブチャンネルが消えた場合は先頭チャンネルにフォールバック。`showArchived` の状態に応じてフィルタリングを適用）
     - session-scoped SSE の Last-Event-ID reconnect replay — ネットワーク blip やタブスリープ後の再接続時に missed event を DB から catch-up 配信する — **v0.77.0 で解消済み**（`SessionEventStore.listEventsAfterId` メソッド追加・`SESSION_REPLAY_LIMIT=500` export、`sse-broadcaster.ts` の `formatSessionSseFrame` 関数 export と `broadcastToSession` での `id:` line 付与、`session-replay.ts` に `replaySessionEventsAfter` helper（daemon.ts から re-export）、`/api/sessions/:id/events/stream` での `Last-Event-ID` header parse と接続直後 catch-up 送信。channel / global SSE の replay は別 scope）
 
+- 状態管理アーキテクチャ再設計 — Phase A-E 実装（v0.80.0）:
+  - **Phase A**: World state / process state の型分離。gateway 側 `AbstractSessionWorldState` 型（`session-events.ts`）と agent 側 `PhysicalSessionWorldState` / `PhysicalSessionProcessState` 分離（`session-events.ts`）。`generation` dead field 削除、`isReconciled()` dead code 削除
+  - **Phase B**: Event 型定義。`AbstractSessionEvent` / `AbstractSessionCommand`（gateway `session-events.ts`）と `PhysicalSessionEvent` / `PhysicalSessionCommand` / `CopilotClientEvent` / `CopilotClientCommand`（agent `session-events.ts`）を discriminated union として定義
+  - **Phase C**: AbstractSession reducer（gateway `session-reducer.ts`）。`reduceAbstractSession(state, event) → { newState, commands }` の純関数。全 status 遷移（15+ event type）・observability event（UsageUpdated / TokensAccumulated / ModelResolved / SubagentStarted / SubagentStatusChanged）・wait/idle race 防止ロジックを網羅
+  - **Phase D**: PhysicalSession reducer（agent `session-reducer.ts`）。`reducePhysicalSession(state, event)` と `reduceCopilotClient(state, event)` の純関数。`entry.info.status = ...` の直接 mutate を type-level で分離
+  - **Phase E**: Effect runtime（gateway `effect-runtime.ts`）。`executeCommands(commands, deps)` が AbstractSessionCommand を実行。`sessionToWorldState` / `worldStateToSession` の変換ブリッジ。SessionController の key メソッド（`onPhysicalSessionStarted`, `onPhysicalSessionEnded`, `onToolExecutionStart`, `onToolExecutionComplete`, `onSessionIdle`, `onUsageInfo`, `onAssistantUsage`, `onModelChange`, `onSubagentStarted`, `onSubagentStatusChanged`, `stopSession`, `checkSessionMaxAge`）を reducer 経由の `dispatchEvent()` に置き換え
+  - 47 新規 gateway reducer unit tests + 26 新規 agent reducer unit tests（純関数テスト）
+  - `SessionOrchestrator.applyWorldState()` / `getSession()` メソッド追加（effect runtime の単一書き込み経路）
+
 **未実現:**
-- 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — gateway 側・agent 側・IPC/cross-cutting の全 subsystem を対象に、world state / process state 分離・subsystem ごとの reducer・event bus による subsystem 間通信を導入する。下記の個別未実現項目はすべて本 proposal の実装に包含される
+- 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — v0.80.0 で Phase A-E を実装。下記の個別未実現項目は未着手
   - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— v0.71.0 で部分実現、v0.79.0 でほぼ完成。`client-not-started` 状態（CopilotClient 観測経路）は未実現のまま（selector は常に `clientStarted = true` を仮定）
   - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
   - イベント抽象化 — `copilotclaw_wait` 返却値の多型化（`WaitToolPayload` を複数イベント型の union に変更）、メッセージ以外のイベント型（subagent-completed / subagent-failed / keepalive）の追加（`docs/proposals/state-management-architecture.md` の「Gateway: AbstractSessionEvent の拡張 — イベント抽象化」節参照）
