@@ -56,7 +56,7 @@ export class Store {
     }
   }
 
-  private static readonly LATEST_STORE_VERSION = 5;
+  private static readonly LATEST_STORE_VERSION = 6;
 
   private static readonly STORE_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // v0 → v1: Add archivedAt column to channels
@@ -114,6 +114,22 @@ export class Store {
         // Backfill existing agent rows with default channel-operator meta
         db.exec(`UPDATE messages SET senderMeta = '{"agentId":"unknown","agentDisplayName":"Agent","agentRole":"channel-operator"}' WHERE sender = 'agent' AND senderMeta IS NULL`);
       }
+    },
+    // v5 → v6: Add intents table for copilotclaw_intent tool persistence (v0.79.0)
+    5: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS intents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          channelId TEXT NOT NULL,
+          sessionId TEXT NOT NULL,
+          agentId TEXT NOT NULL,
+          agentDisplayName TEXT,
+          intent TEXT NOT NULL,
+          toolCallId TEXT,
+          timestamp TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_intents_channel_agent ON intents(channelId, agentId);
+      `);
     },
   };
 
@@ -384,6 +400,58 @@ export class Store {
       "SELECT COUNT(*) as cnt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? AND m.sender = 'cron' AND m.message LIKE ?",
     ).get(channelId, `${cronIdPrefix}%`) as { cnt: number } | undefined;
     return row !== undefined && row.cnt > 0;
+  }
+
+  // --- Intents (copilotclaw_intent tool persistence, v0.79.0) ---
+
+  /** Record a new intent entry from copilotclaw_intent tool call. */
+  recordIntent(entry: {
+    channelId: string;
+    sessionId: string;
+    agentId: string;
+    agentDisplayName?: string;
+    intent: string;
+    toolCallId?: string;
+    timestamp: string;
+  }): void {
+    this.db.prepare(
+      `INSERT INTO intents (channelId, sessionId, agentId, agentDisplayName, intent, toolCallId, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      entry.channelId,
+      entry.sessionId,
+      entry.agentId,
+      entry.agentDisplayName ?? null,
+      entry.intent,
+      entry.toolCallId ?? null,
+      entry.timestamp,
+    );
+  }
+
+  /** List intent entries for a channel and agent, newest first. */
+  listIntents(channelId: string, agentId: string, limit = 50): Array<{
+    id: number;
+    channelId: string;
+    sessionId: string;
+    agentId: string;
+    agentDisplayName: string | null;
+    intent: string;
+    toolCallId: string | null;
+    timestamp: string;
+  }> {
+    return this.db.prepare(
+      `SELECT id, channelId, sessionId, agentId, agentDisplayName, intent, toolCallId, timestamp
+       FROM intents WHERE channelId = ? AND agentId = ? ORDER BY id DESC LIMIT ?`
+    ).all(channelId, agentId, limit) as Array<{
+      id: number;
+      channelId: string;
+      sessionId: string;
+      agentId: string;
+      agentDisplayName: string | null;
+      intent: string;
+      toolCallId: string | null;
+      timestamp: string;
+    }>;
   }
 
   /** Close the database connection. */

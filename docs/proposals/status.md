@@ -203,6 +203,20 @@
 
 - `copilotclaw_intent` tool — tool 定義・gateway handler（`handleIntentToolCall`）・in-memory IntentsStore・システムプロンプト制約（単独呼び出し禁止）・channel-operator / worker への copilotclawTools 追加・MIN_AGENT_VERSION を 0.70.0 に引き上げ（v0.70.0 で部分実現）。API エンドポイント（`GET /api/channels/:channelId/intents/:agentId`）・UI 表示（プロフィールモーダル内の intent タイムライン）・SQLite 永続化（intents テーブル）は未実現
 
+- gateway 側 `copilotSessionId` → `physicalSessionId` 完全リネーム（DB schema migration v3→v4、`AbstractSession` 型フィールド追加、SessionOrchestrator / SessionController / channel-status-selector の全 callsite 修正、physicalSessionId のない legacy binding 向け resume path 修正）— MIN_AGENT_VERSION は 0.70.0 据え置き（agent 側 IPC breaking change なし）（v0.79.0）
+
+- wait/idle race 修正（v0.79.0）: `waitingOnWaitTool: boolean` と `hasHadPhysicalSession: boolean` を `AbstractSessionState` に追加。SessionController の `onToolExecutionStart(copilotclaw_wait)` で `waitingOnWaitTool=true`、`onToolExecutionComplete()` でリセット。`onSessionIdle(false)` が `waitingOnWaitTool=true` のとき idle 遷移をブロック。`hasHadPhysicalSession` を `physicalSessionHistory.length > 0` 代替として channel-status-selector に導入（正確な after-stop 判定）
+
+- SessionController 委譲メソッド群（v0.79.0）: daemon.ts の直接 orchestrator 呼び出しを SessionController 経由に集約。`onUsageInfo` / `onAssistantUsage` / `onModelChange` / `onSubagentStarted` / `onSubagentStatusChanged` の 5 メソッドを SessionController に追加
+
+- sub-subagent 完了通知抑制（v0.79.0）: gateway 側のみで完結。agent が全 SDK event を data フィールド込みで catch-all 転送するため、gateway の `daemon.ts` は `data["parentToolCallId"]` が present の場合に `subagent.completed` / `subagent.failed` 通知を抑制する（v0.78.0 で導入済みのフィルタが正しく機能）。agent 側に outer wrapper parentId を追加する必要はなかった（誤実装を revert 済み）
+
+- `copilotclaw_intent` 完全実装（v0.79.0）: SQLite 永続化（store.db に intents テーブル、schema v5→v6）、`GET /api/channels/:channelId/intents/:agentId` エンドポイント、ProfileModal に Intent タイムライン UI（loading / error / empty / no-channel / timeline 状態。`fetchIntents()` API 呼び出し。`channelId` prop を DashboardPage から受け渡し）
+
+- ProfileModal モデル名表示（v0.79.0）: DashboardPage の `refreshStatus` が active channel bound session の `physicalSession.model` を `activeSessionModel` state に格納し、`ProfileModal` に `modelName` prop として渡す。Info タブに Model 行を追加。`modelName` が undefined の場合「モデル情報なし」を表示
+
+- SendQueue ACK プロトコル（v0.79.0）: agent の `ipc-server.ts` に `pendingAckIds: Set<string>` を追加。バッファリング時に `_queueId` を自動付与し、`flushSendQueue()` は flush 後ディスクを即削除せず `pendingAckIds` に登録。gateway（`agent-manager.ts`）が `session_event` / `channel_message` / `physical_session_started` / `physical_session_ended` / `running_sessions` / `system_prompt_original` / `system_prompt_session` 等の queued message を受信した直後に `message_acknowledged { queueId }` IPC を agent に返送。agent は `acknowledgeMessage()` でその ID を `pendingAckIds` から除去し、全 ACK 受領後にディスクをクリア。MIN_AGENT_VERSION を 0.79.0 に引き上げ
+
 - SSE エンドポイント分離（channel-scoped / global-scoped）— v0.72.0 で部分実現:
   - `/api/events?channel=...` — channel-scoped SSE（既存、変更なし）
   - `/api/global-events` — global SSE（v0.72.0 で新設）
@@ -221,17 +235,12 @@
 
 **未実現:**
 - 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — gateway 側・agent 側・IPC/cross-cutting の全 subsystem を対象に、world state / process state 分離・subsystem ごとの reducer・event bus による subsystem 間通信を導入する。下記の個別未実現項目はすべて本 proposal の実装に包含される
-  - gateway 側の copilotSessionId → physicalSessionId 統一（DB スキーマ migration 含む）— 本 proposal の `StartPhysicalSession` event 型設計で型レベルから解消
-  - メッセージ消費バグ修正の残件 — startPhysicalSession の ack タイムアウト監視、IPC reconnect 時の send queue flush 順序 — 本 proposal の PendingQueue subsystem ACK プロトコルと SendQueue subsystem で解消
-  - gateway 停止時の情報無損失 — flush 時の配達保証（send queue の flush 後に ACK を待たずディスクをクリアしている。flush 中に gateway がクラッシュするとメッセージが消失する） — 本 proposal の SendQueue subsystem の `MessageAcknowledged` event で解消
-  - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— v0.71.0 で部分実現。`selectDerivedChannelStatus` 純関数（`channel-status-selector.ts`）・`broadcastStatusChange` での selector 呼び出しと SSE event への `derivedStatus` 付与・DashboardPage での `derivedStatus` 優先表示を実装済み。`client-not-started` 状態（CopilotClient 観測経路）は未実現のまま（selector は常に `clientStarted = true` を仮定）。`waitingOnWaitTool` フィールドおよび `hasHadPhysicalSession` フィールドは未実装（`physicalSessionHistory.length` で代替）のため proposal として残存
-  - `copilotclaw_intent` API / UI / SQLite 永続化 — tool 定義・gateway handler・システムプロンプト制約は v0.70.0 で部分実現済み。`GET /api/channels/:channelId/intents/:agentId` エンドポイント・プロフィールモーダル UI 表示・intents テーブル SQLite 永続化が未実現（2026-04-14 追加）
-  - sub-subagent 完了通知抑制の修正 — outer wrapper 経由のフィルタ（`msg["parentId"]`）が未機能。agent 側 session キャッチオールが `parentId` を outer wrapper に含めないため gateway の `msg["parentId"]` が常に undefined（2026-04-14 再確認）。本 scope の parentToolCallId（assistant.message の sender 識別機構）とは別問題（v0.78.0 scope 外）
+  - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— v0.71.0 で部分実現、v0.79.0 でほぼ完成。`client-not-started` 状態（CopilotClient 観測経路）は未実現のまま（selector は常に `clientStarted = true` を仮定）
   - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
   - イベント抽象化 — `copilotclaw_wait` 返却値の多型化（`WaitToolPayload` を複数イベント型の union に変更）、メッセージ以外のイベント型（subagent-completed / subagent-failed / keepalive）の追加（`docs/proposals/state-management-architecture.md` の「Gateway: AbstractSessionEvent の拡張 — イベント抽象化」節参照）
 
 - メッセージ sender の詳細識別 — `Message.senderMeta` フィールド（agentId / agentDisplayName / agentRole）を v0.78.0 で追加。DB migration v4→v5、gateway sender 決定ロジック（channel-operator / subagent 自動判別）、frontend Avatar + ProfileModal + subagent collapse UI を実現済み（v0.78.0）
-- エージェントアイコン・プロフィールモーダル・collapse 表示 — v0.78.0 で部分実現（channel-operator / subagent の 2 種のみ自動判別。Intent timeline は ProfileModal に placeholder タブのみ）
+- エージェントアイコン・プロフィールモーダル・collapse 表示 — v0.78.0 で部分実現（channel-operator / subagent の 2 種のみ自動判別）。v0.79.0 で Intent タイムライン UI とモデル名表示も実現済み
 
 **今後の課題:**
 - Profile 認証の OAuth 対応（ユーザーが OAuth App を登録し client_id を config に設定する方式）

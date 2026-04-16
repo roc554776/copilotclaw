@@ -12,13 +12,20 @@ export interface AbstractSession {
   status: AbstractSessionStatus;
   channelId?: string | undefined;
   startedAt: string;
+  /** @deprecated use physicalSessionId instead. Kept for schema migration compatibility only. */
   copilotSessionId?: string | undefined;
+  /** Physical session ID used for resumeSession. Renamed from copilotSessionId in v0.79.0. */
+  physicalSessionId?: string | undefined;
   cumulativeInputTokens: number;
   cumulativeOutputTokens: number;
   physicalSession?: PhysicalSessionSummary | undefined;
   physicalSessionHistory: PhysicalSessionSummary[];
   subagentSessions?: SubagentInfo[] | undefined;
   processingStartedAt?: string | undefined;
+  /** True when copilotclaw_wait is currently executing (drain not yet complete). */
+  waitingOnWaitTool: boolean;
+  /** True once at least one physical session has started on this abstract session. */
+  hasHadPhysicalSession: boolean;
 }
 
 export interface SessionOrchestratorOptions {
@@ -53,7 +60,7 @@ export class SessionOrchestrator {
     this.loadFromDb();
   }
 
-  private static readonly LATEST_SCHEMA_VERSION = 3;
+  private static readonly LATEST_SCHEMA_VERSION = 4;
 
   /**
    * Normalize all channel-bound session statuses to the v0.58.0 idle/new model.
@@ -75,10 +82,23 @@ export class SessionOrchestrator {
     // v0→v1, v1→v2, v2→v3: All perform the same idempotent session status normalization.
     // Three versions exist because the migration was developed incrementally during v0.58.0
     // and some DBs were persisted at version 1, 2, or 3 with incomplete normalization.
-    // Next migration should be added as v3→v4.
     0: (db) => SessionOrchestrator.normalizeSessionStatuses(db),
     1: (db) => SessionOrchestrator.normalizeSessionStatuses(db),
     2: (db) => SessionOrchestrator.normalizeSessionStatuses(db),
+    // v3→v4: Rename copilotSessionId column to physicalSessionId (v0.79.0).
+    // SQLite 3.25.0+ supports RENAME COLUMN. The old copilotSessionId column stored the
+    // physical Copilot session ID for resumeSession — now named physicalSessionId.
+    3: (db) => {
+      try {
+        db.exec("ALTER TABLE abstract_sessions RENAME COLUMN copilotSessionId TO physicalSessionId");
+      } catch {
+        // Column may not exist or already renamed — check and add if missing
+        const cols = db.pragma("table_info(abstract_sessions)") as Array<{ name: string }>;
+        if (!cols.some((c) => c.name === "physicalSessionId")) {
+          db.exec("ALTER TABLE abstract_sessions ADD COLUMN physicalSessionId TEXT");
+        }
+      }
+    },
   };
 
   private initSchema(): void {
@@ -88,7 +108,7 @@ export class SessionOrchestrator {
         channelId TEXT,
         status TEXT NOT NULL,
         startedAt TEXT NOT NULL,
-        copilotSessionId TEXT,
+        physicalSessionId TEXT,
         cumulativeInputTokens INTEGER NOT NULL DEFAULT 0,
         cumulativeOutputTokens INTEGER NOT NULL DEFAULT 0,
         physicalSessionHistory TEXT NOT NULL DEFAULT '[]'
@@ -121,13 +141,13 @@ export class SessionOrchestrator {
   /** Load all sessions from SQLite into in-memory maps on construction. */
   private loadFromDb(): void {
     const rows = this.db.prepare(
-      "SELECT sessionId, channelId, status, startedAt, copilotSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory FROM abstract_sessions",
+      "SELECT sessionId, channelId, status, startedAt, physicalSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory FROM abstract_sessions",
     ).all() as Array<{
       sessionId: string;
       channelId: string | null;
       status: string;
       startedAt: string;
-      copilotSessionId: string | null;
+      physicalSessionId: string | null;
       cumulativeInputTokens: number;
       cumulativeOutputTokens: number;
       physicalSessionHistory: string;
@@ -155,11 +175,13 @@ export class SessionOrchestrator {
         status,
         channelId: row.channelId ?? undefined,
         startedAt: row.startedAt,
-        copilotSessionId: row.copilotSessionId ?? undefined,
+        physicalSessionId: row.physicalSessionId ?? undefined,
         cumulativeInputTokens: row.cumulativeInputTokens,
         cumulativeOutputTokens: row.cumulativeOutputTokens,
         physicalSession,
         physicalSessionHistory: history,
+        waitingOnWaitTool: false,
+        hasHadPhysicalSession: history.length > 0,
       };
       this.sessions.set(session.sessionId, session);
 
@@ -172,13 +194,13 @@ export class SessionOrchestrator {
   /** Persist a single session to SQLite (upsert). */
   private persistSession(session: AbstractSession): void {
     this.db.prepare(`
-      INSERT INTO abstract_sessions (sessionId, channelId, status, startedAt, copilotSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory)
+      INSERT INTO abstract_sessions (sessionId, channelId, status, startedAt, physicalSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(sessionId) DO UPDATE SET
         channelId = excluded.channelId,
         status = excluded.status,
         startedAt = excluded.startedAt,
-        copilotSessionId = excluded.copilotSessionId,
+        physicalSessionId = excluded.physicalSessionId,
         cumulativeInputTokens = excluded.cumulativeInputTokens,
         cumulativeOutputTokens = excluded.cumulativeOutputTokens,
         physicalSessionHistory = excluded.physicalSessionHistory
@@ -187,7 +209,7 @@ export class SessionOrchestrator {
       session.channelId ?? null,
       session.status,
       session.startedAt,
-      session.copilotSessionId ?? null,
+      session.physicalSessionId ?? null,
       session.cumulativeInputTokens,
       session.cumulativeOutputTokens,
       JSON.stringify(session.physicalSessionHistory),
@@ -217,7 +239,7 @@ export class SessionOrchestrator {
       const entries = parsed["entries"] as Array<Record<string, unknown>> | undefined;
 
       const insertStmt = this.db.prepare(`
-        INSERT OR IGNORE INTO abstract_sessions (sessionId, channelId, status, startedAt, copilotSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory)
+        INSERT OR IGNORE INTO abstract_sessions (sessionId, channelId, status, startedAt, physicalSessionId, cumulativeInputTokens, cumulativeOutputTokens, physicalSessionHistory)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
@@ -227,12 +249,15 @@ export class SessionOrchestrator {
         if (Array.isArray(sessions)) {
           for (const s of sessions) {
             if (typeof s["sessionId"] !== "string") continue;
+            // Support both old copilotSessionId and new physicalSessionId field names
+            const physSessId = typeof s["physicalSessionId"] === "string" ? s["physicalSessionId"]
+              : typeof s["copilotSessionId"] === "string" ? s["copilotSessionId"] : null;
             insertStmt.run(
               s["sessionId"],
               typeof s["channelId"] === "string" ? s["channelId"] : null,
               typeof s["status"] === "string" ? s["status"] : "suspended",
               typeof s["startedAt"] === "string" ? s["startedAt"] : new Date().toISOString(),
-              typeof s["copilotSessionId"] === "string" ? s["copilotSessionId"] : null,
+              physSessId,
               typeof s["cumulativeInputTokens"] === "number" ? s["cumulativeInputTokens"] : 0,
               typeof s["cumulativeOutputTokens"] === "number" ? s["cumulativeOutputTokens"] : 0,
               Array.isArray(s["physicalSessionHistory"]) ? JSON.stringify(s["physicalSessionHistory"]) : "[]",
@@ -243,12 +268,14 @@ export class SessionOrchestrator {
           // Old agent-bindings.json format
           for (const e of entries) {
             if (typeof e["sessionId"] !== "string") continue;
+            const physSessId = typeof e["physicalSessionId"] === "string" ? e["physicalSessionId"]
+              : typeof e["copilotSessionId"] === "string" ? e["copilotSessionId"] : null;
             insertStmt.run(
               e["sessionId"],
               typeof e["channelId"] === "string" ? e["channelId"] : null,
               typeof e["status"] === "string" ? e["status"] : "suspended",
               typeof e["startedAt"] === "string" ? e["startedAt"] : new Date().toISOString(),
-              typeof e["copilotSessionId"] === "string" ? e["copilotSessionId"] : null,
+              physSessId,
               typeof e["cumulativeInputTokens"] === "number" ? e["cumulativeInputTokens"] : 0,
               typeof e["cumulativeOutputTokens"] === "number" ? e["cumulativeOutputTokens"] : 0,
               Array.isArray(e["physicalSessionHistory"]) ? JSON.stringify(e["physicalSessionHistory"]) : "[]",
@@ -305,6 +332,8 @@ export class SessionOrchestrator {
       cumulativeInputTokens: 0,
       cumulativeOutputTokens: 0,
       physicalSessionHistory: [],
+      waitingOnWaitTool: false,
+      hasHadPhysicalSession: false,
     };
     this.sessions.set(sessionId, session);
     this.channelBindings.set(channelId, sessionId);
@@ -420,11 +449,19 @@ export class SessionOrchestrator {
     return this.channelBindings.get(channelId);
   }
 
-  /** Update the current physical session on an abstract session. */
+  /** Set or clear the waitingOnWaitTool flag. */
+  setWaitingOnWaitTool(sessionId: string, value: boolean): void {
+    const session = this.sessions.get(sessionId);
+    if (session !== undefined) session.waitingOnWaitTool = value;
+    // Not persisted — in-memory only (survives restart as false, which is safe)
+  }
+
+  /** Update the current physical session on an abstract session. Also marks hasHadPhysicalSession. */
   updatePhysicalSession(sessionId: string, physicalSession: PhysicalSessionSummary): void {
     const session = this.sessions.get(sessionId);
     if (session === undefined) return;
     session.physicalSession = physicalSession;
+    session.hasHadPhysicalSession = true;
     this.persistSession(session);
   }
 

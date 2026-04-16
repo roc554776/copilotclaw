@@ -36,6 +36,10 @@ v0.71.0 で実現した部分:
 - `session-controller.ts` の `broadcastStatusChange` で selector を呼び、SSE event data に `derivedStatus` を付与
 - `DashboardPage.tsx` で `session_status_change` 受信時に `derivedStatus` を優先表示
 
+v0.79.0 で追加実現:
+- `waitingOnWaitTool: boolean` フィールドを `AbstractSessionState` に追加。selector が正確な wait/idle race ブロック判定に使用
+- `hasHadPhysicalSession: boolean` フィールドを `AbstractSessionState` に追加。`no-physical-session-initial` vs `no-physical-session-after-stop` の正確な判定に使用（`physicalSessionHistory.length > 0` の代替）
+
 未実現のまま:
 - `client-not-started` 状態（CopilotClient 観測経路）— selector は `clientStarted = true` を固定仮定。CopilotClient の起動状態を観測する経路が未実装のため、この値は実際には返されない
 
@@ -65,10 +69,12 @@ channel operator が知覚すべき入力を「メッセージ」に一本化せ
 - DB migration v4→v5: `senderMeta TEXT` カラム追加、既存 agent 行へのデフォルト backfill
 - frontend: MessageAvatar + ProfileModal + subagent collapse （`<details>` グループ）
 
+**v0.79.0 追加実現:**
+- ProfileModal の Intent timeline（`fetchIntents()` API 呼び出し、loading / error / empty / no-channel / timeline 状態を実装）
+
 **未実現（将来課題）:**
 - worker ロールの識別（現在は subagent に統一; worker と sub-worker の区別は未実現）
 - sub-subagent の識別（parentToolCallId チェーンのネスト追跡は未対応）
-- ProfileModal の Intent timeline（プレースホルダタブのみ）
 
 識別対象（外部観察可能な区別）:
 - `user`: ユーザーからのメッセージ
@@ -86,11 +92,13 @@ channel operator が知覚すべき入力を「メッセージ」に一本化せ
 - agent アイコンクリックで `ProfileModal` を開く（Info タブ: agentId + agentRole、Intent タブ: placeholder）
 - 連続した `agentRole === "subagent"` メッセージ（同 agentId）を `<details>` グループに collapse 表示
 
+**v0.79.0 追加実現:**
+- Intent timeline（`copilotclaw_intent` の SQLite 永続化 + API + ProfileModal UI を実現済み）
+- ProfileModal モデル名表示（`refreshStatus` で `physicalSession.model` を取得し `modelName` prop として ProfileModal に渡す。Info タブに Model 行を追加）
+
 **未実現（将来課題）:**
-- プロフィールモーダルへのモデル名・ステータス表示（session event 由来の情報）
 - task tool インターフェースとシステムプロンプト工夫による agent ごとの固有表示名割り当て
 - sub-subagent の collapse（現在は subagent 1 段のみ対応）
-- Intent timeline（ProfileModal に placeholder タブのみ。`copilotclaw_intent` API / UI / SQLite 永続化は未実現）
 
 ### Req: チャンネルタイムライン UI の非メッセージ要素（未実現）
 
@@ -101,7 +109,7 @@ channel operator が知覚すべき入力を「メッセージ」に一本化せ
 - これらの非メッセージ要素は、メッセージとは視覚的に区別して表示する（例: システムイベントとしてスタイルを変える）
 - タイムライン UI を「メッセージ + 非メッセージイベント」の統一ストリームとして扱う設計にする
 
-### Req: copilotclaw_intent tool（v0.70.0 で部分実現）
+### Req: copilotclaw_intent tool（v0.79.0 で完全実現）
 
 agent が何をしようとしているのかをチャンネルに伝えるための専用 tool を追加する。
 
@@ -111,11 +119,10 @@ v0.70.0 で実現した部分:
 - channel-operator と worker の両方への付与（copilotclawTools に追加済み）
 - gateway 側 handler（`handleIntentToolCall`）で受信し、in-memory IntentsStore に記録
 
-未実現のまま:
-- intent のタイムライン表示（agent のプロフィールモーダル内での時系列表示）— UI 未実装
-- `GET /api/channels/:channelId/intents/:agentId` API エンドポイント — 未実装
-- SQLite 永続化（intents テーブル）— 未実装
-- GitHub Copilot の intent 機能と同様のコンセプト
+v0.79.0 で追加実現:
+- SQLite 永続化（store.db に intents テーブル追加、schema v5→v6）— IntentsStore が Store 経由で永続化
+- `GET /api/channels/:channelId/intents/:agentId` API エンドポイント — 実装済み
+- ProfileModal Intent タイムライン UI（`channelId` prop 追加、`fetchIntents()` で API 呼び出し、loading / error / empty / no-channel / timeline 状態を実装）
 
 ### Req: SSE による channel 情報のリアルタイム配信（未実現）
 

@@ -2,11 +2,13 @@
  * ProfileModal component
  *
  * Displays agent identity information in a modal dialog.
- * Supports Info and Intent tabs (Intent tab shows placeholder for future implementation).
+ * Supports Info and Intent tabs. Intent tab shows a timeline of intents
+ * recorded via the copilotclaw_intent tool (fetched from the API).
  * Closes on Escape key, backdrop click, or close button.
  */
 import { useEffect, useRef, useState } from "react";
-import type { AgentRole, MessageSenderMeta } from "../api";
+import type { AgentRole, Intent } from "../api";
+import { fetchIntents } from "../api";
 import { MessageAvatar } from "./MessageAvatar";
 
 export interface ProfileModalProps {
@@ -14,6 +16,10 @@ export interface ProfileModalProps {
   agentDisplayName: string;
   agentRole: AgentRole;
   onClose: () => void;
+  /** Channel ID used to fetch intents. When omitted, intent tab shows no data. */
+  channelId?: string;
+  /** Physical session model name. When undefined, shows "モデル情報なし". */
+  modelName?: string;
 }
 
 const ROLE_LABELS: Record<AgentRole, string> = {
@@ -24,9 +30,12 @@ const ROLE_LABELS: Record<AgentRole, string> = {
 };
 
 
-export function ProfileModal({ agentId, agentDisplayName, agentRole, onClose }: ProfileModalProps) {
+export function ProfileModal({ agentId, agentDisplayName, agentRole, onClose, channelId, modelName }: ProfileModalProps) {
   const [activeTab, setActiveTab] = useState<"info" | "intent">("info");
   const backdropRef = useRef<HTMLDivElement>(null);
+  const [intents, setIntents] = useState<Intent[] | null>(null);
+  const [intentsError, setIntentsError] = useState<string | null>(null);
+  const [intentsLoading, setIntentsLoading] = useState(false);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -35,6 +44,23 @@ export function ProfileModal({ agentId, agentDisplayName, agentRole, onClose }: 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
+
+  // Fetch intents when the intent tab is opened
+  useEffect(() => {
+    if (activeTab !== "intent") return;
+    if (channelId === undefined) return;
+    setIntentsLoading(true);
+    setIntentsError(null);
+    fetchIntents(channelId, agentId)
+      .then((data) => {
+        setIntents(data);
+        setIntentsLoading(false);
+      })
+      .catch((err: unknown) => {
+        setIntentsError(err instanceof Error ? err.message : "Failed to load intents");
+        setIntentsLoading(false);
+      });
+  }, [activeTab, channelId, agentId]);
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === backdropRef.current) onClose();
@@ -173,7 +199,7 @@ export function ProfileModal({ agentId, agentDisplayName, agentRole, onClose }: 
                   {agentId}
                 </div>
               </div>
-              <div>
+              <div style={{ marginBottom: "0.75rem" }}>
                 <div style={{ fontSize: "0.75rem", color: "#8b949e", marginBottom: "0.25rem" }}>Role</div>
                 <div
                   data-testid="profile-modal-role-text"
@@ -182,16 +208,74 @@ export function ProfileModal({ agentId, agentDisplayName, agentRole, onClose }: 
                   {ROLE_LABELS[agentRole]}
                 </div>
               </div>
+              <div>
+                <div style={{ fontSize: "0.75rem", color: "#8b949e", marginBottom: "0.25rem" }}>Model</div>
+                <div
+                  data-testid="profile-modal-model-name"
+                  style={{ fontSize: "0.85rem", color: modelName !== undefined ? "#c9d1d9" : "#484f58", fontFamily: modelName !== undefined ? "monospace" : undefined, wordBreak: "break-all" }}
+                >
+                  {modelName ?? "モデル情報なし"}
+                </div>
+              </div>
             </div>
           )}
           {activeTab === "intent" && (
             <div data-testid="profile-modal-intent-tab">
-              <div
-                data-testid="profile-modal-intent-placeholder"
-                style={{ color: "#8b949e", fontSize: "0.85rem", fontStyle: "italic" }}
-              >
-                Intent timeline（次バージョンで実装予定）
-              </div>
+              {intentsLoading && (
+                <div
+                  data-testid="profile-modal-intent-loading"
+                  style={{ color: "#8b949e", fontSize: "0.85rem" }}
+                >
+                  Loading...
+                </div>
+              )}
+              {intentsError !== null && (
+                <div
+                  data-testid="profile-modal-intent-error"
+                  style={{ color: "#f85149", fontSize: "0.85rem" }}
+                >
+                  {intentsError}
+                </div>
+              )}
+              {!intentsLoading && intentsError === null && (intents === null || intents.length === 0) && channelId === undefined && (
+                <div
+                  data-testid="profile-modal-intent-placeholder"
+                  style={{ color: "#8b949e", fontSize: "0.85rem", fontStyle: "italic" }}
+                >
+                  Intent timeline（チャンネルを選択してください）
+                </div>
+              )}
+              {!intentsLoading && intentsError === null && intents !== null && intents.length === 0 && channelId !== undefined && (
+                <div
+                  data-testid="profile-modal-intent-empty"
+                  style={{ color: "#8b949e", fontSize: "0.85rem", fontStyle: "italic" }}
+                >
+                  Intent が記録されていません
+                </div>
+              )}
+              {!intentsLoading && intents !== null && intents.length > 0 && (
+                <div data-testid="profile-modal-intent-timeline">
+                  {intents.map((entry) => (
+                    <div
+                      key={entry.id}
+                      data-testid="profile-modal-intent-entry"
+                      style={{
+                        marginBottom: "0.75rem",
+                        padding: "0.5rem 0.75rem",
+                        background: "#0d1117",
+                        border: "1px solid #21262d",
+                        borderRadius: "0.375rem",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      <div style={{ color: "#c9d1d9", marginBottom: "0.25rem", lineHeight: 1.5 }}>{entry.intent}</div>
+                      <div style={{ color: "#484f58", fontSize: "0.72rem" }}>
+                        {new Date(entry.timestamp).toLocaleString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

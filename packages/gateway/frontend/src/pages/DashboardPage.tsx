@@ -230,6 +230,7 @@ export function DashboardPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [profileModal, setProfileModal] = useState<MessageSenderMeta | null>(null);
+  const [activeSessionModel, setActiveSessionModel] = useState<string | undefined>(undefined);
   const [channelSettingsId, setChannelSettingsId] = useState<string | null>(null);
   const [channelSettingsModels, setChannelSettingsModels] = useState<ModelEntry[]>([]);
   const [channelSettingsCron, setChannelSettingsCron] = useState<CronJobStatus[]>([]);
@@ -510,9 +511,11 @@ export function DashboardPage() {
               ? "other channel"
               : "no session",
         );
+        setActiveSessionModel(bound?.physicalSession?.model);
       } else {
         setAgentVersion("--");
         setSessionStatus("no session");
+        setActiveSessionModel(undefined);
       }
       setCompatibility(data.agentCompatibility);
     } catch {
@@ -903,6 +906,8 @@ export function DashboardPage() {
           agentDisplayName={profileModal.agentDisplayName}
           agentRole={profileModal.agentRole}
           onClose={() => setProfileModal(null)}
+          channelId={activeChannelId}
+          modelName={activeSessionModel}
         />
       )}
 

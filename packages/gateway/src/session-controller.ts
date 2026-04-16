@@ -179,16 +179,17 @@ export class SessionController {
     } catch { /* agent fallback */ }
 
     console.error(`[session-controller] starting physical session for channel ${channelId.slice(0, 8)}, session=${sessionId.slice(0, 8)}, model=${resolvedModel ?? "(agent-fallback)"}`);
-    this.agentManager.startPhysicalSession(sessionId, session?.copilotSessionId, resolvedModel);
+    this.agentManager.startPhysicalSession(sessionId, session?.physicalSessionId, resolvedModel);
   }
 
   /** Called when agent reports physical session started. */
-  onPhysicalSessionStarted(sessionId: string, copilotSessionId: string, model: string): void {
-    console.error(`[session-controller] physical session started: session=${sessionId.slice(0, 8)}, copilot=${copilotSessionId.slice(0, 12)}, model=${model}`);
+  onPhysicalSessionStarted(sessionId: string, physicalSessionId: string, model: string): void {
+    console.error(`[session-controller] physical session started: session=${sessionId.slice(0, 8)}, physicalSession=${physicalSessionId.slice(0, 12)}, model=${model}`);
     // updatePhysicalSession must be called before transition so that broadcastStatusChange
     // reads a fully-populated physicalSession and derives the correct DerivedChannelStatus.
+    // updatePhysicalSession also sets hasHadPhysicalSession = true.
     this.orchestrator.updatePhysicalSession(sessionId, {
-      sessionId: copilotSessionId,
+      sessionId: physicalSessionId,
       model,
       startedAt: new Date().toISOString(),
       currentState: "idle",
@@ -275,6 +276,7 @@ export class SessionController {
   onToolExecutionStart(sessionId: string, toolName: string): void {
     this.orchestrator.updatePhysicalSessionState(sessionId, `tool:${toolName}`);
     if (toolName === "copilotclaw_wait") {
+      this.orchestrator.setWaitingOnWaitTool(sessionId, true);
       this.transition(sessionId, "waiting");
     } else {
       this.transition(sessionId, "processing");
@@ -284,15 +286,24 @@ export class SessionController {
   /** Called from onSessionEvent when a tool finishes executing. */
   onToolExecutionComplete(sessionId: string): void {
     this.orchestrator.updatePhysicalSessionState(sessionId, "idle");
+    // If copilotclaw_wait drain completed (tool completion = drain done), reset the flag
+    this.orchestrator.setWaitingOnWaitTool(sessionId, false);
   }
 
   /** Called from onSessionEvent on session.idle. */
   onSessionIdle(sessionId: string, hasBackgroundTasks: boolean): void {
-    if (!hasBackgroundTasks) {
-      // True idle — update physical state. backgroundTasks idle means a subagent
-      // stopped but the session is still running, so physical state stays as-is.
-      this.orchestrator.updatePhysicalSessionState(sessionId, "idle");
+    if (hasBackgroundTasks) {
+      // backgroundTasks idle means a subagent stopped but the session is still running
+      return;
     }
+    // Check if copilotclaw_wait is still active — if so, don't transition to idle
+    const session = this.orchestrator.getSessionStatuses()[sessionId];
+    if (session?.waitingOnWaitTool === true) {
+      console.error(`[session-controller] session.idle received while waitingOnWaitTool=true for ${sessionId.slice(0, 8)}, ignoring idle transition`);
+      return;
+    }
+    // True idle — update physical state.
+    this.orchestrator.updatePhysicalSessionState(sessionId, "idle");
   }
 
   // --- Lifecycle decision ---
@@ -368,6 +379,34 @@ export class SessionController {
         this.stopSession(sessionId);
       }
     }
+  }
+
+  // --- Observability delegation methods (C item) ---
+  // These delegate to orchestrator, centralizing all session mutation through SessionController.
+
+  /** Delegate: update physical session token usage from session.usage_info events. */
+  onUsageInfo(sessionId: string, currentTokens: number, tokenLimit: number): void {
+    this.orchestrator.updatePhysicalSessionTokens(sessionId, currentTokens, tokenLimit);
+  }
+
+  /** Delegate: accumulate assistant.usage tokens on the physical session. */
+  onAssistantUsage(sessionId: string, inputTokens: number, outputTokens: number, quotaSnapshots?: Record<string, unknown>): void {
+    this.orchestrator.accumulateUsageTokens(sessionId, inputTokens, outputTokens, quotaSnapshots);
+  }
+
+  /** Delegate: update model on physical session from model_change events. */
+  onModelChange(sessionId: string, newModel: string): void {
+    this.orchestrator.updatePhysicalSessionModel(sessionId, newModel);
+  }
+
+  /** Delegate: track a subagent session start. */
+  onSubagentStarted(sessionId: string, info: import("./ipc-client.js").SubagentInfo): void {
+    this.orchestrator.addSubagentSession(sessionId, info);
+  }
+
+  /** Delegate: update a subagent session status. */
+  onSubagentStatusChanged(sessionId: string, toolCallId: string, status: "completed" | "failed"): void {
+    this.orchestrator.updateSubagentStatus(sessionId, toolCallId, status);
   }
 
   // --- Accessors for daemon.ts wiring ---

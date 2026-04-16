@@ -47,13 +47,32 @@ describe("ProfileModal", () => {
     expect(screen.getByTestId("profile-modal-role-text").textContent).toContain("Channel Operator");
   });
 
-  it("switching to Intent tab shows placeholder", async () => {
+  it("Info tab shows model name when modelName prop is provided", () => {
+    render(
+      <ProfileModal
+        agentId="agent-1"
+        agentDisplayName="Agent One"
+        agentRole="channel-operator"
+        onClose={vi.fn()}
+        modelName="gpt-4.1"
+      />
+    );
+    expect(screen.getByTestId("profile-modal-model-name").textContent).toBe("gpt-4.1");
+  });
+
+  it("Info tab shows モデル情報なし when modelName is undefined", () => {
+    renderModal();
+    expect(screen.getByTestId("profile-modal-model-name").textContent).toBe("モデル情報なし");
+  });
+
+  it("switching to Intent tab without channelId shows placeholder", async () => {
     const user = userEvent.setup();
+    // Without channelId, placeholder is shown
     renderModal();
     const intentTab = screen.getByTestId("profile-modal-tab-intent");
     await user.click(intentTab);
     expect(screen.getByTestId("profile-modal-intent-tab")).toBeDefined();
-    expect(screen.getByTestId("profile-modal-intent-placeholder").textContent).toContain("実装予定");
+    expect(screen.getByTestId("profile-modal-intent-placeholder")).toBeDefined();
   });
 
   it("switching back to Info tab works", async () => {

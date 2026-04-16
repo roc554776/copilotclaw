@@ -73,6 +73,9 @@ export function broadcastTokenUsageIfNeeded(
 
 export interface IntentToolCallRequest {
   sessionId: string;
+  channelId?: string;
+  agentId?: string;
+  agentDisplayName?: string;
   args?: Record<string, unknown>;
 }
 
@@ -83,11 +86,15 @@ export function handleIntentToolCall(
   const args = (request.args ?? {}) as Record<string, unknown>;
   const intent = typeof args["intent"] === "string" ? args["intent"] : "";
   if (intent.length > 0) {
-    store.recordIntent({
+    const entry: import("./intents-store.js").IntentEntry = {
       sessionId: request.sessionId,
+      channelId: request.channelId ?? "",
+      agentId: request.agentId ?? "unknown",
       intent,
       timestamp: new Date().toISOString(),
-    });
+    };
+    if (request.agentDisplayName !== undefined) entry.agentDisplayName = request.agentDisplayName;
+    store.recordIntent(entry);
   }
   return { acknowledged: true };
 }
@@ -194,6 +201,9 @@ async function main(): Promise<void> {
   initMetrics();
   const store = new Store({ persistPath: getStoreDbPath(getProfileName()), legacyJsonPath: getStoreFilePath(getProfileName()) });
 
+  // Wire intentsStore to the Store for SQLite persistence (v0.79.0)
+  intentsStore.init(store);
+
   // Sync channel model settings from config.json to DB on startup
   const channelConfigs = config.channels ?? {};
   for (const [channelId, chConfig] of Object.entries(channelConfigs)) {
@@ -290,8 +300,18 @@ async function main(): Promise<void> {
           const messages = store.listMessages(channelId, limit);
           return { messages };
         }
-        case "copilotclaw_intent":
-          return handleIntentToolCall(request, intentsStore);
+        case "copilotclaw_intent": {
+          const intentReq: IntentToolCallRequest = {
+            sessionId: request.sessionId,
+            channelId,
+            agentId: typeof request.args["agentId"] === "string" ? request.args["agentId"] : "unknown",
+            args: request.args,
+          };
+          if (typeof request.args["agentDisplayName"] === "string") {
+            intentReq.agentDisplayName = request.args["agentDisplayName"];
+          }
+          return handleIntentToolCall(intentReq, intentsStore);
+        }
         case "copilotclaw_wait": {
           // Swallowed-message guard
           if (sessionController.checkSwallowedMessage(request.sessionId)) {
@@ -382,14 +402,13 @@ async function main(): Promise<void> {
         });
       }
     },
-    onSessionEvent: (sessionId, copilotSessionId, eventType, timestamp, data, parentId) => {
+    onSessionEvent: (sessionId, copilotSessionId, eventType, timestamp, data) => {
       const eventChannelId = resolveChannelId(sessionId);
-      const event: { type: string; timestamp: string; data: Record<string, unknown>; parentId?: string } = {
+      const event: { type: string; timestamp: string; data: Record<string, unknown> } = {
         type: eventType,
         timestamp,
         data,
       };
-      if (parentId !== undefined) event.parentId = parentId;
       // Annotate assistant.usage events with billing multiplier from cache
       if (eventType === "assistant.usage" && data["multiplier"] === undefined) {
         const model = data["model"] as string | undefined;
@@ -424,7 +443,7 @@ async function main(): Promise<void> {
           case "session.usage_info": {
             const currentTokens = data["currentTokens"] as number ?? 0;
             const tokenLimit = data["tokenLimit"] as number ?? 0;
-            orchestrator.updatePhysicalSessionTokens(orchSessionId, currentTokens, tokenLimit);
+            sessionController.onUsageInfo(orchSessionId, currentTokens, tokenLimit);
             // Track context usage for periodic system prompt reminder
             if (tokenLimit > 0) {
               const rs = getReminderState(orchSessionId);
@@ -436,7 +455,7 @@ async function main(): Promise<void> {
             break;
           }
           case "assistant.usage":
-            orchestrator.accumulateUsageTokens(
+            sessionController.onAssistantUsage(
               orchSessionId,
               data["inputTokens"] as number ?? 0,
               data["outputTokens"] as number ?? 0,
@@ -451,10 +470,10 @@ async function main(): Promise<void> {
             break;
           }
           case "session.model_change":
-            orchestrator.updatePhysicalSessionModel(orchSessionId, data["newModel"] as string ?? "unknown");
+            sessionController.onModelChange(orchSessionId, data["newModel"] as string ?? "unknown");
             break;
           case "subagent.started":
-            orchestrator.addSubagentSession(orchSessionId, {
+            sessionController.onSubagentStarted(orchSessionId, {
               toolCallId: data["toolCallId"] as string ?? "",
               agentName: data["agentName"] as string ?? "unknown",
               agentDisplayName: data["agentDisplayName"] as string ?? "unknown",
@@ -463,10 +482,10 @@ async function main(): Promise<void> {
             });
             break;
           case "subagent.completed":
-            orchestrator.updateSubagentStatus(orchSessionId, data["toolCallId"] as string ?? "", "completed");
+            sessionController.onSubagentStatusChanged(orchSessionId, data["toolCallId"] as string ?? "", "completed");
             break;
           case "subagent.failed":
-            orchestrator.updateSubagentStatus(orchSessionId, data["toolCallId"] as string ?? "", "failed");
+            sessionController.onSubagentStatusChanged(orchSessionId, data["toolCallId"] as string ?? "", "failed");
             break;
         }
       }

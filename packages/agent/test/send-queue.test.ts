@@ -91,6 +91,62 @@ describe("send queue — buffering and persistence", () => {
     expect(JSON.parse(written[1]!)).toMatchObject({ type: "event2" });
   });
 
+  it("ACK protocol: disk is not cleared on flush, cleared after all ACKs received", async () => {
+    const queuePath = join(TEST_DIR, "send-queue.jsonl");
+    const { initSendQueue, sendToGateway, flushSendQueue, setStreamSocket, acknowledgeMessage, pendingAckIds } = await getModule();
+    initSendQueue(TEST_DIR);
+
+    // Buffer two messages while disconnected
+    sendToGateway({ type: "event_a" });
+    sendToGateway({ type: "event_b" });
+
+    // Connect stream and flush
+    const written: string[] = [];
+    const mockSocket = {
+      destroyed: false,
+      write: (data: string) => { written.push(data); return true; },
+    };
+    setStreamSocket(mockSocket as never);
+    flushSendQueue();
+
+    // Disk should still have the messages (not cleared yet — waiting for ACKs)
+    const diskAfterFlush = readFileSync(queuePath, "utf-8");
+    expect(diskAfterFlush.trim().length).toBeGreaterThan(0);
+    expect(pendingAckIds.size).toBe(2);
+
+    // Each flushed message has a _queueId
+    const sent = written.map((w) => JSON.parse(w));
+    expect(sent[0]!._queueId).toBeDefined();
+    expect(sent[1]!._queueId).toBeDefined();
+
+    // ACK first message — disk still has content (second pending)
+    acknowledgeMessage(sent[0]!._queueId as string);
+    expect(pendingAckIds.size).toBe(1);
+    const diskAfterFirstAck = readFileSync(queuePath, "utf-8");
+    expect(diskAfterFirstAck.trim().length).toBeGreaterThan(0);
+
+    // ACK second message — disk should now be cleared
+    acknowledgeMessage(sent[1]!._queueId as string);
+    expect(pendingAckIds.size).toBe(0);
+    const diskAfterAllAcks = readFileSync(queuePath, "utf-8");
+    expect(diskAfterAllAcks).toBe("");
+  });
+
+  it("ACK protocol: buffered messages carry _queueId field", async () => {
+    const { initSendQueue, sendToGateway } = await getModule();
+    initSendQueue(TEST_DIR);
+
+    sendToGateway({ type: "event_x" });
+
+    const queuePath = join(TEST_DIR, "send-queue.jsonl");
+    const line = readFileSync(queuePath, "utf-8").trim();
+    const parsed = JSON.parse(line);
+    expect(parsed._queueId).toBeDefined();
+    expect(typeof parsed._queueId).toBe("string");
+    // Original type field is preserved
+    expect(parsed.type).toBe("event_x");
+  });
+
   it("sends directly when stream is connected (no buffering)", async () => {
     const { initSendQueue, sendToGateway, setStreamSocket } = await getModule();
     initSendQueue(TEST_DIR);

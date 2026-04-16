@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.70.0";
+export const MIN_AGENT_VERSION = "0.79.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -59,7 +59,7 @@ export interface StreamMessageHandler {
   onLifecycle?: (request: LifecycleRequest) => LifecycleResponse;
   onHook?: (request: HookRequest) => Record<string, unknown> | null;
   onChannelMessage?: (sessionId: string, sender: string, message: string) => void;
-  onSessionEvent?: (sessionId: string, copilotSessionId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>, parentId?: string) => void;
+  onSessionEvent?: (sessionId: string, copilotSessionId: string | undefined, type: string, timestamp: string, data: Record<string, unknown>) => void;
   onSystemPromptOriginal?: (model: string, prompt: string, capturedAt: string) => void;
   onSystemPromptSession?: (sessionId: string, model: string, prompt: string) => void;
   onPhysicalSessionStarted?: (sessionId: string, copilotSessionId: string, model: string) => void;
@@ -149,6 +149,15 @@ export class AgentManager {
     this.connectStream();
   }
 
+  /** Send message_acknowledged IPC to agent if the message was buffered (has _queueId).
+   *  This lets the agent remove the message from its persistent disk queue. */
+  private sendAckIfQueued(msg: Record<string, unknown>): void {
+    const queueId = msg["_queueId"];
+    if (typeof queueId === "string" && this.stream !== null && this.stream.isConnected()) {
+      this.stream.send({ type: "message_acknowledged", queueId });
+    }
+  }
+
   /** Handle an incoming message from the agent on the stream. */
   private handleAgentMessage(msg: Record<string, unknown>): void {
     const type = msg["type"] as string | undefined;
@@ -205,6 +214,7 @@ export class AgentManager {
         const sender = msg["sender"] as string;
         const message = msg["message"] as string;
         handler.onChannelMessage?.(sessionId, sender, message);
+        this.sendAckIfQueued(msg);
         break;
       }
       case "session_event": {
@@ -213,8 +223,8 @@ export class AgentManager {
         const eventType = (msg["eventType"] as string) ?? "unknown";
         const timestamp = (msg["timestamp"] as string) ?? new Date().toISOString();
         const data = (typeof msg["data"] === "object" && msg["data"] !== null ? msg["data"] : {}) as Record<string, unknown>;
-        const parentId = typeof msg["parentId"] === "string" ? msg["parentId"] as string : undefined;
-        handler.onSessionEvent?.(sessionId, copilotSessionId, eventType, timestamp, data, parentId);
+        handler.onSessionEvent?.(sessionId, copilotSessionId, eventType, timestamp, data);
+        this.sendAckIfQueued(msg);
         break;
       }
       case "system_prompt_original": {
@@ -222,6 +232,7 @@ export class AgentManager {
         const prompt = msg["prompt"] as string;
         const capturedAt = (msg["capturedAt"] as string) ?? new Date().toISOString();
         handler.onSystemPromptOriginal?.(model, prompt, capturedAt);
+        this.sendAckIfQueued(msg);
         break;
       }
       case "system_prompt_session": { // IPC type retained for compatibility; internally this is the "effective system prompt"
@@ -229,6 +240,7 @@ export class AgentManager {
         const model = msg["model"] as string;
         const prompt = msg["prompt"] as string;
         handler.onSystemPromptSession?.(sessionId, model, prompt);
+        this.sendAckIfQueued(msg);
         break;
       }
       case "drain_pending": {
@@ -263,6 +275,7 @@ export class AgentManager {
       case "running_sessions": {
         const sessions = (msg["sessions"] as RunningSessionReport[]) ?? [];
         handler.onRunningSessionsReport?.(sessions);
+        this.sendAckIfQueued(msg);
         break;
       }
       case "physical_session_started": {
@@ -270,6 +283,7 @@ export class AgentManager {
         const copilotSessionId = msg["copilotSessionId"] as string;
         const model = msg["model"] as string;
         handler.onPhysicalSessionStarted?.(sessionId, copilotSessionId, model);
+        this.sendAckIfQueued(msg);
         break;
       }
       case "physical_session_ended": {
@@ -279,6 +293,7 @@ export class AgentManager {
         const elapsedMs = msg["elapsedMs"] as number;
         const error = typeof msg["error"] === "string" ? msg["error"] as string : undefined;
         handler.onPhysicalSessionEnded?.(sessionId, reason, copilotSessionId, elapsedMs, error);
+        this.sendAckIfQueued(msg);
         break;
       }
       default:

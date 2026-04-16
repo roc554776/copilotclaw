@@ -11,7 +11,7 @@ export type DerivedChannelStatus =
 export interface SelectDerivedChannelStatusInput {
   session: Pick<
     AbstractSession,
-    "status" | "copilotSessionId" | "physicalSession" | "physicalSessionHistory"
+    "status" | "physicalSessionId" | "physicalSession" | "physicalSessionHistory" | "hasHadPhysicalSession" | "waitingOnWaitTool"
   >;
   hasPending: boolean;
   /** scope 外（CopilotClient 観測経路が未実装のため常に true を渡す想定） */
@@ -32,10 +32,11 @@ export function selectDerivedChannelStatus(
   // 瞬間がありえる）、absent と誤判定しない。
   const physicalSessionAbsent =
     session.physicalSession === undefined &&
-    session.copilotSessionId === undefined &&
+    session.physicalSessionId === undefined &&
     (session.status === "new" || session.status === "starting" || session.status === "suspended");
   if (physicalSessionAbsent) {
-    if (session.physicalSessionHistory.length > 0) return "no-physical-session-after-stop";
+    // hasHadPhysicalSession is the accurate flag; physicalSessionHistory.length > 0 was an approximation
+    if (session.hasHadPhysicalSession) return "no-physical-session-after-stop";
     return "no-physical-session-initial";
   }
 
@@ -45,7 +46,6 @@ export function selectDerivedChannelStatus(
   }
 
   // idle/waiting/starting/suspended で pending があれば pending-trigger
-  // waitingOnWaitTool フラグが未実装のため、waiting 全体を以下の分岐に含める
   if (hasPending) return "pending-trigger";
 
   return "idle-no-trigger";

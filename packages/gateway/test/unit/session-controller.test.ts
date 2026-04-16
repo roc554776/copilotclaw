@@ -442,13 +442,21 @@ describe("SessionController — backgroundTasks idle → notify → session cont
     controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
     controller.onToolExecutionStart(sessionId, "copilotclaw_wait");
 
-    // Multiple subagent idles — session continues
+    // Multiple subagent idles — session continues, physical state stays
     controller.onSessionIdle(sessionId, true);
     expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
     controller.onSessionIdle(sessionId, true);
     expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
 
-    // True idle — physical state updates
+    // True idle while waitingOnWaitTool=true is a race condition — ignored per v0.79.0 fix.
+    // Physical state stays as copilotclaw_wait because the wait drain is still in progress.
+    controller.onSessionIdle(sessionId, false);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+
+    // After wait tool completes (drain done), waitingOnWaitTool is reset
+    controller.onToolExecutionComplete(sessionId);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.waitingOnWaitTool).toBe(false);
+    // Now true idle is accepted
     controller.onSessionIdle(sessionId, false);
     expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("idle");
   });
@@ -602,5 +610,123 @@ describe("SessionController — error and edge cases", () => {
     controller.onStreamDisconnected();
     expect(orchestrator.getSessionStatuses()[sid1]?.status).toBe("idle");
     expect(orchestrator.getSessionStatuses()[sid2]?.status).toBe("idle");
+  });
+});
+
+describe("SessionController — wait/idle race regression (v0.79.0)", () => {
+  it("onSessionIdle(false) while waitingOnWaitTool=true is blocked (does not update physical state)", async () => {
+    const { controller, orchestrator, channelId } = makeController();
+
+    await controller.deliverMessage(channelId, "user", "start");
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+    controller.onToolExecutionStart(sessionId, "copilotclaw_wait");
+
+    // waitingOnWaitTool is now true
+    expect(orchestrator.getSessionStatuses()[sessionId]?.waitingOnWaitTool).toBe(true);
+
+    // true idle arrives while wait tool drain is in progress — should be rejected
+    controller.onSessionIdle(sessionId, false);
+    // Physical state stays as copilotclaw_wait, not updated to "idle"
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
+  });
+
+  it("onSessionIdle(false) after onToolExecutionComplete resets waitingOnWaitTool (wait release allows idle)", async () => {
+    const { controller, orchestrator, channelId } = makeController();
+
+    await controller.deliverMessage(channelId, "user", "start");
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+    controller.onToolExecutionStart(sessionId, "copilotclaw_wait");
+
+    // Drain completes
+    controller.onToolExecutionComplete(sessionId);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.waitingOnWaitTool).toBe(false);
+
+    // Now idle is accepted
+    controller.onSessionIdle(sessionId, false);
+    expect(orchestrator.getSessionStatuses()[sessionId]?.physicalSession?.currentState).toBe("idle");
+  });
+});
+
+describe("SessionController — delegation methods (v0.79.0)", () => {
+  it("onUsageInfo delegates to orchestrator.updatePhysicalSessionTokens", () => {
+    const { controller, orchestrator, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+
+    controller.onUsageInfo(sessionId, 1234, 8192);
+
+    const ps = orchestrator.getSessionStatuses()[sessionId]?.physicalSession;
+    expect(ps?.currentTokens).toBe(1234);
+    expect(ps?.tokenLimit).toBe(8192);
+  });
+
+  it("onAssistantUsage accumulates tokens on physical session", () => {
+    const { controller, orchestrator, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+
+    controller.onAssistantUsage(sessionId, 100, 50);
+    controller.onAssistantUsage(sessionId, 200, 75);
+
+    const ps = orchestrator.getSessionStatuses()[sessionId]?.physicalSession;
+    expect(ps?.totalInputTokens).toBe(300);
+    expect(ps?.totalOutputTokens).toBe(125);
+  });
+
+  it("onModelChange updates model on physical session", () => {
+    const { controller, orchestrator, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+
+    controller.onModelChange(sessionId, "gpt-4o");
+
+    const ps = orchestrator.getSessionStatuses()[sessionId]?.physicalSession;
+    expect(ps?.model).toBe("gpt-4o");
+  });
+
+  it("onSubagentStarted adds subagent info to orchestrator session", () => {
+    const { controller, orchestrator, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+
+    controller.onSubagentStarted(sessionId, {
+      toolCallId: "tc-1",
+      agentName: "worker-agent",
+      agentDisplayName: "Worker Agent",
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const subagentInfo = orchestrator.getSubagentInfo(sessionId, "tc-1");
+    expect(subagentInfo).toBeDefined();
+    expect(subagentInfo?.agentName).toBe("worker-agent");
+    expect(subagentInfo?.agentDisplayName).toBe("Worker Agent");
+  });
+
+  it("onSubagentStatusChanged updates subagent status", () => {
+    const { controller, orchestrator, channelId } = makeController();
+    const sessionId = orchestrator.startSession(channelId);
+    orchestrator.updateSessionStatus(sessionId, "starting");
+    controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
+
+    controller.onSubagentStarted(sessionId, {
+      toolCallId: "tc-2",
+      agentName: "sub-agent",
+      agentDisplayName: "Sub Agent",
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    controller.onSubagentStatusChanged(sessionId, "tc-2", "completed");
+
+    const statuses = orchestrator.getSessionStatuses()[sessionId];
+    const sub = statuses?.subagentSessions?.find((s) => s.toolCallId === "tc-2");
+    expect(sub?.status).toBe("completed");
   });
 });

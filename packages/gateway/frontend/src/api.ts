@@ -356,3 +356,23 @@ export async function saveDraft(channelId: string, draft: string | null): Promis
   });
   if (!res.ok) throw new Error(`save draft ${res.status}`);
 }
+
+export interface Intent {
+  id: number;
+  channelId: string;
+  sessionId: string;
+  agentId: string;
+  agentDisplayName: string | null;
+  intent: string;
+  toolCallId: string | null;
+  timestamp: string;
+}
+
+export async function fetchIntents(channelId: string, agentId: string, limit?: number): Promise<Intent[]> {
+  let url = `/api/channels/${encodeURIComponent(channelId)}/intents/${encodeURIComponent(agentId)}`;
+  if (limit !== undefined) url += `?limit=${limit}`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = await res.json() as { intents: Intent[] };
+  return data.intents;
+}

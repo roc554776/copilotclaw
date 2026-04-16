@@ -85,27 +85,7 @@ describe("AgentManager — stream message handler dispatch", () => {
 
     expect(onSessionEvent).toHaveBeenCalledWith(
       "s-1", "cs-1", "tool.execution_start", "2026-01-01T00:00:00Z",
-      { toolName: "Read" }, undefined,
-    );
-  });
-
-  it("dispatches session_event with parentId", () => {
-    const manager = new AgentManager();
-    const onSessionEvent = vi.fn();
-    manager.setStreamMessageHandler({ onSessionEvent });
-
-    invokeHandleAgentMessage(manager, {
-      type: "session_event",
-      sessionId: "s-1",
-      eventType: "subagent.completed",
-      timestamp: "2026-01-01T00:00:00Z",
-      data: { agentName: "worker" },
-      parentId: "parent-123",
-    });
-
-    expect(onSessionEvent).toHaveBeenCalledWith(
-      "s-1", undefined, "subagent.completed", "2026-01-01T00:00:00Z",
-      { agentName: "worker" }, "parent-123",
+      { toolName: "Read" },
     );
   });
 
@@ -514,6 +494,118 @@ describe("AgentManager — running_sessions dispatch", () => {
       { sessionId: "s-1", status: "waiting" },
       { sessionId: "s-2", status: "processing" },
     ]);
+  });
+});
+
+describe("AgentManager — SendQueue ACK protocol", () => {
+  function invokeHandleAgentMessage(manager: AgentManager, msg: Record<string, unknown>): void {
+    (manager as unknown as { handleAgentMessage: (msg: Record<string, unknown>) => void }).handleAgentMessage(msg);
+  }
+
+  function attachStream(manager: AgentManager): { streamSend: ReturnType<typeof vi.fn> } {
+    const streamSend = vi.fn();
+    (manager as unknown as { stream: { send: typeof streamSend; isConnected: () => boolean } | null }).stream = {
+      send: streamSend,
+      isConnected: () => true,
+    };
+    return { streamSend };
+  }
+
+  it("sends message_acknowledged when session_event has _queueId", () => {
+    const manager = new AgentManager();
+    const { streamSend } = attachStream(manager);
+    const onSessionEvent = vi.fn();
+    manager.setStreamMessageHandler({ onSessionEvent });
+
+    invokeHandleAgentMessage(manager, {
+      type: "session_event",
+      sessionId: "s-1",
+      copilotSessionId: "cs-1",
+      eventType: "tool.execution_start",
+      timestamp: "2026-01-01T00:00:00Z",
+      data: {},
+      _queueId: "q1",
+    });
+
+    expect(onSessionEvent).toHaveBeenCalled();
+    expect(streamSend).toHaveBeenCalledWith({ type: "message_acknowledged", queueId: "q1" });
+  });
+
+  it("sends message_acknowledged when channel_message has _queueId", () => {
+    const manager = new AgentManager();
+    const { streamSend } = attachStream(manager);
+    const onChannelMessage = vi.fn();
+    manager.setStreamMessageHandler({ onChannelMessage });
+
+    invokeHandleAgentMessage(manager, {
+      type: "channel_message",
+      sessionId: "s-1",
+      sender: "agent",
+      message: "hello",
+      _queueId: "q2",
+    });
+
+    expect(onChannelMessage).toHaveBeenCalled();
+    expect(streamSend).toHaveBeenCalledWith({ type: "message_acknowledged", queueId: "q2" });
+  });
+
+  it("sends message_acknowledged when physical_session_started has _queueId", () => {
+    const manager = new AgentManager();
+    const { streamSend } = attachStream(manager);
+    const onPhysicalSessionStarted = vi.fn();
+    manager.setStreamMessageHandler({ onPhysicalSessionStarted });
+
+    invokeHandleAgentMessage(manager, {
+      type: "physical_session_started",
+      sessionId: "ps-1",
+      copilotSessionId: "cs-1",
+      model: "gpt-4.1",
+      _queueId: "q3",
+    });
+
+    expect(onPhysicalSessionStarted).toHaveBeenCalled();
+    expect(streamSend).toHaveBeenCalledWith({ type: "message_acknowledged", queueId: "q3" });
+  });
+
+  it("does NOT send message_acknowledged when message has no _queueId (direct send)", () => {
+    const manager = new AgentManager();
+    const { streamSend } = attachStream(manager);
+    const onSessionEvent = vi.fn();
+    manager.setStreamMessageHandler({ onSessionEvent });
+
+    invokeHandleAgentMessage(manager, {
+      type: "session_event",
+      sessionId: "s-1",
+      copilotSessionId: "cs-1",
+      eventType: "tool.execution_start",
+      timestamp: "2026-01-01T00:00:00Z",
+      data: {},
+      // No _queueId — this was sent directly (not buffered)
+    });
+
+    expect(onSessionEvent).toHaveBeenCalled();
+    expect(streamSend).not.toHaveBeenCalled();
+  });
+
+  it("does NOT send message_acknowledged when stream is not connected", () => {
+    const manager = new AgentManager();
+    // No stream attached
+    const onSessionEvent = vi.fn();
+    manager.setStreamMessageHandler({ onSessionEvent });
+
+    // Should not throw even with _queueId but no stream
+    invokeHandleAgentMessage(manager, {
+      type: "session_event",
+      sessionId: "s-1",
+      copilotSessionId: "cs-1",
+      eventType: "tool.execution_start",
+      timestamp: "2026-01-01T00:00:00Z",
+      data: {},
+      _queueId: "q99",
+    });
+
+    expect(onSessionEvent).toHaveBeenCalled();
+    // No crash — no stream to send on
   });
 });
 

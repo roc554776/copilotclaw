@@ -555,6 +555,17 @@ function createRequestHandler(
         return;
       }
 
+      // GET /api/channels/:channelId/intents/:agentId — intent timeline for an agent
+      const intentsMatch = /^intents\/([^/]+)$/.exec(action);
+      if (intentsMatch !== null && method === "GET") {
+        const agentId = decodeURIComponent(intentsMatch[1]!);
+        const limitParam = params.get("limit");
+        const limit = limitParam !== null ? parseInt(limitParam, 10) : 50;
+        const intents = store.listIntents(channelId, agentId, Number.isFinite(limit) && limit > 0 ? limit : 50);
+        json(res, 200, { intents });
+        return;
+      }
+
       json(res, 404, { error: "unknown channel action" });
       return;
     }

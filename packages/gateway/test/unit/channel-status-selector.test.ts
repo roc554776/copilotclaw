@@ -9,9 +9,11 @@ function makeSession(
 ): SelectDerivedChannelStatusInput["session"] {
   return {
     status: "waiting",
-    copilotSessionId: undefined,
+    physicalSessionId: undefined,
     physicalSession: undefined,
     physicalSessionHistory: [],
+    hasHadPhysicalSession: false,
+    waitingOnWaitTool: false,
     ...overrides,
   };
 }
@@ -52,30 +54,32 @@ describe("selectDerivedChannelStatus", () => {
     expect(result).toBe("no-physical-session-initial");
   });
 
-  it('returns "no-physical-session-after-stop" when status is "new", no physicalSession, but has history', () => {
+  it('returns "no-physical-session-after-stop" when status is "new", no physicalSession, but hasHadPhysicalSession=true', () => {
     const result = selectDerivedChannelStatus({
       session: makeSession({
         status: "new",
-        copilotSessionId: undefined,
+        physicalSessionId: undefined,
         physicalSession: undefined,
         physicalSessionHistory: [
           { sessionId: "prev-session", model: "gpt-4.1", startedAt: "2026-01-01T00:00:00Z", currentState: "stopped" },
         ],
+        hasHadPhysicalSession: true,
       }),
       hasPending: false,
     });
     expect(result).toBe("no-physical-session-after-stop");
   });
 
-  it('returns "no-physical-session-after-stop" when status is "suspended", no physicalSession, but has history', () => {
+  it('returns "no-physical-session-after-stop" when status is "suspended", no physicalSession, but hasHadPhysicalSession=true', () => {
     const result = selectDerivedChannelStatus({
       session: makeSession({
         status: "suspended",
-        copilotSessionId: undefined,
+        physicalSessionId: undefined,
         physicalSession: undefined,
         physicalSessionHistory: [
           { sessionId: "prev-session", model: "gpt-4.1", startedAt: "2026-01-01T00:00:00Z", currentState: "stopped" },
         ],
+        hasHadPhysicalSession: true,
       }),
       hasPending: false,
     });
@@ -155,5 +159,58 @@ describe("selectDerivedChannelStatus", () => {
       hasPending: false,
     });
     expect(result).not.toBe("client-not-started");
+  });
+
+  // v0.79.0: hasHadPhysicalSession and waitingOnWaitTool parameter combinations
+  it('returns "no-physical-session-initial" when hasHadPhysicalSession=false, no physicalSession (status=starting)', () => {
+    const result = selectDerivedChannelStatus({
+      session: makeSession({
+        status: "starting",
+        physicalSessionId: undefined,
+        physicalSession: undefined,
+        physicalSessionHistory: [],
+        hasHadPhysicalSession: false,
+      }),
+      hasPending: false,
+    });
+    expect(result).toBe("no-physical-session-initial");
+  });
+
+  it('returns "no-physical-session-after-stop" when hasHadPhysicalSession=true, no physicalSession (status=suspended)', () => {
+    const result = selectDerivedChannelStatus({
+      session: makeSession({
+        status: "suspended",
+        physicalSessionId: undefined,
+        physicalSession: undefined,
+        physicalSessionHistory: [],
+        hasHadPhysicalSession: true,
+      }),
+      hasPending: false,
+    });
+    expect(result).toBe("no-physical-session-after-stop");
+  });
+
+  it('returns "running" when waitingOnWaitTool=true but status is processing (tool started during wait tool drain)', () => {
+    const result = selectDerivedChannelStatus({
+      session: makeSession({
+        status: "processing",
+        physicalSession: { sessionId: "ps-1", model: "gpt-4.1", startedAt: "2026-01-01T00:00:00Z", currentState: "idle" },
+        waitingOnWaitTool: true,
+      }),
+      hasPending: false,
+    });
+    expect(result).toBe("running");
+  });
+
+  it('returns "idle-no-trigger" when waitingOnWaitTool=false and hasPending=false (normal waiting)', () => {
+    const result = selectDerivedChannelStatus({
+      session: makeSession({
+        status: "waiting",
+        physicalSession: { sessionId: "ps-1", model: "gpt-4.1", startedAt: "2026-01-01T00:00:00Z", currentState: "idle" },
+        waitingOnWaitTool: false,
+      }),
+      hasPending: false,
+    });
+    expect(result).toBe("idle-no-trigger");
   });
 });

@@ -6,6 +6,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PhysicalSessionManager } from "./physical-session-manager.js";
 
+let queueIdCounter = 0;
+function nextQueueId(): string {
+  return `q${++queueIdCounter}`;
+}
+
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const pkgJson = JSON.parse(readFileSync(join(thisDir, "..", "package.json"), "utf-8")) as { version: string };
 const AGENT_VERSION = pkgJson.version;
@@ -64,10 +69,21 @@ export function hasStream(): boolean {
 // --- Send queue: buffer messages when gateway stream is disconnected ---
 // Messages are persisted to disk so they survive agent process restarts.
 // On stream (re)connect, the queue is flushed before new messages are sent.
+//
+// ACK protocol (v0.79.0):
+// - Each buffered message is assigned a _queueId at enqueue time.
+// - flushSendQueue() sends all queued messages and registers their IDs in pendingAckIds.
+//   The disk file is NOT cleared on flush — it is only cleared once all ACKs are received.
+// - When gateway receives a message, it sends message_acknowledged { queueId } back.
+// - acknowledgeMessage(queueId) removes the ID from pendingAckIds.
+//   When pendingAckIds becomes empty, the disk file is cleared.
+// - This ensures no messages are lost even if the agent crashes between flush and ACK.
 
 export let maxQueueSize = 10_000; // default; overridden by gateway config via setMaxQueueSize()
 let sendQueue: Array<Record<string, unknown>> = [];
 let sendQueuePath: string | null = null; // set by initSendQueue()
+/** IDs of flushed messages awaiting acknowledgment from the gateway. Exported for testing. */
+export const pendingAckIds = new Set<string>();
 
 /** Set the max queue size from gateway config. */
 export function setMaxQueueSize(size: number): void {
@@ -122,7 +138,11 @@ function appendToQueue(msg: Record<string, unknown>): void {
   }
 }
 
-/** Flush all queued messages to the stream. Called on stream connect. */
+/** Flush all queued messages to the stream. Called on stream connect.
+ *  Registers flushed message IDs in pendingAckIds — disk is NOT cleared here.
+ *  Disk is cleared once all ACKs are received via acknowledgeMessage().
+ *  If all flushed messages lack _queueId (e.g. old-format messages from a pre-ACK agent),
+ *  the disk is cleared immediately since there is nothing to ACK. */
 export function flushSendQueue(): void {
   if (streamSocket === null || streamSocket.destroyed) return;
   if (sendQueue.length === 0) return;
@@ -130,19 +150,27 @@ export function flushSendQueue(): void {
   const toSend = sendQueue.splice(0);
   for (const msg of toSend) {
     streamSocket.write(JSON.stringify(msg) + "\n");
+    // Register for ACK tracking. Every buffered message (v0.79.0+) has a _queueId.
+    const queueId = msg["_queueId"];
+    if (typeof queueId === "string") {
+      pendingAckIds.add(queueId);
+    }
   }
-  // Clear the disk file after successful flush
-  if (sendQueuePath !== null) {
+  // If no pending ACKs were registered (pre-ACK messages from disk), clear disk immediately.
+  if (pendingAckIds.size === 0 && sendQueuePath !== null) {
     try { writeFileSync(sendQueuePath, "", "utf-8"); } catch { /* non-fatal */ }
   }
+  // Otherwise: disk is cleared when all ACKs are received via acknowledgeMessage().
 }
 
 /** Send a fire-and-forget message to the gateway via the stream.
- *  If stream is disconnected, buffer in the send queue for later delivery. */
+ *  If stream is disconnected, buffer in the send queue for later delivery.
+ *  Buffered messages are assigned a _queueId for ACK tracking. */
 export function sendToGateway(msg: Record<string, unknown>): void {
   if (streamSocket === null || streamSocket.destroyed) {
     // Stream not connected — buffer for later delivery
-    sendQueue.push(msg);
+    const buffered = { ...msg, _queueId: nextQueueId() };
+    sendQueue.push(buffered);
     const evicted = sendQueue.length > maxQueueSize;
     if (evicted) {
       sendQueue.shift(); // drop oldest
@@ -151,11 +179,22 @@ export function sendToGateway(msg: Record<string, unknown>): void {
       // Queue overflowed: disk file has one extra line; rewrite to match trimmed queue.
       persistQueue();
     } else {
-      appendToQueue(msg); // fast path: just append the new message
+      appendToQueue(buffered); // fast path: just append the new message
     }
     return;
   }
   streamSocket.write(JSON.stringify(msg) + "\n");
+}
+
+/** Acknowledge receipt of a queued message.
+ *  Removes the ID from pendingAckIds. When all pending ACKs are cleared,
+ *  the disk file is truncated (no data loss risk at this point). */
+export function acknowledgeMessage(queueId: string): void {
+  pendingAckIds.delete(queueId);
+  if (pendingAckIds.size === 0 && sendQueuePath !== null) {
+    // All flushed messages acknowledged — safe to clear disk file
+    try { writeFileSync(sendQueuePath, "", "utf-8"); } catch { /* non-fatal */ }
+  }
 }
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -195,6 +234,12 @@ function handleStreamMessage(msg: Record<string, unknown>): void {
         pending.resolve(msg["data"]);
       }
     }
+    return;
+  }
+
+  // ACK for a buffered message: gateway has persisted the message, safe to clear disk.
+  if (type === "message_acknowledged" && typeof msg["queueId"] === "string") {
+    acknowledgeMessage(msg["queueId"]);
     return;
   }
 
