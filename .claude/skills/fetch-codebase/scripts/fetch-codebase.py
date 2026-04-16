@@ -114,14 +114,11 @@ def main() -> None:
             print("Warning: Could not parse index.json, starting fresh")
             index_data = {}
 
-    # Check if target is already a git repo
-    is_git_repo = (
-        target_dir.exists()
-        and subprocess.run(
-            ["git", "-C", str(target_dir), "rev-parse", "--is-inside-work-tree"],
-            capture_output=True,
-        ).returncode == 0
-    )
+    # Check if target has its own .git directory (i.e. we previously ran git init there).
+    # Do NOT use rev-parse --is-inside-work-tree: it traverses parent directories
+    # and would match the host repo's .git, causing all subsequent git commands
+    # to corrupt the host repo.
+    is_git_repo = target_dir.exists() and (target_dir / ".git").is_dir()
 
     target_str = str(target_dir)
 
