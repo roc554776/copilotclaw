@@ -497,6 +497,79 @@ describe("AgentManager — running_sessions dispatch", () => {
   });
 });
 
+// ── Item F (v0.83.0): reconcile coordinator request-response protocol ──────────
+
+describe("AgentManager — requestRunningSessions (Item F, v0.83.0)", () => {
+  it("sends request_running_sessions to the agent via stream", () => {
+    const manager = new AgentManager();
+    const streamSend = vi.fn();
+    (manager as unknown as { stream: { send: typeof streamSend; isConnected: () => boolean } | null }).stream = {
+      send: streamSend,
+      isConnected: () => true,
+    };
+
+    manager.requestRunningSessions();
+
+    expect(streamSend).toHaveBeenCalledWith({ type: "request_running_sessions" });
+  });
+
+  it("does not send when stream is not connected", () => {
+    const manager = new AgentManager();
+    const streamSend = vi.fn();
+    (manager as unknown as { stream: { send: typeof streamSend; isConnected: () => boolean } | null }).stream = {
+      send: streamSend,
+      isConnected: () => false,
+    };
+
+    manager.requestRunningSessions();
+
+    expect(streamSend).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when no stream exists", () => {
+    const manager = new AgentManager();
+    // Should not throw
+    manager.requestRunningSessions();
+  });
+});
+
+describe("AgentManager — running_sessions_report dispatch (Item F, v0.83.0)", () => {
+  function invokeHandleAgentMessage(manager: AgentManager, msg: Record<string, unknown>): void {
+    (manager as unknown as { handleAgentMessage: (msg: Record<string, unknown>) => void }).handleAgentMessage(msg);
+  }
+
+  it("dispatches running_sessions_report to onRunningSessionsReport handler", () => {
+    const manager = new AgentManager();
+    const onRunningSessionsReport = vi.fn();
+    manager.setStreamMessageHandler({ onRunningSessionsReport });
+
+    invokeHandleAgentMessage(manager, {
+      type: "running_sessions_report",
+      physicalSessionIds: ["ps-1", "ps-2"],
+    });
+
+    expect(onRunningSessionsReport).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ sessionId: "ps-1" }),
+        expect.objectContaining({ sessionId: "ps-2" }),
+      ]),
+    );
+  });
+
+  it("dispatches running_sessions_report with empty list", () => {
+    const manager = new AgentManager();
+    const onRunningSessionsReport = vi.fn();
+    manager.setStreamMessageHandler({ onRunningSessionsReport });
+
+    invokeHandleAgentMessage(manager, {
+      type: "running_sessions_report",
+      physicalSessionIds: [],
+    });
+
+    expect(onRunningSessionsReport).toHaveBeenCalledWith([]);
+  });
+});
+
 describe("AgentManager — SendQueue ACK protocol", () => {
   function invokeHandleAgentMessage(manager: AgentManager, msg: Record<string, unknown>): void {
     (manager as unknown as { handleAgentMessage: (msg: Record<string, unknown>) => void }).handleAgentMessage(msg);

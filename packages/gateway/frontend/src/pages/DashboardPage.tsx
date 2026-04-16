@@ -447,11 +447,13 @@ export function DashboardPage() {
             // (not periodic polling). The fetch is required because dashboard.spec.ts
             // "processing indicator" tests depend on this path: an agent message arrival
             // triggers a status update to reflect the latest session state in the UI.
-            // TODO: Once the processing indicator is driven by session_status_change
+            // TODO: Once the processing indicator is driven by channel_status_change
             // (derivedStatus via channel SSE) instead of a status fetch, this call can
             // be removed. Track in state-management-architecture.md refactor.
             refreshStatusRef.current();
-          } else if (event.type === "session_status_change") {
+          } else if (event.type === "channel_status_change" || event.type === "session_status_change") {
+            // Accept both names: channel_status_change (v0.83.0+) and
+            // session_status_change (pre-v0.83.0 backward compat).
             const d = event.data;
             if (d && typeof d === "object") {
               const derived = typeof (d as Record<string, unknown>)["derivedStatus"] === "string"

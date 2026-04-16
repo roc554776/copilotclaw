@@ -105,6 +105,27 @@ export function handleIntentToolCall(
  */
 export { replaySessionEventsAfter } from "./session-replay.js";
 
+export interface SubagentTimelineEventDeps {
+  sseBroadcast?: (event: Record<string, unknown>) => void;
+}
+
+/**
+ * Broadcasts a channel_timeline_event SSE for a subagent lifecycle change (Item E, v0.83.0).
+ *
+ * Emitted when subagent.started / subagent.completed / subagent.failed SDK events arrive.
+ * Frontend DashboardPage subscribes to the channel-scoped SSE and can display these in the timeline.
+ *
+ * Exported as a named function so tests can import and call the real code path directly,
+ * preventing drift between test expectations and the daemon's onSessionEvent handler.
+ */
+export function handleSubagentTimelineEvent(
+  channelId: string,
+  entry: import("./sse-broadcaster-events.js").TimelineEntry,
+  deps: SubagentTimelineEventDeps,
+): void {
+  deps.sseBroadcast?.({ type: "channel_timeline_event", channelId, data: entry });
+}
+
 export interface AssistantMessageEventDeps {
   store: Store;
   orchestrator: SubagentResolver;
@@ -504,6 +525,26 @@ async function main(): Promise<void> {
         });
       }
 
+      // Item E (v0.83.0): broadcast channel_timeline_event SSE for subagent lifecycle events.
+      // Only direct subagents (no parentToolCallId) are reflected in the channel timeline.
+      // Sub-subagent events are suppressed (parentToolCallId present).
+      if (eventChannelId !== undefined && (eventType === "subagent.started" || eventType === "subagent.completed" || eventType === "subagent.failed")) {
+        if (data["parentToolCallId"] === undefined) {
+          const toolCallId = data["toolCallId"] as string ?? "";
+          const agentName = data["agentName"] as string ?? "unknown";
+          const agentDisplayName = data["agentDisplayName"] as string ?? agentName;
+          const sseHelper = (event: Record<string, unknown>) =>
+            serverHandle?.sseBroadcaster?.broadcast(event as Parameters<typeof serverHandle.sseBroadcaster.broadcast>[0]);
+          if (eventType === "subagent.started") {
+            handleSubagentTimelineEvent(eventChannelId, { entryType: "subagent-started", toolCallId, agentName, agentDisplayName, timestamp }, { sseBroadcast: sseHelper });
+          } else {
+            const status = eventType === "subagent.completed" ? "completed" as const : "failed" as const;
+            const error = typeof data["error"] === "string" ? data["error"] : undefined;
+            handleSubagentTimelineEvent(eventChannelId, { entryType: "subagent-lifecycle", toolCallId, agentName, status, ...(error !== undefined ? { error } : {}), timestamp }, { sseBroadcast: sseHelper });
+          }
+        }
+      }
+
       // session.idle with backgroundTasks: a subagent stopped but the overall session
       // is still running (copilotclaw_wait is active). Notify the agent so copilotclaw_wait
       // can unblock and the parent agent can process the subagent's result.
@@ -843,7 +884,12 @@ async function main(): Promise<void> {
   orchestratorCheck.unref();
 
   agentManager.onStreamConnected(() => {
-    console.error("[gateway] stream connected, waiting for agent running_sessions report");
+    console.error("[gateway] stream connected, sending request_running_sessions for reconcile");
+    // Item F (v0.83.0): reconcile coordinator request-response protocol.
+    // Gateway actively requests the list of running physical sessions from the agent
+    // instead of relying on the agent's self-initiated running_sessions message.
+    // This lets the gateway control the reconcile timing (after its own state is ready).
+    agentManager.requestRunningSessions();
   });
 
   agentManager.onStreamDisconnected(() => {

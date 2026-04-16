@@ -24,6 +24,14 @@ import { reduceAbstractSession } from "./session-reducer.js";
 import type { AbstractSessionEvent } from "./session-events.js";
 import { executeCommands, sessionToWorldState } from "./effect-runtime.js";
 
+/**
+ * Timeout for startPhysicalSession ACK protocol (Item A, v0.83.0).
+ * If the agent does not acknowledge start_physical_session with physical_session_started
+ * within this window, the session transitions to "suspended" via StartTimeout event.
+ * This prevents permanent "starting" stuck state when the agent is unresponsive.
+ */
+const START_PHYSICAL_SESSION_TIMEOUT_MS = 30_000;
+
 export interface SseBroadcastFn {
   (event: { type: string; channelId?: string; data?: unknown }): void;
 }
@@ -57,6 +65,8 @@ export class SessionController {
   private sseBroadcast: SseBroadcastFn | undefined;
   private readonly resolveModelForChannel: (channelId: string) => Promise<string | undefined>;
   private readonly contexts = new Map<string, SessionContext>();
+  /** ACK timeout timers for startPhysicalSession (Item A, v0.83.0). */
+  private readonly startTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(deps: SessionControllerDeps) {
     this.orchestrator = deps.orchestrator;
@@ -68,6 +78,37 @@ export class SessionController {
 
   setSseBroadcast(fn: SseBroadcastFn): void {
     this.sseBroadcast = fn;
+  }
+
+  /**
+   * Schedule a StartTimeout event for a session that is waiting for physical_session_started ACK.
+   * Cancels any existing timer for the same session before setting a new one.
+   * Called after startPhysicalSession is dispatched to the agent.
+   */
+  private scheduleStartTimeout(sessionId: string): void {
+    this.cancelStartTimeout(sessionId);
+    const timer = setTimeout(() => {
+      this.startTimeouts.delete(sessionId);
+      const session = this.orchestrator.getSession(sessionId);
+      if (session?.status === "starting") {
+        console.error(`[session-controller] startPhysicalSession ACK timeout for session ${sessionId.slice(0, 8)}, transitioning to suspended`);
+        this.dispatchEvent(sessionId, { type: "StartTimeout" });
+      }
+    }, START_PHYSICAL_SESSION_TIMEOUT_MS);
+    timer.unref();
+    this.startTimeouts.set(sessionId, timer);
+  }
+
+  /**
+   * Cancel the StartTimeout timer for a session.
+   * Called when physical_session_started is received (ACK arrived).
+   */
+  private cancelStartTimeout(sessionId: string): void {
+    const existing = this.startTimeouts.get(sessionId);
+    if (existing !== undefined) {
+      clearTimeout(existing);
+      this.startTimeouts.delete(sessionId);
+    }
   }
 
   // --- Reducer dispatch ---
@@ -177,11 +218,15 @@ export class SessionController {
     const currentSession = this.orchestrator.getSession(sessionId);
     console.error(`[session-controller] starting physical session for channel ${channelId.slice(0, 8)}, session=${sessionId.slice(0, 8)}, model=${resolvedModel ?? "(agent-fallback)"}`);
     this.agentManager.startPhysicalSession(sessionId, currentSession?.physicalSessionId, resolvedModel);
+    // Schedule ACK timeout — agent must respond with physical_session_started within the window.
+    this.scheduleStartTimeout(sessionId);
   }
 
   /** Called when agent reports physical session started. */
   onPhysicalSessionStarted(sessionId: string, physicalSessionId: string, model: string): void {
     console.error(`[session-controller] physical session started: session=${sessionId.slice(0, 8)}, physicalSession=${physicalSessionId.slice(0, 12)}, model=${model}`);
+    // Cancel the ACK timeout — agent confirmed start (Item A, v0.83.0).
+    this.cancelStartTimeout(sessionId);
     // Route through reducer: PhysicalSessionStarted event handles the full transition
     // (updates physicalSession, hasHadPhysicalSession, transitions to waiting, persists, broadcasts)
     this.dispatchEvent(sessionId, { type: "PhysicalSessionStarted", physicalSessionId, model });

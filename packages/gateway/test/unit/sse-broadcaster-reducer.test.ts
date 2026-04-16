@@ -86,7 +86,7 @@ describe("reduceChannelSse — ChannelEventPublished", () => {
     state = reduceChannelSse(state, {
       type: "ChannelEventPublished",
       channelId: "ch-2",
-      event: { type: "session_status_change", channelId: "ch-2" },
+      event: { type: "channel_status_change", channelId: "ch-2" },
     }).newState;
     expect(state.channels["ch-1"].recentEvents).toHaveLength(1);
     expect(state.channels["ch-2"].recentEvents).toHaveLength(1);

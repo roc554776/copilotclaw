@@ -1,6 +1,6 @@
 # 提案: 系全体の状態管理アーキテクチャ再設計
 
-**（9/10 subsystem 実現済み — v0.80.0-v0.82.0）**
+**（全 subsystem 実現済み — v0.80.0-v0.83.0）**
 
 本 proposal は copilotclaw の全 subsystem にまたがる状態管理の根本的な再設計を定義する。session lifecycle のみを対象とした局所的な改善ではなく、gateway 側・agent 側・IPC/cross-cutting のすべてを射程に含める。
 
@@ -10,7 +10,7 @@
 
 **v0.82.0 実装済み（残り subsystem + EventBus + backoff 永続化 + dead code 削除）**: gateway の Channel subsystem（`channel-events.ts` / `channel-reducer.ts`）、PendingQueue subsystem（`pending-queue-events.ts` / `pending-queue-reducer.ts`）、SSE Broadcaster subsystem（`sse-broadcaster-events.ts` / `sse-broadcaster-reducer.ts`）を reducer 化。agent の SendQueue reducer + RPC reducer を production code に接続（`ipc-events.ts` / `ipc-reducers.ts`）。ConfigPush reducer は設計判断により削除（stateless かつ package 依存制約のため dead code — 詳細は「ConfigPush subsystem」節を参照）。EventBus infrastructure（`event-bus.ts`）実装済み。`channel_backoff` テーブル追加（store.db schema v6→v7）でバックオフを永続化。dead code 削除（`generation`・`isReconciled`・`FlushBatch`・`DrainAcknowledged`・`MessageFlushed`）。regression tests 追加（starting stuck・processing deadlock シナリオ）。
 
-**未実現**: IPC 型付き event union（`GatewayToAgentEvent` / `AgentToGatewayEvent`）の production 接続、`startPhysicalSession` ACK 確認プロトコル、`channel_status_change` への SSE rename、`channel_timeline_event` / `WaitToolPayload` 多型化、reconcile coordinator の request-response 化、double drain の完全排除（構造的 mutex なし）。
+**v0.83.0 実装済み（IPC 型付き union・ACK プロトコル・SSE 正規化・タイムライン・reconcile request-response・double drain 完全排除）**: Item A — `startPhysicalSession` ACK 確認プロトコル（`StartTimeout` event / 30s timeout → `suspended`）を session-reducer に実装。Item B — `DrainStarted` 受付を `drainInProgress=true` の間は拒否（構造的 mutex を reducer で実現）。Item C — `GatewayToAgentEvent` / `AgentToGatewayEvent` 型付き discriminated union を両パッケージ（`ipc-types.ts`）に実装し production code に接続。Item D — SSE event 名を `session_status_change` から `channel_status_change` に正規化（effect-runtime での emit 変更 + frontend 後方互換）。Item E — `channel_timeline_event` SSE + `TimelineEntry` / `WaitToolPayload` discriminated union を `sse-broadcaster-events.ts` に定義し、`subagent.started` / `subagent.completed` / `subagent.failed` SDK event を `handleSubagentTimelineEvent()` 経由で broadcast。Item F — reconcile coordinator を request-response 化（gateway が `request_running_sessions` を送信、agent が `running_sessions_report` で応答）。`MIN_AGENT_VERSION` を `0.83.0` に更新。
 
 既存の `docs/proposals/channel.md` の SessionController 設計（v0.64.0 で実現済み）は gateway 側の session lifecycle に scope を限定したものだった。本 proposal はその上位に位置し、全 subsystem を横断するアーキテクチャとして整理し直す。
 

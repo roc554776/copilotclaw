@@ -7,7 +7,7 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 
-export const MIN_AGENT_VERSION = "0.79.0";
+export const MIN_AGENT_VERSION = "0.83.0";
 
 export function semverSatisfies(version: string, minVersion: string): boolean {
   // Strip pre-release suffixes (e.g. "1.2.3-beta" → "1.2.3") before comparing
@@ -273,9 +273,17 @@ export class AgentManager {
         break;
       }
       case "running_sessions": {
+        // Legacy self-initiated report (pre-v0.83.0 agent compatibility).
+        // v0.83.0+ agents respond to request_running_sessions with running_sessions_report instead.
         const sessions = (msg["sessions"] as RunningSessionReport[]) ?? [];
         handler.onRunningSessionsReport?.(sessions);
         this.sendAckIfQueued(msg);
+        break;
+      }
+      case "running_sessions_report": {
+        // Item F (v0.83.0): response to gateway's request_running_sessions.
+        const physicalSessionIds = (msg["physicalSessionIds"] as string[]) ?? [];
+        handler.onRunningSessionsReport?.(physicalSessionIds.map((id) => ({ sessionId: id, status: "running" })));
         break;
       }
       case "physical_session_started": {
@@ -329,6 +337,16 @@ export class AgentManager {
   disconnectPhysicalSession(sessionId: string): void {
     if (this.stream === null || !this.stream.isConnected()) return;
     this.stream.send({ type: "disconnect_physical_session", sessionId });
+  }
+
+  /**
+   * Send request_running_sessions to the agent (Item F, v0.83.0).
+   * Initiates the reconcile coordinator request-response protocol.
+   * The agent responds with running_sessions_report listing all non-suspended physical session IDs.
+   */
+  requestRunningSessions(): void {
+    if (this.stream === null || !this.stream.isConnected()) return;
+    this.stream.send({ type: "request_running_sessions" });
   }
 
   /** Ensure agent process is running and compatible.

@@ -324,7 +324,7 @@ describe("DashboardPage", () => {
     });
   });
 
-  it("updates sessionStatus via session_status_change SSE event", async () => {
+  it("updates sessionStatus via channel_status_change SSE event", async () => {
     render(
       <MemoryRouter>
         <DashboardPage />
@@ -341,7 +341,7 @@ describe("DashboardPage", () => {
     // Dispatch a session_status_change event with status "processing"
     src.onmessage?.({
       data: JSON.stringify({
-        type: "session_status_change",
+        type: "channel_status_change",
         data: { sessionId: "sess-001", status: "processing" },
       }),
     });
@@ -352,7 +352,7 @@ describe("DashboardPage", () => {
     });
   });
 
-  it("ignores session_status_change SSE event when data.status is missing", async () => {
+  it("ignores channel_status_change SSE event when data.status is missing", async () => {
     render(
       <MemoryRouter initialEntries={["/?channel=ch-001-full-uuid"]}>
         <DashboardPage />
@@ -368,7 +368,7 @@ describe("DashboardPage", () => {
     // Establish a known session status via session_status_change with a valid status
     src.onmessage?.({
       data: JSON.stringify({
-        type: "session_status_change",
+        type: "channel_status_change",
         data: { sessionId: "sess-001", status: "idle" },
       }),
     });
@@ -380,7 +380,7 @@ describe("DashboardPage", () => {
     // Dispatch a session_status_change event WITHOUT a status field
     src.onmessage?.({
       data: JSON.stringify({
-        type: "session_status_change",
+        type: "channel_status_change",
         data: { sessionId: "sess-001" },
       }),
     });
@@ -393,7 +393,7 @@ describe("DashboardPage", () => {
     });
   });
 
-  it("uses derivedStatus over raw status when both are present in session_status_change", async () => {
+  it("uses derivedStatus over raw status when both are present in channel_status_change", async () => {
     render(
       <MemoryRouter>
         <DashboardPage />
@@ -409,7 +409,7 @@ describe("DashboardPage", () => {
     // Dispatch a session_status_change event with both status and derivedStatus
     src.onmessage?.({
       data: JSON.stringify({
-        type: "session_status_change",
+        type: "channel_status_change",
         data: { sessionId: "sess-001", status: "processing", derivedStatus: "running" },
       }),
     });
@@ -420,7 +420,7 @@ describe("DashboardPage", () => {
     });
   });
 
-  it("falls back to raw status when derivedStatus is absent in session_status_change", async () => {
+  it("falls back to raw status when derivedStatus is absent in channel_status_change", async () => {
     render(
       <MemoryRouter>
         <DashboardPage />
@@ -436,7 +436,7 @@ describe("DashboardPage", () => {
     // Dispatch without derivedStatus — should fall back to raw status
     src.onmessage?.({
       data: JSON.stringify({
-        type: "session_status_change",
+        type: "channel_status_change",
         data: { sessionId: "sess-001", status: "waiting" },
       }),
     });

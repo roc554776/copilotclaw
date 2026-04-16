@@ -272,11 +272,11 @@ describe("SessionController — SSE broadcast", () => {
 
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
     expect(sseBroadcast).toHaveBeenCalledWith(expect.objectContaining({
-      type: "session_status_change",
+      type: "channel_status_change",
     }));
   });
 
-  it("includes derivedStatus in session_status_change event data", () => {
+  it("includes derivedStatus in channel_status_change event data", () => {
     const { controller, orchestrator, sseBroadcast, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
     setStatus(orchestrator, sessionId, "starting");
@@ -284,9 +284,10 @@ describe("SessionController — SSE broadcast", () => {
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
 
     const calls = (sseBroadcast as ReturnType<typeof vi.fn>).mock.calls;
+    // Accept channel_status_change (v0.83.0+) — session_status_change is the old name
     const statusChangeCalls = calls.filter((c: unknown[]) => {
       const evt = c[0] as { type: string };
-      return evt.type === "session_status_change";
+      return evt.type === "channel_status_change";
     });
     expect(statusChangeCalls.length).toBeGreaterThan(0);
     const lastCall = statusChangeCalls[statusChangeCalls.length - 1]!;
@@ -307,7 +308,8 @@ describe("SessionController — SSE broadcast", () => {
     const calls = (sseBroadcast as ReturnType<typeof vi.fn>).mock.calls;
     const statusChangeCalls = calls.filter((c: unknown[]) => {
       const evt = c[0] as { type: string; data: Record<string, unknown> };
-      return evt.type === "session_status_change" && evt.data["status"] === "waiting";
+      // Accept channel_status_change (v0.83.0+)
+      return evt.type === "channel_status_change" && evt.data["status"] === "waiting";
     });
     expect(statusChangeCalls.length).toBeGreaterThan(0);
     const lastCall = statusChangeCalls[statusChangeCalls.length - 1]!;
@@ -328,7 +330,8 @@ describe("SessionController — SSE broadcast", () => {
     const calls = (sseBroadcast as ReturnType<typeof vi.fn>).mock.calls;
     const processingCalls = calls.filter((c: unknown[]) => {
       const evt = c[0] as { type: string; data: Record<string, unknown> };
-      return evt.type === "session_status_change" && evt.data["status"] === "processing";
+      // Accept channel_status_change (v0.83.0+)
+      return evt.type === "channel_status_change" && evt.data["status"] === "processing";
     });
     expect(processingCalls.length).toBeGreaterThan(0);
     const lastCall = processingCalls[processingCalls.length - 1]!;
@@ -348,7 +351,8 @@ describe("SessionController — SSE broadcast", () => {
     const calls = (sseBroadcast as ReturnType<typeof vi.fn>).mock.calls;
     const processingCalls = calls.filter((c: unknown[]) => {
       const evt = c[0] as { type: string; data: Record<string, unknown> };
-      return evt.type === "session_status_change" && evt.data["status"] === "processing";
+      // Accept channel_status_change (v0.83.0+)
+      return evt.type === "channel_status_change" && evt.data["status"] === "processing";
     });
     expect(processingCalls.length).toBeGreaterThan(0);
     const lastCall = processingCalls[processingCalls.length - 1]!;

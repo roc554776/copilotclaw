@@ -88,6 +88,10 @@ export type AbstractSessionEvent =
   | { type: "PhysicalSessionAliveConfirmed" }
   | { type: "PhysicalSessionAliveRefuted" }
   | { type: "Reconcile"; targetStatus: AbstractSessionStatus }
+  /** Fired when the ACK for startPhysicalSession does not arrive within the timeout.
+   * Transitions the session from "starting" to "suspended" to prevent permanent stuck state.
+   * See docs/proposals/state-management-architecture.md "startPhysicalSession ACK プロトコル". */
+  | { type: "StartTimeout" }
   // Observability (no status transition, only field updates)
   | { type: "UsageUpdated"; inputTokens: number; outputTokens: number; quotaSnapshots?: Record<string, unknown> }
   | { type: "TokensAccumulated"; currentTokens: number; tokenLimit: number }

@@ -838,3 +838,45 @@ describe("reduceAbstractSession — immutability", () => {
     expect(state.status).toBe(stateCopy.status);
   });
 });
+
+// ── StartTimeout (Item A, v0.83.0) ────────────────────────────────────────────
+
+describe("reduceAbstractSession — StartTimeout (ACK protocol, v0.83.0)", () => {
+  it("starting → suspended when StartTimeout fires (agent did not ACK)", () => {
+    const state = makeState({ status: "starting" });
+    const { newState, commands } = reduceAbstractSession(state, { type: "StartTimeout" });
+
+    expect(newState.status).toBe("suspended");
+    expect(newState.waitingOnWaitTool).toBe(false);
+    const types = commands.map((c) => c.type);
+    expect(types).toContain("PersistSession");
+    expect(types).toContain("BroadcastStatusChange");
+    const broadcast = commands.find((c) => c.type === "BroadcastStatusChange");
+    if (broadcast?.type === "BroadcastStatusChange") {
+      expect(broadcast.status).toBe("suspended");
+    }
+  });
+
+  it("StartTimeout is no-op when session is not in starting status", () => {
+    for (const status of ["waiting", "processing", "notified", "idle", "suspended", "new"] as const) {
+      const state = makeState({ status });
+      const { newState, commands } = reduceAbstractSession(state, { type: "StartTimeout" });
+      expect(newState.status).toBe(status);
+      expect(commands).toHaveLength(0);
+    }
+  });
+
+  // Regression: starting stuck prevention — agent never sends physical_session_started
+  it("regression: starting stuck → StartTimeout → suspended (stuck prevention)", () => {
+    // A session in "starting" state with no agent ACK
+    const state = makeState({ status: "starting" });
+
+    // Simulate timeout firing (no PhysicalSessionStarted received)
+    const { newState } = reduceAbstractSession(state, { type: "StartTimeout" });
+    expect(newState.status).toBe("suspended");
+
+    // After suspended, a new message should be able to revive it
+    const { newState: revived } = reduceAbstractSession(newState, { type: "ReviveRequested" });
+    expect(revived.status).toBe("starting");
+  });
+});

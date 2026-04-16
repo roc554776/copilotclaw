@@ -56,7 +56,7 @@ function executeCommand(
       const hasPending = channelId !== undefined ? deps.store.hasPending(channelId) : false;
       const derivedStatus = selectDerivedChannelStatus({ session, hasPending });
       const evt: { type: string; channelId?: string; data?: unknown } = {
-        type: "session_status_change",
+        type: "channel_status_change",
         data: { sessionId: cmd.sessionId, status: cmd.status, derivedStatus },
       };
       if (channelId !== undefined) evt.channelId = channelId;

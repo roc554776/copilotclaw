@@ -41,9 +41,9 @@ test("processing indicator shows when sessionStatus is processing and hides when
   await page.goto(`${freshUrl}/?channel=${freshChannelId}`);
   await page.waitForSelector(".ws-connected", { timeout: 3000 });
 
-  // Show the processing indicator via SSE session_status_change with status "processing"
+  // Show the processing indicator via SSE channel_status_change with status "processing"
   freshHandle.sseBroadcaster.broadcast({
-    type: "session_status_change",
+    type: "channel_status_change",
     channelId: freshChannelId,
     data: { sessionId: "test-session", status: "processing" },
   });

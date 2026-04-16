@@ -11,10 +11,11 @@
  *  - subagent.completed inserts a system message and calls notifyAgent
  *  - nested subagent (parentToolCallId present) does NOT insert system message
  *  - subagent.failed inserts a system message with error info
+ *  - handleSubagentTimelineEvent emits channel_timeline_event SSE (Item E, v0.83.0)
  */
 import { describe, expect, it, vi } from "vitest";
-import { handleAssistantMessageEvent, handleChannelMessageAgent } from "../../src/daemon.js";
-import type { AssistantMessageEventDeps, ChannelMessageAgentDeps } from "../../src/daemon.js";
+import { handleAssistantMessageEvent, handleChannelMessageAgent, handleSubagentTimelineEvent } from "../../src/daemon.js";
+import type { AssistantMessageEventDeps, ChannelMessageAgentDeps, SubagentTimelineEventDeps } from "../../src/daemon.js";
 import { Store } from "../../src/store.js";
 
 const defaultChannelOperatorMeta = { agentName: "channel-operator", agentDisplayName: "Channel Operator" };
@@ -576,5 +577,74 @@ describe("daemon onSessionEvent — orchestrator routing via sessionId", () => {
 
     session = orch.getSessionStatuses()[sessionId];
     expect(session?.subagentSessions?.[0]?.status).toBe("completed");
+  });
+});
+
+// ── handleSubagentTimelineEvent (Item E, v0.83.0) ─────────────────────────────
+
+describe("handleSubagentTimelineEvent — channel_timeline_event SSE (Item E, v0.83.0)", () => {
+  it("broadcasts channel_timeline_event with subagent-started entry", () => {
+    const sseBroadcasts: Array<Record<string, unknown>> = [];
+    const deps: SubagentTimelineEventDeps = { sseBroadcast: (e) => sseBroadcasts.push(e) };
+
+    handleSubagentTimelineEvent(
+      "ch-1",
+      { entryType: "subagent-started", toolCallId: "tc-1", agentName: "worker", agentDisplayName: "Worker Agent", timestamp: "2026-01-01T00:00:00Z" },
+      deps,
+    );
+
+    expect(sseBroadcasts).toHaveLength(1);
+    expect(sseBroadcasts[0]!["type"]).toBe("channel_timeline_event");
+    expect(sseBroadcasts[0]!["channelId"]).toBe("ch-1");
+    const data = sseBroadcasts[0]!["data"] as Record<string, unknown>;
+    expect(data["entryType"]).toBe("subagent-started");
+    expect(data["toolCallId"]).toBe("tc-1");
+    expect(data["agentName"]).toBe("worker");
+    expect(data["agentDisplayName"]).toBe("Worker Agent");
+    expect(data["timestamp"]).toBe("2026-01-01T00:00:00Z");
+  });
+
+  it("broadcasts channel_timeline_event with subagent-lifecycle completed entry", () => {
+    const sseBroadcasts: Array<Record<string, unknown>> = [];
+    const deps: SubagentTimelineEventDeps = { sseBroadcast: (e) => sseBroadcasts.push(e) };
+
+    handleSubagentTimelineEvent(
+      "ch-2",
+      { entryType: "subagent-lifecycle", toolCallId: "tc-2", agentName: "worker", status: "completed", timestamp: "2026-01-01T00:00:01Z" },
+      deps,
+    );
+
+    expect(sseBroadcasts).toHaveLength(1);
+    expect(sseBroadcasts[0]!["type"]).toBe("channel_timeline_event");
+    expect(sseBroadcasts[0]!["channelId"]).toBe("ch-2");
+    const data = sseBroadcasts[0]!["data"] as Record<string, unknown>;
+    expect(data["entryType"]).toBe("subagent-lifecycle");
+    expect(data["status"]).toBe("completed");
+    expect(data["error"]).toBeUndefined();
+  });
+
+  it("broadcasts channel_timeline_event with subagent-lifecycle failed entry including error", () => {
+    const sseBroadcasts: Array<Record<string, unknown>> = [];
+    const deps: SubagentTimelineEventDeps = { sseBroadcast: (e) => sseBroadcasts.push(e) };
+
+    handleSubagentTimelineEvent(
+      "ch-3",
+      { entryType: "subagent-lifecycle", toolCallId: "tc-3", agentName: "worker", status: "failed", error: "timeout", timestamp: "2026-01-01T00:00:02Z" },
+      deps,
+    );
+
+    expect(sseBroadcasts).toHaveLength(1);
+    const data = sseBroadcasts[0]!["data"] as Record<string, unknown>;
+    expect(data["status"]).toBe("failed");
+    expect(data["error"]).toBe("timeout");
+  });
+
+  it("does not broadcast when sseBroadcast is undefined", () => {
+    // Should not throw
+    handleSubagentTimelineEvent(
+      "ch-4",
+      { entryType: "subagent-started", toolCallId: "tc-4", agentName: "worker", agentDisplayName: "Worker", timestamp: "2026-01-01T00:00:00Z" },
+      {},
+    );
   });
 });

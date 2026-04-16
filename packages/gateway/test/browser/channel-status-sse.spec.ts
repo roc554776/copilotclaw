@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { startServer, type ServerHandle } from "../../src/server.js";
 import { Store } from "../../src/store.js";
 
-test("status bar shows derivedStatus from session_status_change SSE event", async ({ page }) => {
+test("status bar shows derivedStatus from channel_status_change SSE event", async ({ page }) => {
   const store = new Store();
   const handle: ServerHandle = await startServer({ port: 0, store, agentManager: null });
   const baseUrl = `http://localhost:${handle.port}`;
@@ -15,7 +15,7 @@ test("status bar shows derivedStatus from session_status_change SSE event", asyn
 
     // Broadcast a session_status_change event with derivedStatus directly via sseBroadcaster
     handle.sseBroadcaster.broadcast({
-      type: "session_status_change",
+      type: "channel_status_change",
       channelId,
       data: {
         sessionId: "test-session-id",
@@ -43,7 +43,7 @@ test("status bar shows derivedStatus no-physical-session-initial via SSE", async
 
     // Broadcast derivedStatus = "no-physical-session-initial"
     handle.sseBroadcaster.broadcast({
-      type: "session_status_change",
+      type: "channel_status_change",
       channelId,
       data: {
         sessionId: "test-session-id",
@@ -70,7 +70,7 @@ test("status bar falls back to raw status when derivedStatus absent in SSE event
 
     // Broadcast without derivedStatus — frontend should fall back to raw status
     handle.sseBroadcaster.broadcast({
-      type: "session_status_change",
+      type: "channel_status_change",
       channelId,
       data: {
         sessionId: "test-session-id",

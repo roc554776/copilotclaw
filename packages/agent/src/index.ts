@@ -135,14 +135,8 @@ async function main(): Promise<void> {
     // This ensures gateway receives events (session_event, channel_message, etc.)
     // that occurred while it was offline, fulfilling the "no information loss" requirement.
     flushSendQueue();
-
-    if (sessionManager !== null) {
-      const running = sessionManager.getRunningPhysicalSessionsSummary();
-      log(`stream connected, reporting ${running.length} running session(s)`);
-      sendToGateway({ type: "running_sessions", sessions: running });
-    }
-    // If sessionManager is null (first connection, before config), running_sessions
-    // will be sent after sessionManager is created below.
+    // Note (Item F, v0.83.0): running sessions are now reported only in response to
+    // gateway's request_running_sessions request. Self-initiated reporting is removed.
   };
   streamEvents.on("stream_connected", streamConnectedHandler);
 
@@ -197,13 +191,10 @@ async function main(): Promise<void> {
   sessionManager = new PhysicalSessionManager(managerOpts);
   ipc.setSessionManager(sessionManager!);
 
-  // Now that sessionManager exists, send running_sessions for the first connection.
-  // The streamConnectedHandler registered above checks sessionManager and skipped
-  // the report on the initial stream_connected (fired before config was received).
+  // Flush queue on initial startup (sends any messages from a prior session).
+  // Running sessions are now reported only in response to gateway's request_running_sessions
+  // (Item F, v0.83.0 — request-response reconcile protocol).
   flushSendQueue();
-  const initialRunning = sessionManager.getRunningPhysicalSessionsSummary();
-  log(`initial running_sessions report: ${initialRunning.length} session(s)`);
-  sendToGateway({ type: "running_sessions", sessions: initialRunning });
 
   // Gateway-driven physical session commands (Phase 3)
   const startPhysicalSessionHandler = (msg: Record<string, unknown>) => {
@@ -243,6 +234,22 @@ async function main(): Promise<void> {
   };
   streamEvents.on("disconnect_physical_session", disconnectPhysicalSessionHandler);
 
+  // Item F (v0.83.0): reconcile coordinator request-response protocol.
+  // Gateway sends request_running_sessions when it needs to reconcile;
+  // agent responds with running_sessions_report listing all non-suspended physical session IDs.
+  const requestRunningSessionsHandler = () => {
+    const running = sessionManager!.getRunningPhysicalSessionsSummary();
+    log(`request_running_sessions received, reporting ${running.length} session(s)`);
+    // RunningSessionsReport: physicalSessionIds are the physical (Copilot) session IDs.
+    // Use sessionId as the identifier since physical-session-manager maps sessionId → worldState.
+    // The gateway reconcile coordinator matches against AbstractSessionState.physicalSessionId.
+    sendToGateway({
+      type: "running_sessions_report",
+      physicalSessionIds: running.map((r) => r.sessionId),
+    });
+  };
+  streamEvents.on("request_running_sessions", requestRunningSessionsHandler);
+
   // Wait for stop signal
   await new Promise<void>((resolve) => {
     if (stopRequested) { resolve(); return; }
@@ -260,6 +267,7 @@ async function main(): Promise<void> {
   streamEvents.removeListener("start_physical_session", startPhysicalSessionHandler);
   streamEvents.removeListener("stop_physical_session", stopPhysicalSessionHandler);
   streamEvents.removeListener("disconnect_physical_session", disconnectPhysicalSessionHandler);
+  streamEvents.removeListener("request_running_sessions", requestRunningSessionsHandler);
   await sessionManager!.stopAllPhysicalSessions();
   await ipc.close();
   await shutdownOtel();

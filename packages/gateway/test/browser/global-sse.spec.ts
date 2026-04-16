@@ -65,7 +65,7 @@ test("global SSE does not affect channel SSE (independent connections)", async (
 
     // Channel-specific SSE event should still work alongside global SSE
     handle.sseBroadcaster.broadcast({
-      type: "session_status_change",
+      type: "channel_status_change",
       channelId,
       data: { sessionId: "test-sess", status: "processing" },
     });

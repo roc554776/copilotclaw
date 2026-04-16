@@ -261,17 +261,17 @@
   - regression tests 追加: "starting stuck" シナリオ（PhysicalSession が `starting` 状態に stuck したまま次の revive が来た場合の処理）、"processing deadlock" シナリオ（`processing` 状態のまま idle が来ない場合のタイムアウト処理）
   - `reconcile` が reducer 経由: `SessionOrchestrator.reconcileWithAgent()` が `PhysicalSessionAliveConfirmed` / `PhysicalSessionAliveRefuted` event を各 AbstractSession reducer に投入する形に変更
 
+- 状態管理アーキテクチャ再設計 — IPC 型付き union・ACK プロトコル・SSE 正規化・タイムライン・reconcile request-response・double drain 完全排除（v0.83.0）:
+  - Item A: `startPhysicalSession` ACK 確認プロトコル — `session-reducer.ts` に `StartTimeout` event 処理を追加（`starting` 状態から 30 秒 ACK なし → `suspended` に遷移）。`session-controller.ts` に `scheduleStartTimeout()` / `cancelStartTimeout()` を実装し `physical_session_started` ACK 受信時にキャンセル。unit tests: session-reducer.test.ts に regression tests 追加済み
+  - Item B: double drain 完全排除 — `pending-queue-reducer.ts` で `DrainStarted` event 処理時に `drainInProgress=true` の場合は早期リターンする構造的 mutex を実装。unit tests: pending-queue-reducer.test.ts に確認済み
+  - Item C: IPC 型付き discriminated union — `packages/gateway/src/ipc-types.ts` に `GatewayToAgentEvent`、`packages/agent/src/ipc-types.ts` に `GatewayToAgentEvent` / `AgentToGatewayEvent` を実装し production code に接続
+  - Item D: `session_status_change` → `channel_status_change` への SSE event 正規化 — `effect-runtime.ts` の `BroadcastStatusChange` command が `channel_status_change` を emit するように変更。frontend `DashboardPage.tsx` が両名を受け付ける後方互換 handler を実装。テストのフィルタを `channel_status_change` に更新
+  - Item E: `channel_timeline_event` SSE + `WaitToolPayload` 多型化 — `sse-broadcaster-events.ts` に `TimelineEntry` / `WaitToolPayload` discriminated union を定義。`daemon.ts` に `handleSubagentTimelineEvent()` を export し、`subagent.started` / `subagent.completed` / `subagent.failed` SDK event 受信時に `channel_timeline_event` SSE を broadcast。unit tests: daemon-session-event-handler.test.ts に 4 tests 追加
+  - Item F: reconcile coordinator の request-response 化 — gateway `onStreamConnected` コールバックで `agentManager.requestRunningSessions()` を呼び `request_running_sessions` を agent に送信。agent は `running_sessions_report { physicalSessionIds }` で応答（`agent/src/index.ts` の `request_running_sessions` handler）。agent の自発送信 `running_sessions` を廃止（後方互換のため受信は継続）。`MIN_AGENT_VERSION` を `0.83.0` に更新。unit tests: agent-manager.test.ts に `requestRunningSessions` / `running_sessions_report` 各 3 tests 追加
+
 **未実現:**
-- 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — v0.80.0-v0.82.0 で 9/10 subsystem の reducer 導入、直接 mutate の全排除、EventBus 実装、backoff 永続化を完成。下記の個別未実現項目が残存
+- 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — v0.83.0 ですべての subsystem の実装が完了（詳細は「実装済み」節の v0.83.0 項を参照）
   - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— v0.71.0 で部分実現、v0.79.0 でほぼ完成。`client-not-started` 状態（CopilotClient 観測経路）は未実現のまま（selector は常に `clientStarted = true` を仮定）
-  - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
-  - イベント抽象化 — `copilotclaw_wait` 返却値の多型化（`WaitToolPayload` を複数イベント型の union に変更）、メッセージ以外のイベント型（subagent-completed / subagent-failed / keepalive）の追加（`docs/proposals/state-management-architecture.md` の「Gateway: AbstractSessionEvent の拡張 — イベント抽象化」節参照）
-  - IPC 型付き event union（`GatewayToAgentEvent` / `AgentToGatewayEvent`）— 設計上定義済みだが、IPC 通信の実装は依然として ad-hoc な JSON メッセージングのまま。型付き union への移行は未着手
-  - `startPhysicalSession` の ACK 確認プロトコル — gateway が `start_physical_session` を送信した後、agent が `physical_session_started` を返すまでの確認を待つプロトコルが未実装（脱出路はあるが ACK による明示的確認なし）
-  - double drain の完全排除 — `DrainStarted` / `DrainCompleted` / `DrainAcknowledged` sequence による統一は reducer 上は設計済みだが、構造的な mutex（lock）なし。部分対応のみ
-  - `session_status_change` → `channel_status_change` への SSE event rename — frontend 側の受信コードと `SseBroadcasterEvent` の event type 名が未変更
-  - `channel_timeline_event` / `WaitToolPayload` 多型化 — subagent ライフサイクルや keepalive 等の非メッセージイベントを timeline に統合する設計が未実装
-  - reconcile coordinator の `RequestRunningSessions` request-response 化 — 現行実装は agent が自発送信する `running_sessions` 方式のまま。gateway からの request を受けて応答する方式への移行が未完了
 
 - メッセージ sender の詳細識別 — `Message.senderMeta` フィールド（agentId / agentDisplayName / agentRole）を v0.78.0 で追加。DB migration v4→v5、gateway sender 決定ロジック（channel-operator / subagent 自動判別）、frontend Avatar + ProfileModal + subagent collapse UI を実現済み（v0.78.0）
 - エージェントアイコン・プロフィールモーダル・collapse 表示 — v0.78.0 で部分実現（channel-operator / subagent の 2 種のみ自動判別）。v0.79.0 で Intent タイムライン UI とモデル名表示も実現済み

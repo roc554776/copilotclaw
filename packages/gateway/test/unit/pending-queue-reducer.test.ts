@@ -78,6 +78,37 @@ describe("reducePendingQueue — DrainStarted", () => {
     expect(newState.drainInProgress).toBe(false);
     expect(commands).toHaveLength(0);
   });
+
+  // Item B regression — structural mutex: double drain fully excluded (v0.83.0)
+  it("structural mutex: second DrainStarted during active drain is fully rejected with no commands", () => {
+    const msg = makeMessage({ id: "m1" });
+    // Simulate state after first DrainStarted was accepted
+    const stateAfterFirst = makeState({ messages: [msg], drainInProgress: true });
+
+    // Second DrainStarted must be fully rejected — no state change, no commands
+    const { newState, commands } = reducePendingQueue(stateAfterFirst, {
+      type: "DrainStarted",
+      requestId: "req-duplicate",
+    });
+    expect(newState.drainInProgress).toBe(true); // unchanged
+    expect(newState.messages).toHaveLength(1); // unchanged
+    expect(commands).toHaveLength(0); // no side effects
+  });
+
+  it("structural mutex: rapid consecutive DrainStarted calls produce only one active drain", () => {
+    const msg = makeMessage({ id: "m1" });
+    const initialState = makeState({ messages: [msg] });
+
+    const first = reducePendingQueue(initialState, { type: "DrainStarted", requestId: "req-1" });
+    const second = reducePendingQueue(first.newState, { type: "DrainStarted", requestId: "req-2" });
+
+    // Only first drain goes through
+    expect(first.commands).toHaveLength(1);
+    expect(first.commands[0].type).toBe("DeliverMessages");
+    // Second is rejected
+    expect(second.commands).toHaveLength(0);
+    expect(second.newState.drainInProgress).toBe(true);
+  });
 });
 
 // ── DrainCompleted ────────────────────────────────────────────────────────────

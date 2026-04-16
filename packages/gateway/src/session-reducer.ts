@@ -396,6 +396,20 @@ export function reduceAbstractSession(
       return applyTransition(withCleanup, "suspended");
     }
 
+    case "StartTimeout": {
+      // Only valid from "starting" — prevents permanent stuck state when agent
+      // does not acknowledge start_physical_session within the timeout window.
+      if (state.status !== "starting") return { newState: state, commands: [] };
+
+      const withCleanup: AbstractSessionWorldState = {
+        ...state,
+        waitingOnWaitTool: false,
+        processingStartedAt: undefined,
+      };
+
+      return applyTransition(withCleanup, "suspended");
+    }
+
     case "Reconcile": {
       // Revive a suspended/idle session to the target status reported by the agent.
       // Only valid from suspended or idle (the session was thought to be inactive but agent
