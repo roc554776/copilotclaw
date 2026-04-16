@@ -2,7 +2,6 @@
  * Event and command type definitions for the IPC subsystems (agent side):
  * - SendQueue subsystem
  * - RPC subsystem
- * - ConfigPush subsystem
  *
  * See docs/proposals/state-management-architecture.md for design.
  */
@@ -31,7 +30,9 @@ export type SendQueueEvent =
   /** Evict the oldest message and enqueue a new one atomically (queue-full policy). */
   | { type: "QueueOverflowed"; message: QueuedMessage }
   /** Flush of legacy (pre-ACK) messages completed — clear state immediately (no ACKs expected). */
-  | { type: "LegacyFlushCompleted" };
+  | { type: "LegacyFlushCompleted" }
+  /** Startup restoration from persisted disk state — loads messages and resets pendingAckIds. */
+  | { type: "Initialized"; messages: QueuedMessage[] };
 
 export type SendQueueCommand =
   | { type: "FlushBatch"; messages: QueuedMessage[] }
@@ -75,28 +76,3 @@ export interface RpcReducerResult {
   commands: RpcCommand[];
 }
 
-// ── ConfigPush subsystem ──────────────────────────────────────────────────────
-
-export interface AgentConfigPayload {
-  [key: string]: unknown;
-}
-
-export interface ConfigPushState {
-  lastPushedAt: number | undefined;
-  config: AgentConfigPayload | undefined;
-  agentConnected: boolean;
-}
-
-export type ConfigPushEvent =
-  | { type: "ConfigUpdated"; config: AgentConfigPayload }
-  | { type: "AgentConnected" }
-  | { type: "AgentDisconnected" }
-  | { type: "PushCompleted"; pushedAt: number };
-
-export type ConfigPushCommand =
-  | { type: "SendConfigToAgent"; config: AgentConfigPayload };
-
-export interface ConfigPushReducerResult {
-  newState: ConfigPushState;
-  commands: ConfigPushCommand[];
-}

@@ -93,7 +93,7 @@ describe("send queue — buffering and persistence", () => {
 
   it("ACK protocol: disk is not cleared on flush, cleared after all ACKs received", async () => {
     const queuePath = join(TEST_DIR, "send-queue.jsonl");
-    const { initSendQueue, sendToGateway, flushSendQueue, setStreamSocket, acknowledgeMessage, pendingAckIds } = await getModule();
+    const { initSendQueue, sendToGateway, flushSendQueue, setStreamSocket, acknowledgeMessage, getSendQueueState } = await getModule();
     initSendQueue(TEST_DIR);
 
     // Buffer two messages while disconnected
@@ -112,7 +112,7 @@ describe("send queue — buffering and persistence", () => {
     // Disk should still have the messages (not cleared yet — waiting for ACKs)
     const diskAfterFlush = readFileSync(queuePath, "utf-8");
     expect(diskAfterFlush.trim().length).toBeGreaterThan(0);
-    expect(pendingAckIds.size).toBe(2);
+    expect(getSendQueueState().pendingAckIds).toHaveLength(2);
 
     // Each flushed message has a _queueId
     const sent = written.map((w) => JSON.parse(w));
@@ -121,13 +121,13 @@ describe("send queue — buffering and persistence", () => {
 
     // ACK first message — disk still has content (second pending)
     acknowledgeMessage(sent[0]!._queueId as string);
-    expect(pendingAckIds.size).toBe(1);
+    expect(getSendQueueState().pendingAckIds).toHaveLength(1);
     const diskAfterFirstAck = readFileSync(queuePath, "utf-8");
     expect(diskAfterFirstAck.trim().length).toBeGreaterThan(0);
 
     // ACK second message — disk should now be cleared
     acknowledgeMessage(sent[1]!._queueId as string);
-    expect(pendingAckIds.size).toBe(0);
+    expect(getSendQueueState().pendingAckIds).toHaveLength(0);
     const diskAfterAllAcks = readFileSync(queuePath, "utf-8");
     expect(diskAfterAllAcks).toBe("");
   });

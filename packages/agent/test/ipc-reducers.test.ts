@@ -2,15 +2,13 @@
  * Unit tests for the IPC subsystem reducers (pure functions):
  * - reduceSendQueue
  * - reduceRpc
- * - reduceConfigPush
  */
 
 import { describe, expect, it } from "vitest";
-import { reduceSendQueue, reduceRpc, reduceConfigPush } from "../src/ipc-reducers.js";
+import { reduceSendQueue, reduceRpc } from "../src/ipc-reducers.js";
 import type {
   SendQueueState,
   RpcState,
-  ConfigPushState,
   QueuedMessage,
 } from "../src/ipc-events.js";
 
@@ -33,15 +31,6 @@ function makeRpcState(overrides: Partial<RpcState> = {}): RpcState {
   return {
     pendingRequests: [],
     connectionStatus: "connected",
-    ...overrides,
-  };
-}
-
-function makeConfigPushState(overrides: Partial<ConfigPushState> = {}): ConfigPushState {
-  return {
-    lastPushedAt: undefined,
-    config: undefined,
-    agentConnected: false,
     ...overrides,
   };
 }
@@ -132,6 +121,18 @@ describe("reduceSendQueue — ConnectionRestored", () => {
   it("no-op when queue is empty and no pending ACKs", () => {
     const state = makeSendQueueState();
     const { commands } = reduceSendQueue(state, { type: "ConnectionRestored" });
+    expect(commands).toHaveLength(0);
+  });
+});
+
+describe("reduceSendQueue — Initialized", () => {
+  it("loads messages and resets pendingAckIds", () => {
+    const prior = makeSendQueueState({ pendingAckIds: ["q-stale"], flushInProgress: true });
+    const loaded = [makeQueuedMessage("q-1"), makeQueuedMessage("q-2")];
+    const { newState, commands } = reduceSendQueue(prior, { type: "Initialized", messages: loaded });
+    expect(newState.messages).toHaveLength(2);
+    expect(newState.pendingAckIds).toHaveLength(0);
+    expect(newState.flushInProgress).toBe(false);
     expect(commands).toHaveLength(0);
   });
 });
@@ -239,62 +240,3 @@ describe("reduceRpc — ConnectionRestored", () => {
   });
 });
 
-// ── reduceConfigPush ──────────────────────────────────────────────────────────
-
-describe("reduceConfigPush — ConfigUpdated", () => {
-  it("stores config; no push when agent not connected", () => {
-    const state = makeConfigPushState({ agentConnected: false });
-    const { newState, commands } = reduceConfigPush(state, {
-      type: "ConfigUpdated",
-      config: { model: "gpt-4.1" },
-    });
-    expect(newState.config).toEqual({ model: "gpt-4.1" });
-    expect(commands).toHaveLength(0);
-  });
-
-  it("stores config and pushes immediately when agent is connected", () => {
-    const state = makeConfigPushState({ agentConnected: true });
-    const { newState, commands } = reduceConfigPush(state, {
-      type: "ConfigUpdated",
-      config: { model: "gpt-4.1" },
-    });
-    expect(newState.config).toEqual({ model: "gpt-4.1" });
-    expect(commands).toHaveLength(1);
-    expect(commands[0].type).toBe("SendConfigToAgent");
-  });
-});
-
-describe("reduceConfigPush — AgentConnected", () => {
-  it("sets agentConnected=true and pushes config if available", () => {
-    const state = makeConfigPushState({ config: { model: "gpt-4.1" }, agentConnected: false });
-    const { newState, commands } = reduceConfigPush(state, { type: "AgentConnected" });
-    expect(newState.agentConnected).toBe(true);
-    expect(commands).toHaveLength(1);
-    expect(commands[0].type).toBe("SendConfigToAgent");
-  });
-
-  it("sets agentConnected=true with no push when config is absent", () => {
-    const state = makeConfigPushState();
-    const { newState, commands } = reduceConfigPush(state, { type: "AgentConnected" });
-    expect(newState.agentConnected).toBe(true);
-    expect(commands).toHaveLength(0);
-  });
-});
-
-describe("reduceConfigPush — AgentDisconnected", () => {
-  it("sets agentConnected=false", () => {
-    const state = makeConfigPushState({ agentConnected: true });
-    const { newState, commands } = reduceConfigPush(state, { type: "AgentDisconnected" });
-    expect(newState.agentConnected).toBe(false);
-    expect(commands).toHaveLength(0);
-  });
-});
-
-describe("reduceConfigPush — PushCompleted", () => {
-  it("records lastPushedAt timestamp", () => {
-    const state = makeConfigPushState();
-    const now = Date.now();
-    const { newState } = reduceConfigPush(state, { type: "PushCompleted", pushedAt: now });
-    expect(newState.lastPushedAt).toBe(now);
-  });
-});

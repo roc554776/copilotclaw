@@ -852,40 +852,31 @@ type RpcCommand =
 
 ### IPC / cross-cutting: ConfigPush subsystem
 
-**現状**
+**現状（v0.82.0 設計判断: reducer 不採用）**
 
-gateway 接続時に 1 度だけ config を agent に送信する。接続後の動的更新機構なし。
+gateway 接続時に 1 度だけ config を agent に送信する。動的更新は `AgentManager.setConfigToSend()` が stream 接続済みであれば即時送信、未接続であれば `configToSend` フィールドに保持して接続時に送信するシンプルな命令的実装。
 
-**新設計: world state 型**
+**設計判断: ConfigPush reducer は不採用（dead code を削除）**
+
+当初、本提案では reducer 化を計画し `ipc-reducers.ts` / `ipc-events.ts` に型定義・reducer 実装を追加した（v0.82.0）。しかし調査の結果、以下の理由により reducer 化を見送り、実装を削除した。
+
+- **state management が 1 メソッドで完結している**: `AgentManager.setConfigToSend(config)` が gateway 側の唯一の呼び出し元であり、接続済みなら即送信・未接続なら `configToSend` フィールドに保持して接続時送信という 2 パスが 10 行未満のコードで完結している。reducer を挟んでも state の遷移パターンが増えるだけで複雑性が下がらない。
+- **package 依存方向の制約**: ConfigPush reducer を production の送受信パスに wiring しようとすると、gateway 側 `AgentManager` が agent 側 `ipc-reducers.ts` を import する逆依存が生じる（`packages/gateway` → `packages/agent`）。これは既存のパッケージ依存制約に反するため、gateway 側に reducer を移動する選択肢も取れない。
+- **dead code**: 実装した reducer は production code から一度も呼ばれず、unit test のみで参照されていた。dead code を残すことは Intent-First Governance の「メカニズムが Contract を汚染しない」原則に反する。
+
+**現在の実装 (`packages/gateway/src/agent-manager.ts`)**
 
 ```typescript
-interface ConfigPushState {
-  lastPushedAt: number | undefined
-  config: AgentConfig | undefined
+setConfigToSend(config: Record<string, unknown>): void {
+  this.configToSend = config;
+  if (this.stream !== null && this.stream.isConnected() && this.configToSend !== null) {
+    this.stream.send({ type: "config", config: this.configToSend });
+  }
 }
+// stream "connected" event: if (this.configToSend !== null) this.stream.send(...)
 ```
 
-**想定 event 型**
-
-```typescript
-type ConfigPushEvent =
-  | { type: "ConfigUpdated"; config: AgentConfig }
-  | { type: "AgentConnected" }
-  | { type: "PushCompleted"; pushedAt: number }
-```
-
-**想定 command 型**
-
-```typescript
-type ConfigPushCommand =
-  | { type: "SendConfigToAgent"; config: AgentConfig }
-```
-
-**reducer の責務**
-
-- `AgentConnected` 時に現在の config が存在すれば `SendConfigToAgent` command を発行（初回 push）
-- `ConfigUpdated` 時に接続中であれば即時 `SendConfigToAgent` command を発行（動的更新）
-- 接続時の初回 push と動的更新を同一パスで処理し、push 漏れを防ぐ
+この実装で ConfigPush の要件（接続時初回 push + 動的更新）は満たされている。将来、ConfigPush の複雑性が増す（例: retry、versioning、部分更新）場合は、gateway 側に独立した reducer を設計することを検討する。
 
 ### 未詳細設計 subsystem の統合先
 

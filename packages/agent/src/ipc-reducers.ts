@@ -2,7 +2,6 @@
  * Pure reducers for the IPC subsystems (agent side):
  * - reduceSendQueue: manages the outbound message queue
  * - reduceRpc: manages pending RPC requests
- * - reduceConfigPush: manages config push from gateway
  *
  * See docs/proposals/state-management-architecture.md for design intent.
  */
@@ -14,9 +13,6 @@ import type {
   RpcState,
   RpcEvent,
   RpcReducerResult,
-  ConfigPushState,
-  ConfigPushEvent,
-  ConfigPushReducerResult,
 } from "./ipc-events.js";
 
 // ── SendQueue reducer ─────────────────────────────────────────────────────────
@@ -125,6 +121,16 @@ export function reduceSendQueue(
         commands: [{ type: "ClearDisk" }],
       };
     }
+
+    case "Initialized": {
+      // Startup restoration from persisted disk state.
+      // pendingAckIds is intentionally cleared: disk-restored messages use _queueId-based
+      // ACK tracking which is re-established on the next stream flush.
+      return {
+        newState: { ...state, messages: event.messages, pendingAckIds: [], flushInProgress: false },
+        commands: [],
+      };
+    }
   }
 }
 
@@ -214,52 +220,3 @@ export function reduceRpc(
   }
 }
 
-// ── ConfigPush reducer ────────────────────────────────────────────────────────
-
-/**
- * Pure state transition function for the ConfigPush subsystem.
- */
-export function reduceConfigPush(
-  state: ConfigPushState,
-  event: ConfigPushEvent,
-): ConfigPushReducerResult {
-  switch (event.type) {
-    case "ConfigUpdated": {
-      const newState: ConfigPushState = { ...state, config: event.config };
-      // If agent is connected, push immediately (dynamic update)
-      if (state.agentConnected && event.config !== undefined) {
-        return {
-          newState,
-          commands: [{ type: "SendConfigToAgent", config: event.config }],
-        };
-      }
-      return { newState, commands: [] };
-    }
-
-    case "AgentConnected": {
-      const newState: ConfigPushState = { ...state, agentConnected: true };
-      // Push current config to newly connected agent (initial push)
-      if (state.config !== undefined) {
-        return {
-          newState,
-          commands: [{ type: "SendConfigToAgent", config: state.config }],
-        };
-      }
-      return { newState, commands: [] };
-    }
-
-    case "AgentDisconnected": {
-      return {
-        newState: { ...state, agentConnected: false },
-        commands: [],
-      };
-    }
-
-    case "PushCompleted": {
-      return {
-        newState: { ...state, lastPushedAt: event.pushedAt },
-        commands: [],
-      };
-    }
-  }
-}

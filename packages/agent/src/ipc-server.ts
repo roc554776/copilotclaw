@@ -117,19 +117,17 @@ function getSendQueue(): Array<Record<string, unknown>> {
   return sendQueueState.messages as Array<Record<string, unknown>>;
 }
 
+/** Expose the current SendQueue world state (for testing / observability). */
+export function getSendQueueState(): SendQueueState {
+  return sendQueueState;
+}
+
 let sendQueuePath: string | null = null; // set by initSendQueue()
-/** IDs of flushed messages awaiting acknowledgment from the gateway. Exported for testing. */
-export const pendingAckIds = new Set<string>();
 
 /** Dispatch a SendQueueEvent through the reducer and apply effects. */
 function dispatchSendQueueEvent(event: SendQueueEvent): void {
   const { newState, commands } = reduceSendQueue(sendQueueState, event);
   sendQueueState = newState;
-  // Sync legacy pendingAckIds Set from world state
-  pendingAckIds.clear();
-  for (const id of newState.pendingAckIds) {
-    pendingAckIds.add(id);
-  }
   // Execute commands
   for (const cmd of commands) {
     if (cmd.type === "PersistQueue") {
@@ -170,12 +168,10 @@ export function initSendQueue(dataDir: string): void {
       if (loaded.length > maxQueueSize) {
         loaded = loaded.slice(loaded.length - maxQueueSize);
       }
-      // Initialize state with loaded messages. This is a startup restoration from
-      // persisted disk state — equivalent to loadFromDb() in the session orchestrator.
-      // pendingAckIds is intentionally cleared: disk-restored messages use _queueId-based
-      // ACK tracking which is re-established on the next stream flush.
-      sendQueueState = { ...sendQueueState, messages: loaded as QueuedMessage[], pendingAckIds: [] };
-      pendingAckIds.clear();
+      // Restore state via reducer event — startup restoration from persisted disk state.
+      // pendingAckIds is intentionally cleared by the Initialized handler: disk-restored
+      // messages use _queueId-based ACK tracking re-established on the next stream flush.
+      dispatchSendQueueEvent({ type: "Initialized", messages: loaded as QueuedMessage[] });
     } catch {
       // file read error — start with empty queue
     }
