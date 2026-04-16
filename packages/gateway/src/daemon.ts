@@ -226,6 +226,7 @@ async function main(): Promise<void> {
   const orchestrator = new SessionOrchestrator({
     persistPath: join(dataDir, "session-orchestrator.db"),
     legacyBindingsPath: existsSync(legacyOrchestratorJson) ? legacyOrchestratorJson : legacyBindingsJson,
+    store, // v0.82.0: pass store for persistent channel backoff
   });
   const promptConfig = getAgentPromptConfig();
 

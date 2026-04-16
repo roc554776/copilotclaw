@@ -354,9 +354,6 @@ function createRequestHandler(
       const sessionId = decodeURIComponent(sessionStopMatch[1]!);
       if (sessionController !== null) {
         sessionController.stopSession(sessionId);
-      } else {
-        agentManager.stopPhysicalSession(sessionId);
-        sessionOrchestrator.suspendSession(sessionId);
       }
       json(res, 200, { status: "stopped" });
       return;
@@ -372,9 +369,6 @@ function createRequestHandler(
       const sessionId = decodeURIComponent(turnRunStopMatch[1]!);
       if (sessionController !== null) {
         sessionController.idleSession(sessionId);
-      } else {
-        agentManager.stopPhysicalSession(sessionId);
-        sessionOrchestrator.idleSession(sessionId);
       }
       json(res, 200, { status: "idle" });
       return;

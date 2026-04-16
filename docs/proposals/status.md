@@ -242,8 +242,15 @@
   - 47 新規 gateway reducer unit tests + 26 新規 agent reducer unit tests（純関数テスト）
   - `SessionOrchestrator.applyWorldState()` / `getSession()` メソッド追加（effect runtime の単一書き込み経路）
 
+- 状態管理アーキテクチャ再設計 — 直接 mutate 完全排除（v0.81.0）:
+  - gateway `session-orchestrator.ts`: `suspendSession()` / `idleSession()` / `updateSessionStatus()` / `updatePhysicalSession()` / `setWaitingOnWaitTool()` / `updatePhysicalSessionTokens()` / `accumulateUsageTokens()` / `updatePhysicalSessionModel()` / `addSubagentSession()` / `updateSubagentStatus()` / `updatePhysicalSessionState()` 全削除。`applyWorldState()` が唯一の書き込み経路
+  - gateway `session-controller.ts`: `transition()` / `broadcastStatusChange()` private メソッド・`VALID_TRANSITIONS` 定数を削除。`deliverMessage()` / `ensureSessionForChannel()` / `idleSession()` を `dispatchEvent()` 経由に置き換え
+  - gateway `server.ts`: 削除されたメソッドを呼ぶ fallback `else` 分岐を削除
+  - agent `physical-session-manager.ts`: `PhysicalSessionEntry` の `info: PhysicalSessionInfo` を `worldState: PhysicalSessionWorldState` に置き換え。`applyWorldState()` / `dispatchPhysicalEvent()` / `derivePublicStatus()` を追加。`onStatusChange` コールバック・session 作成後の status 設定・suspend 操作をすべて `reducePhysicalSession()` 経由に置き換え。`reinjectCount` の cap チェックも `worldState.reinjectCount` を参照するよう修正
+  - テスト: session-orchestrator.test.ts / session-controller.test.ts / daemon-session-event-handler.test.ts の削除メソッド呼び出しをヘルパー関数（`applyWorldState` ラッパー）に置き換え
+
 **未実現:**
-- 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — v0.80.0 で Phase A-E を実装。下記の個別未実現項目は未着手
+- 系全体の状態管理アーキテクチャ再設計（`docs/proposals/state-management-architecture.md`） — v0.80.0 で Phase A-E、v0.81.0 で直接 mutate 完全排除を実装。下記の個別未実現項目は未着手
   - チャンネルステータスの射影設計（`DerivedChannelStatus` enum と selector 関数）— v0.71.0 で部分実現、v0.79.0 でほぼ完成。`client-not-started` 状態（CopilotClient 観測経路）は未実現のまま（selector は常に `clientStarted = true` を仮定）
   - チャンネルタイムライン UI の非メッセージ要素表示 — turn run 開始・停止・subagent ライフサイクルイベントのタイムライン統合（2026-04-14 追加）
   - イベント抽象化 — `copilotclaw_wait` 返却値の多型化（`WaitToolPayload` を複数イベント型の union に変更）、メッセージ以外のイベント型（subagent-completed / subagent-failed / keepalive）の追加（`docs/proposals/state-management-architecture.md` の「Gateway: AbstractSessionEvent の拡張 — イベント抽象化」節参照）

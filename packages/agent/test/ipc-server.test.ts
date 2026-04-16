@@ -1,11 +1,14 @@
 import { createConnection } from "node:net";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listenIpc } from "../src/ipc-server.js";
 
+const SOCKET_DIR = join(import.meta.dirname, "..", "..", "..", "tmp", "test-state", "agent", "ipc-server-sockets");
+mkdirSync(SOCKET_DIR, { recursive: true });
+
 function randomSocketPath(): string {
-  return join(tmpdir(), `copilotclaw-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`);
+  return join(SOCKET_DIR, `copilotclaw-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`);
 }
 
 function sendIpcRequest(socketPath: string, method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> {

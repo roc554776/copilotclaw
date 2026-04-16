@@ -3,6 +3,8 @@ import { adaptCopilotSession } from "./copilot-session-adapter.js";
 import { runSessionLoop } from "./session-loop.js";
 import { requestFromGateway, sendToGateway } from "./ipc-server.js";
 import { createChannelTools } from "./tools/channel.js";
+import { reducePhysicalSession, reduceCopilotClient } from "./session-reducer.js";
+import type { PhysicalSessionWorldState, PhysicalSessionEvent, CopilotClientWorldState } from "./session-events.js";
 
 // onPostToolUse hook fires only for the parent agent (channel-operator) tool calls.
 // Subagent tool calls do NOT trigger the hook — confirmed via debug logging (v0.39.0).
@@ -21,16 +23,33 @@ export interface PhysicalSessionInfo {
   processingStartedAt?: string | undefined;
 }
 
+/**
+ * Derive the public PhysicalSessionStatus from the internal PhysicalSessionWorldState status.
+ * waiting_on_wait_tool and reinject are internal states not exposed externally.
+ */
+function derivePublicStatus(worldStatus: PhysicalSessionWorldState["status"]): PhysicalSessionStatus {
+  switch (worldStatus) {
+    case "starting": return "starting";
+    case "waiting": return "waiting";
+    case "waiting_on_wait_tool": return "waiting";
+    case "processing": return "processing";
+    case "reinject": return "waiting";
+    case "suspended": return "suspended";
+    case "stopped": return "stopped";
+  }
+}
+
 interface PhysicalSessionEntry {
   sessionId: string;
   physicalSessionId?: string | undefined; // Self-generated session ID for SDK createSession/resumeSession
   copilotSession?: CopilotSession | undefined; // Live SDK session for getMessages()
   resolvedModel?: string | undefined; // Model resolved by gateway
-  info: PhysicalSessionInfo;
+  /** Reducer-managed world state — the sole source of truth for session status and reinjectCount. */
+  worldState: PhysicalSessionWorldState;
+  /** processingStartedAt is tracked here (not in worldState) for the public PhysicalSessionInfo shape. */
+  processingStartedAt: string | undefined;
   abortController: AbortController;
   sessionPromise: Promise<void>;
-  // generation was removed in v0.80.0 (dead field — never referenced after assignment)
-  reinjectCount: number;
 }
 
 export interface PhysicalSessionManagerOptions {
@@ -127,12 +146,22 @@ export class PhysicalSessionManager {
     this.logError = options.logError ?? defaultLogError;
   }
 
-  /** Singleton CopilotClient for the entire agent process.
-   *  One client = one CLI process. Sessions are created/resumed on this single client. */
+  // ── CopilotClient singleton — reducer-managed ─────────────────────────────
+  // World state is managed through reduceCopilotClient (pure function).
+  // Process state (client handle + start promise) is separate per design.
+  private copilotClientWorldState: CopilotClientWorldState = { status: "uninitialized" };
+  /** Process state: the live CopilotClient instance. */
   private client: CopilotClient | undefined;
+  /** Process state: the in-flight start promise (prevents double-start). */
   private clientStartPromise: Promise<void> | undefined;
 
-  /** Get or create the singleton CopilotClient. */
+  /** Dispatch a CopilotClient event through the reducer. */
+  private dispatchClientEvent(event: import("./session-events.js").CopilotClientEvent): void {
+    const { newState } = reduceCopilotClient(this.copilotClientWorldState, event);
+    this.copilotClientWorldState = newState;
+  }
+
+  /** Get or create the singleton CopilotClient (process state only). */
   private getClient(): CopilotClient {
     if (this.client === undefined) {
       const opts: Record<string, unknown> = { ...this.clientOptions };
@@ -140,18 +169,27 @@ export class PhysicalSessionManager {
         opts["githubToken"] = this.githubToken;
       }
       this.client = new CopilotClient(opts as ConstructorParameters<typeof CopilotClient>[0]);
-      this.clientStartPromise = undefined;
     }
     return this.client;
   }
 
-  /** Ensure the singleton client is started (needed for RPCs like quota/models
-   *  when no session has been created yet). Uses a stored promise to prevent
-   *  concurrent callers from double-starting the client. */
+  /** Ensure the singleton client is started.
+   *  Routes through the CopilotClient reducer for double-start prevention.
+   *  Returns the existing promise if already starting/running. */
   private ensureClientStarted(): Promise<void> {
-    const client = this.getClient();
-    this.clientStartPromise ??= client.start();
-    return this.clientStartPromise;
+    // Only start from "uninitialized" state (reducer enforces this)
+    if (this.copilotClientWorldState.status === "uninitialized") {
+      this.dispatchClientEvent({ type: "StartRequested" });
+      const client = this.getClient();
+      this.clientStartPromise = client.start().then(() => {
+        this.dispatchClientEvent({ type: "StartCompleted" });
+      }).catch((err: unknown) => {
+        this.dispatchClientEvent({ type: "ErrorOccurred", error: err instanceof Error ? err.message : String(err) });
+        throw err;
+      });
+    }
+    // If starting or running, return the existing promise (or a resolved one)
+    return this.clientStartPromise ?? Promise.resolve();
   }
 
   async getQuota(): Promise<Record<string, unknown> | null> {
@@ -194,7 +232,7 @@ export class PhysicalSessionManager {
   getPhysicalSessionStatuses(): Record<string, PhysicalSessionInfo> {
     const result: Record<string, PhysicalSessionInfo> = {};
     for (const [sessionId, entry] of this.sessions) {
-      result[sessionId] = { ...entry.info };
+      result[sessionId] = this.deriveInfo(entry);
     }
     return result;
   }
@@ -204,8 +242,9 @@ export class PhysicalSessionManager {
   getRunningPhysicalSessionsSummary(): Array<{ sessionId: string; status: string }> {
     const result: Array<{ sessionId: string; status: string }> = [];
     for (const [sessionId, entry] of this.sessions) {
-      if (entry.info.status !== "suspended") {
-        result.push({ sessionId, status: entry.info.status });
+      const publicStatus = derivePublicStatus(entry.worldState.status);
+      if (publicStatus !== "suspended") {
+        result.push({ sessionId, status: publicStatus });
       }
     }
     return result;
@@ -214,7 +253,39 @@ export class PhysicalSessionManager {
   getPhysicalSessionStatus(sessionId: string): PhysicalSessionInfo | undefined {
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) return undefined;
-    return { ...entry.info };
+    return this.deriveInfo(entry);
+  }
+
+  /** Derive the public PhysicalSessionInfo from an entry's world state. */
+  private deriveInfo(entry: PhysicalSessionEntry): PhysicalSessionInfo {
+    return {
+      status: derivePublicStatus(entry.worldState.status),
+      startedAt: entry.worldState.startedAt ?? new Date().toISOString(),
+      processingStartedAt: entry.processingStartedAt,
+    };
+  }
+
+  /** Apply a new world state to an entry. The sole write path for session status. */
+  private applyWorldState(entry: PhysicalSessionEntry, newState: PhysicalSessionWorldState): void {
+    const prevStatus = entry.worldState.status;
+    entry.worldState = newState;
+    // Track processingStartedAt as a derived side-effect of status transition
+    if (newState.status === "processing" && prevStatus !== "processing") {
+      entry.processingStartedAt = new Date().toISOString();
+    } else if (newState.status !== "processing") {
+      entry.processingStartedAt = undefined;
+    }
+    // Sync physicalSessionId so existing imperative code reading entry.physicalSessionId stays correct
+    entry.physicalSessionId = newState.physicalSessionId;
+  }
+
+  /** Dispatch a PhysicalSessionEvent through the reducer and apply the resulting world state. */
+  private dispatchPhysicalEvent(entry: PhysicalSessionEntry, event: PhysicalSessionEvent): void {
+    const { newState } = reducePhysicalSession(entry.worldState, event);
+    this.applyWorldState(entry, newState);
+    // Commands are intentionally ignored here — side effects (AbortSession, NotifyGateway, etc.)
+    // are executed by the existing imperative code in attachSessionLifecycle/runSession.
+    // The reducer is used solely as the state-transition source of truth.
   }
 
   startPhysicalSession(options: StartPhysicalSessionOptions): string {
@@ -223,13 +294,18 @@ export class PhysicalSessionManager {
     const abortController = new AbortController();
     const entry: PhysicalSessionEntry = {
       sessionId,
-      info: {
+      worldState: {
+        sessionId,
+        physicalSessionId,
         status: "starting",
         startedAt: new Date().toISOString(),
+        resolvedModel,
+        reinjectCount: 0,
+        currentToolName: undefined,
       },
+      processingStartedAt: undefined,
       abortController,
       sessionPromise: Promise.resolve(),
-      reinjectCount: 0,
     };
 
     // Propagate physical session ID for resume before runSession reads it
@@ -253,9 +329,18 @@ export class PhysicalSessionManager {
       keepaliveTimeoutMs: this.keepaliveTimeoutMs,
       abortSignal: entry.abortController.signal,
       onStatusChange: (status) => {
-        entry.info.status = status;
-        if (status === "processing") {
-          entry.info.processingStartedAt = new Date().toISOString();
+        if (status === "waiting") {
+          // copilotclaw_wait tool entered. If currently processing (agent finished handling
+          // a message and called wait again), complete the prior tool execution first.
+          const current = entry.worldState.status;
+          if (current === "processing") {
+            this.dispatchPhysicalEvent(entry, { type: "ToolExecutionCompleted", toolName: entry.worldState.currentToolName ?? "copilotclaw_wait" });
+          }
+          this.dispatchPhysicalEvent(entry, { type: "WaitToolCalled" });
+        } else if (status === "processing") {
+          // A real user message arrived while waiting — transition to processing.
+          this.dispatchPhysicalEvent(entry, { type: "WaitToolCompleted" });
+          this.dispatchPhysicalEvent(entry, { type: "ToolExecutionStarted", toolName: "copilotclaw_wait" });
         }
       },
       logError: this.logError,
@@ -376,6 +461,7 @@ export class PhysicalSessionManager {
       } catch (resumeErr: unknown) {
         this.log(`resumeSession failed for ${entry.physicalSessionId.slice(0, 12)}, creating new session: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
         entry.physicalSessionId = undefined;
+        entry.worldState = { ...entry.worldState, physicalSessionId: undefined };
         session = await this.getClient().createSession(baseConfig);
       }
     } else {
@@ -423,9 +509,11 @@ export class PhysicalSessionManager {
       postCapturedPrompt();
     });
 
-    entry.physicalSessionId = session.sessionId;
     entry.copilotSession = session;
-    entry.info.status = "waiting";
+    // Transition to waiting via reducer — also records the SDK session ID in worldState.
+    // Use SessionCreated for both new and resumed sessions: the distinction (resume vs create)
+    // only matters for the StartRequested → command dispatch, which this module handles imperatively.
+    this.dispatchPhysicalEvent(entry, { type: "SessionCreated", physicalSessionId: session.sessionId });
 
     // Notify gateway that a physical session has started
     this.postToGateway({
@@ -518,18 +606,14 @@ export class PhysicalSessionManager {
     return;
   }
 
-  /** Transition a session to suspended state.
+  /** Transition a session to suspended state via reducer.
    *  Token accumulation and physical session history are managed by gateway's
    *  SessionOrchestrator (via physical_session_ended message). Agent only clears
    *  its local references. */
-  suspendPhysicalSessionState(entry: PhysicalSessionEntry): void {
-    entry.info.status = "suspended";
-    entry.copilotSession = undefined;
-    // physicalSessionId is preserved for resumeSession on revival
-  }
-
   private suspendPhysicalSession(entry: PhysicalSessionEntry): void {
-    this.suspendPhysicalSessionState(entry);
+    this.dispatchPhysicalEvent(entry, { type: "StopRequested" });
+    entry.copilotSession = undefined;
+    // physicalSessionId is preserved in worldState for resumeSession on revival
   }
 
   /** Disconnect a session without stopping the CLI process.
@@ -545,7 +629,7 @@ export class PhysicalSessionManager {
       entry.copilotSession.disconnect().catch(() => {});
     }
     // Keep the entry with physicalSessionId for resume, but clear live session ref
-    this.suspendPhysicalSessionState(entry);
+    this.suspendPhysicalSession(entry);
   }
 
   /** Archive a session — disconnect and fully remove (physical session id discarded, context lost). */
@@ -573,9 +657,11 @@ export class PhysicalSessionManager {
       Promise.allSettled(promises).finally(() => { clearTimeout(timeoutHandle); }),
       timeout,
     ]);
-    // Stop the singleton CopilotClient CLI process.
+    // Stop the singleton CopilotClient CLI process via reducer.
     if (this.client !== undefined) {
+      this.dispatchClientEvent({ type: "StopRequested" });
       await this.client.stop().catch(() => this.client!.forceStop()).catch(() => {});
+      this.dispatchClientEvent({ type: "StopCompleted" });
     }
   }
 
@@ -636,19 +722,21 @@ export class PhysicalSessionManager {
 
       this.log(`session ${sessionId.slice(0, 8)} lifecycle decision: ${decision.action}`);
 
-      if (decision.clearCopilotSessionId && entry.physicalSessionId !== undefined) {
-        this.log(`clearing physicalSessionId ${entry.physicalSessionId.slice(0, 12)}`);
+      if (decision.clearCopilotSessionId && entry.worldState.physicalSessionId !== undefined) {
+        this.log(`clearing physicalSessionId ${entry.worldState.physicalSessionId.slice(0, 12)}`);
+        // Clear physicalSessionId in worldState (the sole source of truth) and sync entry
+        entry.worldState = { ...entry.worldState, physicalSessionId: undefined };
         entry.physicalSessionId = undefined;
       }
 
       // Cap reinject depth to prevent unbounded recursion when gateway persistently
       // returns "reinject" (e.g. due to a bug). Treat excess as "wait".
       const effectiveAction =
-        decision.action === "reinject" && entry.reinjectCount >= this.maxReinject
+        decision.action === "reinject" && entry.worldState.reinjectCount >= this.maxReinject
           ? "wait"
           : decision.action;
       if (effectiveAction !== decision.action) {
-        this.logError(`session ${sessionId.slice(0, 8)} reinject cap reached (${entry.reinjectCount}), treating as "wait"`);
+        this.logError(`session ${sessionId.slice(0, 8)} reinject cap reached (${entry.worldState.reinjectCount}), treating as "wait"`);
       }
 
       switch (effectiveAction) {
@@ -658,9 +746,9 @@ export class PhysicalSessionManager {
           break;
         case "reinject":
           // Re-enter the session loop with a new send() call.
-          // This keeps the physical session alive by sending a new prompt.
-          entry.reinjectCount += 1;
-          this.log(`session ${sessionId.slice(0, 8)} reinjecting (count: ${entry.reinjectCount})`);
+          // Dispatch ReinjectDecided to increment reinjectCount in worldState.
+          this.dispatchPhysicalEvent(entry, { type: "ReinjectDecided" });
+          this.log(`session ${sessionId.slice(0, 8)} reinjecting (count: ${entry.worldState.reinjectCount})`);
           entry.sessionPromise = this.attachSessionLifecycle(entry);
           break;
         case "wait":

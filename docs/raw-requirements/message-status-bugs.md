@@ -39,3 +39,6 @@ LOW:
 - イベントによってワールドステートが変化し、その変化に応じて、次の処理が command として発行され、作用が起きるという流れを整理できるとよいです。
 - なんかセッションだけに問題があると思ってる？ソフトウェア全体の状態管理に問題がありそうだが。
 - とにかくスコープを矮小化するな。
+
+<!-- 2026-04-15 -->
+- v0.80-0.81 で AbstractSession と PhysicalSession の 2 subsystem だけ reducer 化した。残り 8 subsystem + event bus infrastructure が全て未着手。全てやる。

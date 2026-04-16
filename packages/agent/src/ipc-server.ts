@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { type Server, createConnection, createServer, type Socket } from "node:net";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PhysicalSessionManager } from "./physical-session-manager.js";
+import { reduceSendQueue, reduceRpc } from "./ipc-reducers.js";
+import type { SendQueueState, RpcState, RpcEvent, SendQueueEvent, QueuedMessage } from "./ipc-events.js";
 
 let queueIdCounter = 0;
 function nextQueueId(): string {
@@ -51,6 +53,25 @@ const pendingRequests = new Map<string, {
   timer: ReturnType<typeof setTimeout>;
 }>();
 
+// RPC reducer world state (v0.82.0) — tracks pending request metadata
+let rpcState: RpcState = { pendingRequests: [], connectionStatus: "connected" };
+
+function dispatchRpcEvent(event: RpcEvent): void {
+  const { newState, commands } = reduceRpc(rpcState, event);
+  rpcState = newState;
+  for (const cmd of commands) {
+    if (cmd.type === "RejectRequest") {
+      const pending = pendingRequests.get(cmd.requestId);
+      if (pending !== undefined) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error(cmd.error));
+        pendingRequests.delete(cmd.requestId);
+      }
+    }
+    // ReplayPendingRequests: pending requests are tracked in rpcState for observability
+  }
+}
+
 /** Set the active stream socket (called internally when a stream connection is established). */
 export function setStreamSocket(socket: Socket | null): void {
   streamSocket = socket;
@@ -70,7 +91,7 @@ export function hasStream(): boolean {
 // Messages are persisted to disk so they survive agent process restarts.
 // On stream (re)connect, the queue is flushed before new messages are sent.
 //
-// ACK protocol (v0.79.0):
+// ACK protocol (v0.79.0, reducer-managed v0.82.0):
 // - Each buffered message is assigned a _queueId at enqueue time.
 // - flushSendQueue() sends all queued messages and registers their IDs in pendingAckIds.
 //   The disk file is NOT cleared on flush — it is only cleared once all ACKs are received.
@@ -78,12 +99,49 @@ export function hasStream(): boolean {
 // - acknowledgeMessage(queueId) removes the ID from pendingAckIds.
 //   When pendingAckIds becomes empty, the disk file is cleared.
 // - This ensures no messages are lost even if the agent crashes between flush and ACK.
+//
+// v0.82.0: state mutations now go through reduceSendQueue (pure function).
 
 export let maxQueueSize = 10_000; // default; overridden by gateway config via setMaxQueueSize()
-let sendQueue: Array<Record<string, unknown>> = [];
+
+// SendQueue reducer state (replaces direct mutable variables)
+let sendQueueState: SendQueueState = {
+  messages: [],
+  flushInProgress: false,
+  pendingAckIds: [],
+};
+
+// Convenience accessors for backward-compatible code
+/** @internal use sendQueueState.messages directly in new code */
+function getSendQueue(): Array<Record<string, unknown>> {
+  return sendQueueState.messages as Array<Record<string, unknown>>;
+}
+
 let sendQueuePath: string | null = null; // set by initSendQueue()
 /** IDs of flushed messages awaiting acknowledgment from the gateway. Exported for testing. */
 export const pendingAckIds = new Set<string>();
+
+/** Dispatch a SendQueueEvent through the reducer and apply effects. */
+function dispatchSendQueueEvent(event: SendQueueEvent): void {
+  const { newState, commands } = reduceSendQueue(sendQueueState, event);
+  sendQueueState = newState;
+  // Sync legacy pendingAckIds Set from world state
+  pendingAckIds.clear();
+  for (const id of newState.pendingAckIds) {
+    pendingAckIds.add(id);
+  }
+  // Execute commands
+  for (const cmd of commands) {
+    if (cmd.type === "PersistQueue") {
+      persistQueue();
+    } else if (cmd.type === "ClearDisk") {
+      if (sendQueuePath !== null) {
+        try { writeFileSync(sendQueuePath, "", "utf-8"); } catch { /* non-fatal */ }
+      }
+    }
+    // FlushBatch is handled by the caller
+  }
+}
 
 /** Set the max queue size from gateway config. */
 export function setMaxQueueSize(size: number): void {
@@ -99,18 +157,23 @@ export function initSendQueue(dataDir: string): void {
   if (existsSync(sendQueuePath)) {
     try {
       const raw = readFileSync(sendQueuePath, "utf-8");
+      let loaded: Array<Record<string, unknown>> = [];
       for (const line of raw.split("\n")) {
         if (line.trim() === "") continue;
         try {
-          sendQueue.push(JSON.parse(line) as Record<string, unknown>);
+          loaded.push(JSON.parse(line) as Record<string, unknown>);
         } catch {
           // skip malformed line
         }
       }
       // Enforce size limit after loading
-      if (sendQueue.length > maxQueueSize) {
-        sendQueue = sendQueue.slice(sendQueue.length - maxQueueSize);
+      if (loaded.length > maxQueueSize) {
+        loaded = loaded.slice(loaded.length - maxQueueSize);
       }
+      // Initialize state with loaded messages
+      sendQueueState = { ...sendQueueState, messages: loaded as QueuedMessage[] };
+      // Sync pendingAckIds
+      pendingAckIds.clear();
     } catch {
       // file read error — start with empty queue
     }
@@ -121,46 +184,49 @@ export function initSendQueue(dataDir: string): void {
 function persistQueue(): void {
   if (sendQueuePath === null) return;
   try {
-    const content = sendQueue.map((m) => JSON.stringify(m)).join("\n") + (sendQueue.length > 0 ? "\n" : "");
+    const q = sendQueueState.messages;
+    const content = q.map((m) => JSON.stringify(m)).join("\n") + (q.length > 0 ? "\n" : "");
     writeFileSync(sendQueuePath, content, "utf-8");
   } catch {
     // disk error — non-fatal, queue is still in memory
   }
 }
 
-/** Append a single message to the disk queue file (faster than full rewrite). */
-function appendToQueue(msg: Record<string, unknown>): void {
-  if (sendQueuePath === null) return;
-  try {
-    appendFileSync(sendQueuePath, JSON.stringify(msg) + "\n", "utf-8");
-  } catch {
-    // disk error — non-fatal
-  }
-}
 
 /** Flush all queued messages to the stream. Called on stream connect.
+ *  Routes through the SendQueue reducer (v0.82.0).
  *  Registers flushed message IDs in pendingAckIds — disk is NOT cleared here.
  *  Disk is cleared once all ACKs are received via acknowledgeMessage().
  *  If all flushed messages lack _queueId (e.g. old-format messages from a pre-ACK agent),
  *  the disk is cleared immediately since there is nothing to ACK. */
 export function flushSendQueue(): void {
   if (streamSocket === null || streamSocket.destroyed) return;
-  if (sendQueue.length === 0) return;
+  const q = getSendQueue();
+  if (q.length === 0) return;
 
-  const toSend = sendQueue.splice(0);
-  for (const msg of toSend) {
-    streamSocket.write(JSON.stringify(msg) + "\n");
-    // Register for ACK tracking. Every buffered message (v0.79.0+) has a _queueId.
+  const batchIds: string[] = [];
+  for (const msg of q) {
     const queueId = msg["_queueId"];
     if (typeof queueId === "string") {
-      pendingAckIds.add(queueId);
+      batchIds.push(queueId);
     }
   }
-  // If no pending ACKs were registered (pre-ACK messages from disk), clear disk immediately.
-  if (pendingAckIds.size === 0 && sendQueuePath !== null) {
-    try { writeFileSync(sendQueuePath, "", "utf-8"); } catch { /* non-fatal */ }
+
+  // Send all messages over the socket
+  for (const msg of q) {
+    streamSocket.write(JSON.stringify(msg) + "\n");
   }
-  // Otherwise: disk is cleared when all ACKs are received via acknowledgeMessage().
+
+  if (batchIds.length > 0) {
+    dispatchSendQueueEvent({ type: "FlushStarted", batchIds });
+  } else {
+    // No ACK IDs — old-format messages (pre-ACK) sent. Clear state and disk immediately.
+    sendQueueState = { ...sendQueueState, messages: [], flushInProgress: false };
+    pendingAckIds.clear();
+    if (sendQueuePath !== null) {
+      try { writeFileSync(sendQueuePath, "", "utf-8"); } catch { /* non-fatal */ }
+    }
+  }
 }
 
 /** Send a fire-and-forget message to the gateway via the stream.
@@ -168,18 +234,20 @@ export function flushSendQueue(): void {
  *  Buffered messages are assigned a _queueId for ACK tracking. */
 export function sendToGateway(msg: Record<string, unknown>): void {
   if (streamSocket === null || streamSocket.destroyed) {
-    // Stream not connected — buffer for later delivery
+    // Stream not connected — buffer for later delivery via reducer
     const buffered = { ...msg, _queueId: nextQueueId() };
-    sendQueue.push(buffered);
-    const evicted = sendQueue.length > maxQueueSize;
-    if (evicted) {
-      sendQueue.shift(); // drop oldest
-    }
-    if (evicted) {
-      // Queue overflowed: disk file has one extra line; rewrite to match trimmed queue.
+    // Enforce size limit before enqueuing
+    if (sendQueueState.messages.length >= maxQueueSize) {
+      // Drop oldest by trimming state directly (eviction policy)
+      sendQueueState = {
+        ...sendQueueState,
+        messages: [...sendQueueState.messages.slice(1), buffered as QueuedMessage],
+      };
       persistQueue();
     } else {
-      appendToQueue(buffered); // fast path: just append the new message
+      // Reducer issues PersistQueue command which calls persistQueue() for full rewrite.
+      // appendToQueueDisk fast path removed — reducer owns all disk writes.
+      dispatchSendQueueEvent({ type: "MessageEnqueued", message: buffered as QueuedMessage });
     }
     return;
   }
@@ -187,14 +255,10 @@ export function sendToGateway(msg: Record<string, unknown>): void {
 }
 
 /** Acknowledge receipt of a queued message.
- *  Removes the ID from pendingAckIds. When all pending ACKs are cleared,
- *  the disk file is truncated (no data loss risk at this point). */
+ *  Routes through the SendQueue reducer (v0.82.0).
+ *  When all pending ACKs are cleared, the disk file is truncated. */
 export function acknowledgeMessage(queueId: string): void {
-  pendingAckIds.delete(queueId);
-  if (pendingAckIds.size === 0 && sendQueuePath !== null) {
-    // All flushed messages acknowledged — safe to clear disk file
-    try { writeFileSync(sendQueuePath, "", "utf-8"); } catch { /* non-fatal */ }
-  }
+  dispatchSendQueueEvent({ type: "MessageAcknowledged", messageId: queueId });
 }
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -210,10 +274,20 @@ export function requestFromGateway(msg: Record<string, unknown>): Promise<unknow
     const id = randomUUID();
     const timer = setTimeout(() => {
       pendingRequests.delete(id);
+      dispatchRpcEvent({ type: "RequestTimedOut", requestId: id });
       reject(new Error("IPC stream request timed out"));
     }, REQUEST_TIMEOUT_MS);
     timer.unref();
     pendingRequests.set(id, { resolve, reject, timer });
+    // Register in RPC reducer world state
+    dispatchRpcEvent({
+      type: "RequestSent",
+      requestId: id,
+      method: String(msg["type"] ?? "unknown"),
+      payload: msg,
+      sentAt: new Date().toISOString(),
+      timeoutMs: REQUEST_TIMEOUT_MS,
+    });
     streamSocket.write(JSON.stringify({ ...msg, id }) + "\n");
   });
 }
@@ -228,6 +302,7 @@ function handleStreamMessage(msg: Record<string, unknown>): void {
     if (pending !== undefined) {
       pendingRequests.delete(msg["id"]);
       clearTimeout(pending.timer);
+      dispatchRpcEvent({ type: "ResponseReceived", requestId: msg["id"], data: msg["data"] });
       if (msg["error"] !== undefined) {
         pending.reject(new Error(String(msg["error"])));
       } else {
@@ -287,18 +362,19 @@ function handleConnection(
           }
           streamSocket = socket;
           socket.write(JSON.stringify({ ok: true }) + "\n");
+          // Notify reducers of connection restore
+          dispatchSendQueueEvent({ type: "ConnectionRestored" });
+          dispatchRpcEvent({ type: "ConnectionRestored" });
           streamEvents.emit("stream_connected");
 
           // When stream disconnects, clean up
           const cleanup = () => {
             if (streamSocket === socket) {
               streamSocket = null;
-              // Reject all pending requests
-              for (const [id, pending] of pendingRequests) {
-                clearTimeout(pending.timer);
-                pending.reject(new Error("IPC stream disconnected"));
-                pendingRequests.delete(id);
-              }
+              // Notify reducers of connection loss
+              dispatchSendQueueEvent({ type: "ConnectionLost" });
+              // RPC reducer handles reject commands for all pending requests
+              dispatchRpcEvent({ type: "ConnectionLost" });
             }
           };
           socket.on("close", cleanup);

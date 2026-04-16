@@ -2,6 +2,32 @@ import { describe, expect, it, vi } from "vitest";
 import { SessionController } from "../../src/session-controller.js";
 import { SessionOrchestrator } from "../../src/session-orchestrator.js";
 import { Store } from "../../src/store.js";
+import type { AbstractSessionStatus, AbstractSessionWorldState } from "../../src/session-events.js";
+import type { PhysicalSessionSummary } from "../../src/ipc-client.js";
+
+// ── Test helpers (replace deleted direct-mutate methods via applyWorldState) ─
+
+function getWorldState(orch: SessionOrchestrator, sessionId: string): AbstractSessionWorldState {
+  const s = orch.getSession(sessionId)!;
+  return {
+    sessionId: s.sessionId, channelId: s.channelId, status: s.status,
+    waitingOnWaitTool: s.waitingOnWaitTool, hasHadPhysicalSession: s.hasHadPhysicalSession,
+    physicalSessionId: s.physicalSessionId, physicalSession: s.physicalSession,
+    physicalSessionHistory: s.physicalSessionHistory,
+    cumulativeInputTokens: s.cumulativeInputTokens, cumulativeOutputTokens: s.cumulativeOutputTokens,
+    subagentSessions: s.subagentSessions, processingStartedAt: s.processingStartedAt, startedAt: s.startedAt,
+  };
+}
+
+function setStatus(orch: SessionOrchestrator, sessionId: string, status: AbstractSessionStatus): void {
+  const state = getWorldState(orch, sessionId);
+  orch.applyWorldState({ ...state, status, processingStartedAt: status === "processing" ? new Date().toISOString() : undefined });
+}
+
+function setPhysicalSession(orch: SessionOrchestrator, sessionId: string, ps: PhysicalSessionSummary): void {
+  const state = getWorldState(orch, sessionId);
+  orch.applyWorldState({ ...state, physicalSession: ps, hasHadPhysicalSession: true });
+}
 
 function makeMockAgentManager() {
   return {
@@ -35,7 +61,7 @@ describe("SessionController — state transitions", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
     // Put session in "idle" state
-    orchestrator.updateSessionStatus(sessionId, "idle");
+    setStatus(orchestrator, sessionId, "idle");
     // idle → waiting is not a valid transition (must go through starting first).
     // With the reducer-based path, the invalid transition is silently no-opped;
     // status must remain "idle" after the call.
@@ -49,7 +75,7 @@ describe("SessionController — state transitions", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
     // startSession sets status — force to "starting" for test
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
     expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("waiting");
   });
@@ -69,8 +95,8 @@ describe("SessionController — deliverMessage", () => {
     const { controller, orchestrator, agentManager, channelId } = makeController();
     // Manually set up an active session
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "waiting");
-    orchestrator.updatePhysicalSession(sessionId, {
+    setStatus(orchestrator, sessionId, "waiting");
+    setPhysicalSession(orchestrator, sessionId, {
       sessionId: "copilot-123",
       model: "gpt-4.1",
       startedAt: new Date().toISOString(),
@@ -92,8 +118,8 @@ describe("SessionController — deliverMessage", () => {
   it("transitions waiting session to notified on message arrival", async () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "waiting");
-    orchestrator.updatePhysicalSession(sessionId, {
+    setStatus(orchestrator, sessionId, "waiting");
+    setPhysicalSession(orchestrator, sessionId, {
       sessionId: "copilot-123",
       model: "gpt-4.1",
       startedAt: new Date().toISOString(),
@@ -138,8 +164,8 @@ describe("SessionController — onSessionIdle", () => {
   it("updates physical state to idle on true idle (no backgroundTasks)", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "waiting");
-    orchestrator.updatePhysicalSession(sessionId, {
+    setStatus(orchestrator, sessionId, "waiting");
+    setPhysicalSession(orchestrator, sessionId, {
       sessionId: "copilot-123",
       model: "gpt-4.1",
       startedAt: new Date().toISOString(),
@@ -153,8 +179,8 @@ describe("SessionController — onSessionIdle", () => {
   it("does NOT update physical state on backgroundTasks idle", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "waiting");
-    orchestrator.updatePhysicalSession(sessionId, {
+    setStatus(orchestrator, sessionId, "waiting");
+    setPhysicalSession(orchestrator, sessionId, {
       sessionId: "copilot-123",
       model: "gpt-4.1",
       startedAt: new Date().toISOString(),
@@ -189,8 +215,8 @@ describe("SessionController — onPhysicalSessionEnded", () => {
   it("clears session context on end", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "waiting");
-    orchestrator.updatePhysicalSession(sessionId, {
+    setStatus(orchestrator, sessionId, "waiting");
+    setPhysicalSession(orchestrator, sessionId, {
       sessionId: "copilot-123",
       model: "gpt-4.1",
       startedAt: new Date().toISOString(),
@@ -210,8 +236,8 @@ describe("SessionController — onPhysicalSessionEnded", () => {
   it("transitions to idle on idle reason", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "waiting");
-    orchestrator.updatePhysicalSession(sessionId, {
+    setStatus(orchestrator, sessionId, "waiting");
+    setPhysicalSession(orchestrator, sessionId, {
       sessionId: "copilot-123",
       model: "gpt-4.1",
       startedAt: new Date().toISOString(),
@@ -225,8 +251,8 @@ describe("SessionController — onPhysicalSessionEnded", () => {
   it("transitions to suspended on error", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "waiting");
-    orchestrator.updatePhysicalSession(sessionId, {
+    setStatus(orchestrator, sessionId, "waiting");
+    setPhysicalSession(orchestrator, sessionId, {
       sessionId: "copilot-123",
       model: "gpt-4.1",
       startedAt: new Date().toISOString(),
@@ -242,7 +268,7 @@ describe("SessionController — SSE broadcast", () => {
   it("broadcasts session status changes", () => {
     const { controller, orchestrator, sseBroadcast, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
 
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
     expect(sseBroadcast).toHaveBeenCalledWith(expect.objectContaining({
@@ -253,7 +279,7 @@ describe("SessionController — SSE broadcast", () => {
   it("includes derivedStatus in session_status_change event data", () => {
     const { controller, orchestrator, sseBroadcast, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
 
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
 
@@ -272,7 +298,7 @@ describe("SessionController — SSE broadcast", () => {
   it("derivedStatus reflects idle-no-trigger for brand-new session at waiting transition (physicalSession is set before broadcast)", () => {
     const { controller, orchestrator, sseBroadcast, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
 
     // onPhysicalSessionStarted calls updatePhysicalSession before transition, so at broadcast
     // time physicalSession is already set → derivedStatus is idle-no-trigger (not no-physical-session-initial)
@@ -293,7 +319,7 @@ describe("SessionController — SSE broadcast", () => {
   it("derivedStatus reflects running after physicalSession is set and non-wait tool starts", () => {
     const { controller, orchestrator, sseBroadcast, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
 
     // physicalSession is now set; start a non-wait tool → processing
@@ -314,7 +340,7 @@ describe("SessionController — SSE broadcast", () => {
   it("derivedStatus reflects running for processing status", () => {
     const { controller, orchestrator, sseBroadcast, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
     controller.onPhysicalSessionStarted(sessionId, "copilot-123", "gpt-4.1");
     // Tool execution → processing
     controller.onToolExecutionStart(sessionId, "bash");
@@ -471,7 +497,7 @@ describe("SessionController — reconcile + concurrent message arrival", () => {
 
     // Set up a session that is "starting" (stale — agent doesn't know about it)
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
 
     // Add a pending message
     store.addMessage(channelId, "user", "pending message");
@@ -655,7 +681,7 @@ describe("SessionController — delegation methods (v0.79.0)", () => {
   it("onUsageInfo delegates to orchestrator.updatePhysicalSessionTokens", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
     controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
 
     controller.onUsageInfo(sessionId, 1234, 8192);
@@ -668,7 +694,7 @@ describe("SessionController — delegation methods (v0.79.0)", () => {
   it("onAssistantUsage accumulates tokens on physical session", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
     controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
 
     controller.onAssistantUsage(sessionId, 100, 50);
@@ -682,7 +708,7 @@ describe("SessionController — delegation methods (v0.79.0)", () => {
   it("onModelChange updates model on physical session", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
     controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
 
     controller.onModelChange(sessionId, "gpt-4o");
@@ -694,7 +720,7 @@ describe("SessionController — delegation methods (v0.79.0)", () => {
   it("onSubagentStarted adds subagent info to orchestrator session", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
     controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
 
     controller.onSubagentStarted(sessionId, {
@@ -714,7 +740,7 @@ describe("SessionController — delegation methods (v0.79.0)", () => {
   it("onSubagentStatusChanged updates subagent status", () => {
     const { controller, orchestrator, channelId } = makeController();
     const sessionId = orchestrator.startSession(channelId);
-    orchestrator.updateSessionStatus(sessionId, "starting");
+    setStatus(orchestrator, sessionId, "starting");
     controller.onPhysicalSessionStarted(sessionId, "copilot-1", "gpt-4.1");
 
     controller.onSubagentStarted(sessionId, {

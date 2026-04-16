@@ -5,18 +5,21 @@
  * with a single owner that enforces valid state transitions.
  *
  * All session status changes MUST go through this controller — direct calls to
- * orchestrator.updateSessionStatus() from outside this class are prohibited.
+ * orchestrator methods from outside this class are prohibited.
  *
  * v0.80.0: Key state transitions now route through the AbstractSession reducer
  * (session-reducer.ts) for pure-function state derivation. The effect runtime
  * (effect-runtime.ts) executes the resulting commands. This eliminates direct
  * mutation of orchestrator state from outside the reducer.
+ *
+ * v0.81.0: All remaining direct mutate paths deleted. applyWorldState() is the
+ * sole write path. transition() removed; deliverMessage and idleSession now use
+ * dispatchEvent exclusively.
  */
 
 import type { AgentManager } from "./agent-manager.js";
 import type { SessionOrchestrator, AbstractSessionStatus } from "./session-orchestrator.js";
 import type { Store, Message } from "./store.js";
-import { selectDerivedChannelStatus } from "./channel-status-selector.js";
 import { reduceAbstractSession } from "./session-reducer.js";
 import type { AbstractSessionEvent } from "./session-events.js";
 import { executeCommands, sessionToWorldState } from "./effect-runtime.js";
@@ -45,17 +48,6 @@ interface SessionContext {
   };
 }
 
-/** Valid state transitions. Any transition not listed here is rejected. */
-const VALID_TRANSITIONS: Record<AbstractSessionStatus, AbstractSessionStatus[]> = {
-  new: ["starting", "idle", "suspended"],
-  starting: ["waiting", "idle", "suspended"],
-  waiting: ["notified", "processing", "idle", "suspended"],
-  notified: ["processing", "idle", "suspended"],
-  processing: ["waiting", "idle", "suspended"],
-  idle: ["starting", "suspended"],
-  suspended: ["starting"],
-};
-
 export type DeliveryResult = "delivered" | "session-started" | "queued";
 
 export class SessionController {
@@ -78,12 +70,12 @@ export class SessionController {
     this.sseBroadcast = fn;
   }
 
-  // --- Reducer dispatch (v0.80.0) ---
+  // --- Reducer dispatch ---
 
   /**
    * Dispatch an AbstractSessionEvent through the pure reducer and execute the
    * resulting commands via the effect runtime. This is the canonical path for
-   * all state mutations that the reducer covers.
+   * all state mutations.
    *
    * Falls back gracefully if the session is not found in the orchestrator.
    */
@@ -107,39 +99,6 @@ export class SessionController {
       ...(this.sseBroadcast !== undefined ? { sseBroadcast: this.sseBroadcast } : {}),
       resolveModelForChannel: this.resolveModelForChannel,
     });
-  }
-
-  // --- State transition methods ---
-
-  /** Attempt a status transition. Returns true if the transition was valid and applied. */
-  private transition(sessionId: string, to: AbstractSessionStatus): boolean {
-    const session = this.orchestrator.getSessionStatuses()[sessionId];
-    if (session === undefined) return false;
-    const from = session.status;
-    if (from === to) return true; // same-state transition is a no-op
-    const allowed = VALID_TRANSITIONS[from];
-    if (allowed === undefined || !allowed.includes(to)) {
-      console.error(`[session-controller] rejected transition ${from} → ${to} for session ${sessionId.slice(0, 8)}`);
-      return false;
-    }
-    this.orchestrator.updateSessionStatus(sessionId, to);
-    this.broadcastStatusChange(sessionId, to);
-    return true;
-  }
-
-  private broadcastStatusChange(sessionId: string, status: AbstractSessionStatus): void {
-    if (this.sseBroadcast === undefined) return;
-    const session = this.orchestrator.getSessionStatuses()[sessionId];
-    if (session === undefined) return;
-    const channelId = session.channelId;
-    const hasPending = channelId !== undefined ? this.store.hasPending(channelId) : false;
-    const derivedStatus = selectDerivedChannelStatus({ session, hasPending });
-    const evt: { type: string; channelId?: string; data?: unknown } = {
-      type: "session_status_change",
-      data: { sessionId, status, derivedStatus },
-    };
-    if (channelId !== undefined) evt.channelId = channelId;
-    this.sseBroadcast(evt);
   }
 
   // --- Per-session context management ---
@@ -176,12 +135,10 @@ export class SessionController {
     // Try to notify existing active session
     const sessionId = this.orchestrator.getSessionIdForChannel(channelId);
     if (sessionId !== undefined) {
-      const session = this.orchestrator.getSessionStatuses()[sessionId];
+      const session = this.orchestrator.getSession(sessionId);
       if (session !== undefined && this.isActive(session.status)) {
-        this.agentManager.notifyAgent(sessionId);
-        if (session.status === "waiting") {
-          this.transition(sessionId, "notified");
-        }
+        // Route through reducer: MessageDelivered handles notifyAgent + waiting→notified
+        this.dispatchEvent(sessionId, { type: "MessageDelivered", channelId, messageId: msg.id });
         return { msg, delivery: "delivered" };
       }
     }
@@ -203,12 +160,13 @@ export class SessionController {
     if (this.orchestrator.hasActiveSessionForChannel(channelId)) return;
 
     const sessionId = this.orchestrator.startSession(channelId);
-    const session = this.orchestrator.getSessionStatuses()[sessionId];
+    const session = this.orchestrator.getSession(sessionId);
 
     // Ensure we're in "starting" state (orchestrator.startSession sets "starting" for revived
     // sessions but "new" for brand-new ones)
     if (session?.status === "new") {
-      this.transition(sessionId, "starting");
+      // Dispatch ReviveRequested to transition new → starting via the reducer
+      this.dispatchEvent(sessionId, { type: "ReviveRequested" });
     }
 
     let resolvedModel: string | undefined;
@@ -216,8 +174,9 @@ export class SessionController {
       resolvedModel = await this.resolveModelForChannel(channelId);
     } catch { /* agent fallback */ }
 
+    const currentSession = this.orchestrator.getSession(sessionId);
     console.error(`[session-controller] starting physical session for channel ${channelId.slice(0, 8)}, session=${sessionId.slice(0, 8)}, model=${resolvedModel ?? "(agent-fallback)"}`);
-    this.agentManager.startPhysicalSession(sessionId, session?.physicalSessionId, resolvedModel);
+    this.agentManager.startPhysicalSession(sessionId, currentSession?.physicalSessionId, resolvedModel);
   }
 
   /** Called when agent reports physical session started. */
@@ -331,17 +290,25 @@ export class SessionController {
     this.dispatchEvent(sessionId, { type: "StopRequested" });
   }
 
-  /** End turn run: disconnect (not stop) the physical session.
-   *  The SDK session is disconnected but physicalSessionId is preserved
-   *  so that the next message can resumeSession with the same context. */
+  /**
+   * End turn run: disconnect (not stop) the physical session.
+   * The SDK session is disconnected but physicalSessionId is preserved
+   * so that the next message can resumeSession with the same context.
+   * Routes through reducer: PhysicalSessionEnded(reason="aborted") transitions to idle.
+   */
   idleSession(sessionId: string): void {
     this.clearContext(sessionId);
-    // Disconnect physical session (preserve physicalSessionId for resume)
+    // Disconnect physical session (preserves physicalSessionId for resume)
     this.agentManager.disconnectPhysicalSession(sessionId);
-    // Directly idle the orchestrator session (end-turn-run API path —
-    // we use the legacy idleSession method which handles token accumulation)
-    this.orchestrator.idleSession(sessionId);
-    this.broadcastStatusChange(sessionId, "idle");
+    // Dispatch through reducer: "aborted" reason transitions to suspended, but we want idle.
+    // Use "idle" reason so the reducer accumulates tokens and transitions to idle.
+    const session = this.orchestrator.getSession(sessionId);
+    this.dispatchEvent(sessionId, {
+      type: "PhysicalSessionEnded",
+      physicalSessionId: session?.physicalSessionId ?? "",
+      reason: "idle",
+      elapsedMs: 0,
+    });
   }
 
   // --- Reconciliation ---

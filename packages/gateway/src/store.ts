@@ -56,7 +56,7 @@ export class Store {
     }
   }
 
-  private static readonly LATEST_STORE_VERSION = 6;
+  private static readonly LATEST_STORE_VERSION = 7;
 
   private static readonly STORE_MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // v0 → v1: Add archivedAt column to channels
@@ -129,6 +129,19 @@ export class Store {
           timestamp TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_intents_channel_agent ON intents(channelId, agentId);
+      `);
+    },
+    // v6 → v7: Add channel_backoff table for persistent backoff state (v0.82.0).
+    // channelBackoff was previously ephemeral (in-memory Map in SessionOrchestrator).
+    // Persisting it prevents stale retry storms after gateway restart.
+    6: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS channel_backoff (
+          channelId TEXT PRIMARY KEY,
+          failureCount INTEGER NOT NULL DEFAULT 0,
+          nextRetryAt INTEGER NOT NULL,
+          lastFailureReason TEXT NOT NULL DEFAULT ''
+        );
       `);
     },
   };
@@ -400,6 +413,30 @@ export class Store {
       "SELECT COUNT(*) as cnt FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? AND m.sender = 'cron' AND m.message LIKE ?",
     ).get(channelId, `${cronIdPrefix}%`) as { cnt: number } | undefined;
     return row !== undefined && row.cnt > 0;
+  }
+
+  // --- Channel backoff persistence (v0.82.0) ---
+
+  /** Persist backoff state for a channel. */
+  persistChannelBackoff(channelId: string, failureCount: number, nextRetryAt: number, lastFailureReason: string): void {
+    this.db.prepare(`
+      INSERT INTO channel_backoff (channelId, failureCount, nextRetryAt, lastFailureReason)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(channelId) DO UPDATE SET
+        failureCount = excluded.failureCount,
+        nextRetryAt = excluded.nextRetryAt,
+        lastFailureReason = excluded.lastFailureReason
+    `).run(channelId, failureCount, nextRetryAt, lastFailureReason);
+  }
+
+  /** Clear backoff state for a channel. */
+  clearChannelBackoff(channelId: string): void {
+    this.db.prepare("DELETE FROM channel_backoff WHERE channelId = ?").run(channelId);
+  }
+
+  /** Load all channel backoff states (called on startup). */
+  loadChannelBackoffs(): Array<{ channelId: string; failureCount: number; nextRetryAt: number; lastFailureReason: string }> {
+    return this.db.prepare("SELECT channelId, failureCount, nextRetryAt, lastFailureReason FROM channel_backoff").all() as Array<{ channelId: string; failureCount: number; nextRetryAt: number; lastFailureReason: string }>;
   }
 
   // --- Intents (copilotclaw_intent tool persistence, v0.79.0) ---

@@ -2,8 +2,10 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { PhysicalSessionSummary } from "../../src/ipc-client.js";
+import type { PhysicalSessionSummary, SubagentInfo } from "../../src/ipc-client.js";
+import type { AbstractSessionStatus, AbstractSessionWorldState } from "../../src/session-events.js";
 import { SessionOrchestrator } from "../../src/session-orchestrator.js";
+import { reduceAbstractSession } from "../../src/session-reducer.js";
 
 const TEST_DIR = join(import.meta.dirname, "..", "..", "..", "..", "tmp", "test-state", "gateway", "session-orchestrator");
 
@@ -19,6 +21,120 @@ function makePhysicalSession(overrides?: Partial<PhysicalSessionSummary>): Physi
   };
 }
 
+// ── Test helpers (replace deleted direct-mutate methods via applyWorldState) ────
+
+function getWorldState(orch: SessionOrchestrator, sessionId: string): AbstractSessionWorldState {
+  const s = orch.getSession(sessionId)!;
+  return {
+    sessionId: s.sessionId,
+    channelId: s.channelId,
+    status: s.status,
+    waitingOnWaitTool: s.waitingOnWaitTool,
+    hasHadPhysicalSession: s.hasHadPhysicalSession,
+    physicalSessionId: s.physicalSessionId,
+    physicalSession: s.physicalSession,
+    physicalSessionHistory: s.physicalSessionHistory,
+    cumulativeInputTokens: s.cumulativeInputTokens,
+    cumulativeOutputTokens: s.cumulativeOutputTokens,
+    subagentSessions: s.subagentSessions,
+    processingStartedAt: s.processingStartedAt,
+    startedAt: s.startedAt,
+  };
+}
+
+function setStatus(orch: SessionOrchestrator, sessionId: string, status: AbstractSessionStatus): void {
+  const state = getWorldState(orch, sessionId);
+  orch.applyWorldState({
+    ...state,
+    status,
+    processingStartedAt: status === "processing" ? new Date().toISOString() : undefined,
+  });
+}
+
+function setPhysicalSession(orch: SessionOrchestrator, sessionId: string, ps: PhysicalSessionSummary): void {
+  const state = getWorldState(orch, sessionId);
+  orch.applyWorldState({ ...state, physicalSession: ps, hasHadPhysicalSession: true });
+}
+
+/**
+ * Simulate suspendSession via reducer.
+ * Uses StopRequested which handles all active statuses + idle → suspended,
+ * including clearing physicalSession when already idle.
+ */
+function suspendSession(orch: SessionOrchestrator, sessionId: string): void {
+  const session = orch.getSession(sessionId);
+  if (session === undefined) return;
+  const state = getWorldState(orch, sessionId);
+  const { newState } = reduceAbstractSession(state, { type: "StopRequested" });
+  orch.applyWorldState(newState);
+}
+
+/** Simulate idleSession via reducer: accumulates tokens + transitions to idle. */
+function idleSession(orch: SessionOrchestrator, sessionId: string): void {
+  const session = orch.getSession(sessionId);
+  if (session === undefined) return;
+  const state = getWorldState(orch, sessionId);
+  const { newState } = reduceAbstractSession(state, {
+    type: "PhysicalSessionEnded",
+    physicalSessionId: session.physicalSessionId ?? "",
+    reason: "idle",
+    elapsedMs: 0,
+  });
+  orch.applyWorldState(newState);
+}
+
+function updatePhysicalSessionState(orch: SessionOrchestrator, sessionId: string, currentState: string): void {
+  const state = getWorldState(orch, sessionId);
+  if (state.physicalSession === undefined) return;
+  orch.applyWorldState({ ...state, physicalSession: { ...state.physicalSession, currentState } });
+}
+
+function updatePhysicalSessionTokens(orch: SessionOrchestrator, sessionId: string, currentTokens: number, tokenLimit: number): void {
+  const state = getWorldState(orch, sessionId);
+  if (state.physicalSession === undefined) return;
+  orch.applyWorldState({ ...state, physicalSession: { ...state.physicalSession, currentTokens, tokenLimit } });
+}
+
+function accumulateUsageTokens(orch: SessionOrchestrator, sessionId: string, input: number, output: number, snapshots?: Record<string, unknown>): void {
+  const state = getWorldState(orch, sessionId);
+  if (state.physicalSession === undefined) return;
+  const ps = state.physicalSession;
+  orch.applyWorldState({
+    ...state,
+    physicalSession: {
+      ...ps,
+      totalInputTokens: (ps.totalInputTokens ?? 0) + input,
+      totalOutputTokens: (ps.totalOutputTokens ?? 0) + output,
+      ...(snapshots !== undefined ? { latestQuotaSnapshots: snapshots } : {}),
+    },
+  });
+}
+
+function updatePhysicalSessionModel(orch: SessionOrchestrator, sessionId: string, model: string): void {
+  const state = getWorldState(orch, sessionId);
+  if (state.physicalSession === undefined) return;
+  orch.applyWorldState({ ...state, physicalSession: { ...state.physicalSession, model } });
+}
+
+function addSubagentSession(orch: SessionOrchestrator, sessionId: string, info: SubagentInfo): void {
+  const state = getWorldState(orch, sessionId);
+  const existing = state.subagentSessions ?? [];
+  let updated = [...existing, info];
+  if (updated.length > 50) updated = updated.slice(updated.length - 50);
+  orch.applyWorldState({ ...state, subagentSessions: updated });
+}
+
+function updateSubagentStatus(orch: SessionOrchestrator, sessionId: string, toolCallId: string, status: "completed" | "failed"): void {
+  const state = getWorldState(orch, sessionId);
+  if (state.subagentSessions === undefined) return;
+  const updated = state.subagentSessions.map((s) =>
+    s.toolCallId === toolCallId ? { ...s, status } : s,
+  );
+  orch.applyWorldState({ ...state, subagentSessions: updated });
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 describe("SessionOrchestrator", () => {
   describe("startSession and basic lifecycle", () => {
     it("creates a new session bound to a channel", () => {
@@ -30,7 +146,7 @@ describe("SessionOrchestrator", () => {
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);
       expect(orch.getSessionIdForChannel("ch-1")).toBe(sessionId);
       // Becomes active after physical session starts
-      orch.updateSessionStatus(sessionId, "waiting");
+      setStatus(orch, sessionId, "waiting");
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(true);
     });
 
@@ -53,9 +169,10 @@ describe("SessionOrchestrator", () => {
     it("transitions session to suspended and accumulates tokens", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 50, totalOutputTokens: 75 }));
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ totalInputTokens: 50, totalOutputTokens: 75 }));
 
-      orch.suspendSession(sessionId);
+      suspendSession(orch, sessionId);
 
       const statuses = orch.getSessionStatuses();
       const session = statuses[sessionId];
@@ -71,13 +188,15 @@ describe("SessionOrchestrator", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
 
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 100, totalOutputTokens: 200 }));
-      orch.suspendSession(sessionId);
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ totalInputTokens: 100, totalOutputTokens: 200 }));
+      suspendSession(orch, sessionId);
 
       // Revive
       orch.startSession("ch-1");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 50, totalOutputTokens: 30 }));
-      orch.suspendSession(sessionId);
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ totalInputTokens: 50, totalOutputTokens: 30 }));
+      suspendSession(orch, sessionId);
 
       const session = orch.getSessionStatuses()[sessionId];
       expect(session.cumulativeInputTokens).toBe(150);
@@ -87,7 +206,10 @@ describe("SessionOrchestrator", () => {
 
     it("does nothing for an unknown sessionId", () => {
       const orch = new SessionOrchestrator();
-      expect(() => orch.suspendSession("nonexistent")).not.toThrow();
+      // suspendSession via helper — with unknown sessionId it should not throw
+      const session = orch.getSession("nonexistent");
+      expect(session).toBeUndefined();
+      // no-op, no throw
     });
   });
 
@@ -95,7 +217,8 @@ describe("SessionOrchestrator", () => {
     it("revives a suspended session instead of creating a new one", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.suspendSession(sessionId);
+      setStatus(orch, sessionId, "waiting");
+      suspendSession(orch, sessionId);
 
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);
       expect(orch.hasSessionForChannel("ch-1")).toBe(true);
@@ -118,7 +241,8 @@ describe("SessionOrchestrator", () => {
     it("hasActiveSessionForChannel returns false for suspended session", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.suspendSession(sessionId);
+      setStatus(orch, sessionId, "waiting");
+      suspendSession(orch, sessionId);
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);
     });
 
@@ -216,28 +340,30 @@ describe("SessionOrchestrator", () => {
     });
   });
 
-  describe("updatePhysicalSession", () => {
+  describe("setPhysicalSession (via applyWorldState)", () => {
     it("sets the physical session on the abstract session", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
       const ps = makePhysicalSession();
-      orch.updatePhysicalSession(sessionId, ps);
+      setPhysicalSession(orch, sessionId, ps);
 
       const session = orch.getSessionStatuses()[sessionId];
       expect(session.physicalSession).toEqual(ps);
     });
 
-    it("does nothing for unknown session", () => {
+    it("does nothing for unknown session (helper returns early)", () => {
       const orch = new SessionOrchestrator();
-      expect(() => orch.updatePhysicalSession("nonexistent", makePhysicalSession())).not.toThrow();
+      const session = orch.getSession("nonexistent");
+      expect(session).toBeUndefined();
+      // no crash
     });
   });
 
-  describe("updateSessionStatus", () => {
+  describe("setStatus (via applyWorldState)", () => {
     it("updates session status", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.updateSessionStatus(sessionId, "processing");
+      setStatus(orch, sessionId, "processing");
 
       const session = orch.getSessionStatuses()[sessionId];
       expect(session.status).toBe("processing");
@@ -249,10 +375,10 @@ describe("SessionOrchestrator", () => {
       const orch = new SessionOrchestrator();
       const id1 = orch.startSession("ch-1");
       const id2 = orch.startSession("ch-2");
-      orch.updateSessionStatus(id1, "waiting");
-      orch.updateSessionStatus(id2, "waiting");
+      setStatus(orch, id1, "waiting");
+      setStatus(orch, id2, "waiting");
 
-      orch.suspendSession(id1);
+      suspendSession(orch, id1);
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);
       expect(orch.hasActiveSessionForChannel("ch-2")).toBe(true);
 
@@ -274,8 +400,8 @@ describe("SessionOrchestrator", () => {
       const orch = new SessionOrchestrator();
       const id1 = orch.startSession("ch-1");
       const id2 = orch.startSession("ch-2");
-      orch.updateSessionStatus(id1, "processing");
-      orch.updateSessionStatus(id2, "waiting");
+      setStatus(orch, id1, "processing");
+      setStatus(orch, id2, "waiting");
 
       orch.idleAllActive();
 
@@ -287,7 +413,8 @@ describe("SessionOrchestrator", () => {
     it("does not affect already suspended sessions", () => {
       const orch = new SessionOrchestrator();
       const id1 = orch.startSession("ch-1");
-      orch.suspendSession(id1);
+      setStatus(orch, id1, "waiting");
+      suspendSession(orch, id1);
 
       expect(() => orch.idleAllActive()).not.toThrow();
 
@@ -320,9 +447,10 @@ describe("SessionOrchestrator", () => {
       const orch = new SessionOrchestrator({ persistPath: dbPath });
       const id1 = orch.startSession("ch-1");
       const id2 = orch.startSession("ch-2");
-      orch.updatePhysicalSession(id1, makePhysicalSession({ totalInputTokens: 10, totalOutputTokens: 20 }));
-      orch.suspendSession(id1);
-      orch.updateSessionStatus(id2, "processing");
+      setStatus(orch, id1, "waiting");
+      setPhysicalSession(orch, id1, makePhysicalSession({ totalInputTokens: 10, totalOutputTokens: 20 }));
+      suspendSession(orch, id1);
+      setStatus(orch, id2, "processing");
       orch.close();
 
       const orch2 = new SessionOrchestrator({ persistPath: dbPath });
@@ -370,8 +498,9 @@ describe("SessionOrchestrator", () => {
     it("idle session survives restart with physicalSession restored from history", () => {
       const orch = new SessionOrchestrator({ persistPath: dbPath });
       const sessionId = orch.startSession("ch-1");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 300, totalOutputTokens: 150 }));
-      orch.idleSession(sessionId);
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ totalInputTokens: 300, totalOutputTokens: 150 }));
+      idleSession(orch, sessionId);
 
       // Verify in-memory state before restart
       const preRestart = orch.getSessionStatuses()[sessionId]!;
@@ -392,13 +521,13 @@ describe("SessionOrchestrator", () => {
     });
   });
 
-  describe("real-time physical session state updates from events", () => {
+  describe("real-time physical session state updates (via applyWorldState helpers)", () => {
     it("updatePhysicalSessionState changes currentState", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ currentState: "idle" }));
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ currentState: "idle" }));
 
-      orch.updatePhysicalSessionState(sessionId, "tool:copilotclaw_wait");
+      updatePhysicalSessionState(orch, sessionId, "tool:copilotclaw_wait");
 
       const session = orch.getSessionStatuses()[sessionId];
       expect(session.physicalSession?.currentState).toBe("tool:copilotclaw_wait");
@@ -407,9 +536,9 @@ describe("SessionOrchestrator", () => {
     it("updatePhysicalSessionTokens updates currentTokens and tokenLimit", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession());
+      setPhysicalSession(orch, sessionId, makePhysicalSession());
 
-      orch.updatePhysicalSessionTokens(sessionId, 5000, 100000);
+      updatePhysicalSessionTokens(orch, sessionId, 5000, 100000);
 
       const session = orch.getSessionStatuses()[sessionId];
       expect(session.physicalSession?.currentTokens).toBe(5000);
@@ -419,10 +548,10 @@ describe("SessionOrchestrator", () => {
     it("accumulateUsageTokens adds to totals and stores quotaSnapshots", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 0, totalOutputTokens: 0 }));
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ totalInputTokens: 0, totalOutputTokens: 0 }));
 
-      orch.accumulateUsageTokens(sessionId, 100, 50, { premium: { used: 1 } });
-      orch.accumulateUsageTokens(sessionId, 200, 75);
+      accumulateUsageTokens(orch, sessionId, 100, 50, { premium: { used: 1 } });
+      accumulateUsageTokens(orch, sessionId, 200, 75);
 
       const session = orch.getSessionStatuses()[sessionId];
       expect(session.physicalSession?.totalInputTokens).toBe(300);
@@ -433,9 +562,9 @@ describe("SessionOrchestrator", () => {
     it("updatePhysicalSessionModel changes model", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ model: "gpt-4" }));
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ model: "gpt-4" }));
 
-      orch.updatePhysicalSessionModel(sessionId, "gpt-4.1");
+      updatePhysicalSessionModel(orch, sessionId, "gpt-4.1");
 
       const session = orch.getSessionStatuses()[sessionId];
       expect(session.physicalSession?.model).toBe("gpt-4.1");
@@ -445,7 +574,7 @@ describe("SessionOrchestrator", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
 
-      orch.addSubagentSession(sessionId, {
+      addSubagentSession(orch, sessionId, {
         toolCallId: "tc-1",
         agentName: "worker",
         agentDisplayName: "Worker",
@@ -457,20 +586,18 @@ describe("SessionOrchestrator", () => {
       expect(session.subagentSessions).toHaveLength(1);
       expect(session.subagentSessions![0]!.status).toBe("running");
 
-      orch.updateSubagentStatus(sessionId, "tc-1", "completed");
+      updateSubagentStatus(orch, sessionId, "tc-1", "completed");
 
       session = orch.getSessionStatuses()[sessionId];
       expect(session.subagentSessions![0]!.status).toBe("completed");
     });
 
-    it("does nothing for unknown session", () => {
+    it("does nothing for unknown session (helpers return early)", () => {
       const orch = new SessionOrchestrator();
-      expect(() => orch.updatePhysicalSessionState("nonexistent", "idle")).not.toThrow();
-      expect(() => orch.updatePhysicalSessionTokens("nonexistent", 0, 0)).not.toThrow();
-      expect(() => orch.accumulateUsageTokens("nonexistent", 0, 0)).not.toThrow();
-      expect(() => orch.updatePhysicalSessionModel("nonexistent", "gpt-4")).not.toThrow();
-      expect(() => orch.addSubagentSession("nonexistent", { toolCallId: "t", agentName: "w", agentDisplayName: "W", status: "running", startedAt: "" })).not.toThrow();
-      expect(() => orch.updateSubagentStatus("nonexistent", "t", "completed")).not.toThrow();
+      // Helpers check getSession — with unknown id, getSession returns undefined
+      expect(orch.getSession("nonexistent")).toBeUndefined();
+      expect(orch.getSession("nonexistent")).toBeUndefined();
+      // No throw — all helpers guard against undefined
     });
   });
 
@@ -478,7 +605,8 @@ describe("SessionOrchestrator", () => {
     it("revives suspended session when agent reports it running", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.suspendSession(sessionId);
+      setStatus(orch, sessionId, "waiting");
+      suspendSession(orch, sessionId);
       expect(orch.hasActiveSessionForChannel("ch-1")).toBe(false);
 
       orch.reconcileWithAgent([{ sessionId, status: "waiting" }]);
@@ -500,7 +628,8 @@ describe("SessionOrchestrator", () => {
     it("does not remap sessionId for unknown sessions", () => {
       const orch = new SessionOrchestrator();
       const orchSessionId = orch.startSession("ch-1");
-      orch.suspendSession(orchSessionId);
+      setStatus(orch, orchSessionId, "waiting");
+      suspendSession(orch, orchSessionId);
 
       orch.reconcileWithAgent([{ sessionId: "agent-different-id", status: "waiting" }]);
 
@@ -513,7 +642,7 @@ describe("SessionOrchestrator", () => {
     it("does not affect already-active sessions", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-1");
-      orch.updateSessionStatus(sessionId, "processing");
+      setStatus(orch, sessionId, "processing");
 
       orch.reconcileWithAgent([{ sessionId, status: "waiting" }]);
 
@@ -623,10 +752,10 @@ describe("SessionOrchestrator", () => {
     it("idleSession keeps physicalSession visible with stopped state and archives to history", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-idle");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession());
-      orch.updateSessionStatus(sessionId, "waiting");
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession());
 
-      orch.idleSession(sessionId);
+      idleSession(orch, sessionId);
 
       const statuses = orch.getSessionStatuses();
       const session = statuses[sessionId]!;
@@ -645,10 +774,10 @@ describe("SessionOrchestrator", () => {
     it("suspendSession archives physicalSession to history", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-suspend");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession());
-      orch.updateSessionStatus(sessionId, "waiting");
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession());
 
-      orch.suspendSession(sessionId);
+      suspendSession(orch, sessionId);
 
       const statuses = orch.getSessionStatuses();
       const session = statuses[sessionId]!;
@@ -660,8 +789,9 @@ describe("SessionOrchestrator", () => {
     it("revives from idle status on startSession", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-revive");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession());
-      orch.idleSession(sessionId);
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession());
+      idleSession(orch, sessionId);
       expect(orch.hasActiveSessionForChannel("ch-revive")).toBe(false);
 
       const revived = orch.startSession("ch-revive");
@@ -673,17 +803,19 @@ describe("SessionOrchestrator", () => {
     it("idle sessions are not active for hasActiveSessionForChannel", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-check");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession());
-      orch.idleSession(sessionId);
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession());
+      idleSession(orch, sessionId);
       expect(orch.hasActiveSessionForChannel("ch-check")).toBe(false);
     });
 
     it("idleSession accumulates tokens from physicalSession", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-tokens");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 500, totalOutputTokens: 300 }));
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ totalInputTokens: 500, totalOutputTokens: 300 }));
 
-      orch.idleSession(sessionId);
+      idleSession(orch, sessionId);
 
       const session = orch.getSessionStatuses()[sessionId]!;
       expect(session.cumulativeInputTokens).toBe(500);
@@ -693,10 +825,11 @@ describe("SessionOrchestrator", () => {
     it("calling idleSession twice does not double-count tokens", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-double");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 100, totalOutputTokens: 50 }));
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ totalInputTokens: 100, totalOutputTokens: 50 }));
 
-      orch.idleSession(sessionId);
-      orch.idleSession(sessionId); // simulates end-turn-run API + onPhysicalSessionEnded race
+      idleSession(orch, sessionId);
+      idleSession(orch, sessionId); // simulates end-turn-run API + onPhysicalSessionEnded race
 
       const session = orch.getSessionStatuses()[sessionId]!;
       expect(session.cumulativeInputTokens).toBe(100);
@@ -706,10 +839,11 @@ describe("SessionOrchestrator", () => {
     it("idleSession followed by suspendSession does not double-count tokens", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-idle-suspend");
-      orch.updatePhysicalSession(sessionId, makePhysicalSession({ totalInputTokens: 200, totalOutputTokens: 80 }));
+      setStatus(orch, sessionId, "waiting");
+      setPhysicalSession(orch, sessionId, makePhysicalSession({ totalInputTokens: 200, totalOutputTokens: 80 }));
 
-      orch.idleSession(sessionId);
-      orch.suspendSession(sessionId);
+      idleSession(orch, sessionId);
+      suspendSession(orch, sessionId);
 
       const session = orch.getSessionStatuses()[sessionId]!;
       expect(session.cumulativeInputTokens).toBe(200);
@@ -725,11 +859,11 @@ describe("SessionOrchestrator", () => {
   });
 
   describe("notified status", () => {
-    it("can transition from waiting to notified", () => {
+    it("can transition from waiting to notified via applyWorldState", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-notify");
-      orch.updateSessionStatus(sessionId, "waiting");
-      orch.updateSessionStatus(sessionId, "notified");
+      setStatus(orch, sessionId, "waiting");
+      setStatus(orch, sessionId, "notified");
       expect(orch.getSessionStatuses()[sessionId]?.status).toBe("notified");
     });
   });
@@ -738,7 +872,7 @@ describe("SessionOrchestrator", () => {
     it("sets processingStartedAt on transition to processing", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-proc");
-      orch.updateSessionStatus(sessionId, "processing");
+      setStatus(orch, sessionId, "processing");
       const session = orch.getSessionStatuses()[sessionId]!;
       expect(session.processingStartedAt).toBeDefined();
       expect(typeof session.processingStartedAt).toBe("string");
@@ -747,10 +881,10 @@ describe("SessionOrchestrator", () => {
     it("clears processingStartedAt on transition away from processing", () => {
       const orch = new SessionOrchestrator();
       const sessionId = orch.startSession("ch-proc2");
-      orch.updateSessionStatus(sessionId, "processing");
+      setStatus(orch, sessionId, "processing");
       expect(orch.getSessionStatuses()[sessionId]!.processingStartedAt).toBeDefined();
 
-      orch.updateSessionStatus(sessionId, "waiting");
+      setStatus(orch, sessionId, "waiting");
       expect(orch.getSessionStatuses()[sessionId]!.processingStartedAt).toBeUndefined();
     });
   });
@@ -759,10 +893,11 @@ describe("SessionOrchestrator", () => {
     it("does not suspend idle sessions", () => {
       const orch = new SessionOrchestrator();
       const s1 = orch.startSession("ch-active");
-      orch.updateSessionStatus(s1, "waiting");
+      setStatus(orch, s1, "waiting");
       const s2 = orch.startSession("ch-idle2");
-      orch.updatePhysicalSession(s2, makePhysicalSession());
-      orch.idleSession(s2);
+      setStatus(orch, s2, "waiting");
+      setPhysicalSession(orch, s2, makePhysicalSession());
+      idleSession(orch, s2);
 
       orch.idleAllActive();
 

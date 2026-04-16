@@ -1,16 +1,18 @@
 import { createServer, type Server, type Socket } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenIpc, streamEvents, sendToGateway, requestFromGateway, hasStream, setStreamSocket, getStreamSocket } from "../src/ipc-server.js";
+
+const SOCKET_BASE = join(import.meta.dirname, "..", "..", "..", "tmp", "test-state", "agent", "ipc-stream-sockets");
+mkdirSync(SOCKET_BASE, { recursive: true });
 
 describe("IPC stream — bidirectional messaging", () => {
   let tmpDir: string;
   let socketPath: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "ipc-stream-test-"));
+    tmpDir = mkdtempSync(join(SOCKET_BASE, "ipc-stream-test-"));
     socketPath = join(tmpDir, "test.sock");
   });
 

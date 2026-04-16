@@ -16,7 +16,13 @@
 
 参照: `docs/requirements/channel.md` の「Req: メッセージ消費とセッションステータス管理のバグ修正」に個別バグの詳細リストがある。
 
-## Req: 系全体の状態管理の整合性（未実現）
+## Req: 系全体の状態管理の整合性
+
+AbstractSession（gateway）と PhysicalSession（agent）の 2 subsystem は v0.81.0 で reducer 化済み。残り 8 subsystem + event bus infrastructure は v0.82.0 で実現する。
+
+対象: Channel（gateway）、PendingQueue（gateway）、SSE Broadcaster（gateway）、CopilotClient（agent）、SendQueue（IPC）、RPC（IPC）、ConfigPush（IPC）、Event Bus Infrastructure
+
+## Req: 系全体の状態管理の整合性（旧）
 
 問題は特定の subsystem（セッション管理など）に限定されない。gateway 側・agent 側・IPC/cross-cutting のすべての subsystem にまたがる状態管理上の整合性の欠如がある。
 

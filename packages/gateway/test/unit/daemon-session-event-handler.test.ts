@@ -353,10 +353,32 @@ describe("daemon onChannelMessage — agent sender senderMeta (via handleChannel
 });
 
 import { SessionOrchestrator } from "../../src/session-orchestrator.js";
+import type { AbstractSessionWorldState } from "../../src/session-events.js";
+import type { PhysicalSessionSummary, SubagentInfo } from "../../src/ipc-client.js";
+
+// Helper: read current world state for a session
+function getWorldState(orch: SessionOrchestrator, sessionId: string): AbstractSessionWorldState {
+  const s = orch.getSession(sessionId)!;
+  return {
+    sessionId: s.sessionId, channelId: s.channelId, status: s.status,
+    waitingOnWaitTool: s.waitingOnWaitTool, hasHadPhysicalSession: s.hasHadPhysicalSession,
+    physicalSessionId: s.physicalSessionId, physicalSession: s.physicalSession,
+    physicalSessionHistory: s.physicalSessionHistory,
+    cumulativeInputTokens: s.cumulativeInputTokens, cumulativeOutputTokens: s.cumulativeOutputTokens,
+    subagentSessions: s.subagentSessions, processingStartedAt: s.processingStartedAt, startedAt: s.startedAt,
+  };
+}
+
+// Helper: set physical session via applyWorldState
+function setPhysicalSession(orch: SessionOrchestrator, sessionId: string, ps: PhysicalSessionSummary): void {
+  const state = getWorldState(orch, sessionId);
+  orch.applyWorldState({ ...state, physicalSession: ps, hasHadPhysicalSession: true });
+}
 
 /**
  * Replicates the orchestrator routing block added to daemon.ts onSessionEvent.
  * Uses sessionId (opaque gateway token) directly, matching the new daemon routing logic.
+ * Now routes through applyWorldState (single write path) instead of deleted direct-mutate methods.
  */
 function routeEventToOrchestrator(
   orchestrator: SessionOrchestrator,
@@ -365,50 +387,74 @@ function routeEventToOrchestrator(
   timestamp: string,
   data: Record<string, unknown>,
 ): void {
-  if (orchestrator.getSessionStatuses()[sessionId] === undefined) return;
-  const orchSessionId = sessionId;
+  const session = orchestrator.getSession(sessionId);
+  if (session === undefined) return;
+  const state = getWorldState(orchestrator, sessionId);
+  const ps = state.physicalSession;
 
   switch (eventType) {
     case "tool.execution_start":
-      orchestrator.updatePhysicalSessionState(orchSessionId, `tool:${data["toolName"] as string ?? "unknown"}`);
+      if (ps !== undefined) {
+        orchestrator.applyWorldState({ ...state, physicalSession: { ...ps, currentState: `tool:${data["toolName"] as string ?? "unknown"}` } });
+      }
       break;
     case "tool.execution_complete":
     case "session.idle":
-      orchestrator.updatePhysicalSessionState(orchSessionId, "idle");
+      if (ps !== undefined) {
+        orchestrator.applyWorldState({ ...state, physicalSession: { ...ps, currentState: "idle" } });
+      }
       break;
     case "session.usage_info":
-      orchestrator.updatePhysicalSessionTokens(
-        orchSessionId,
-        data["currentTokens"] as number ?? 0,
-        data["tokenLimit"] as number ?? 0,
-      );
+      if (ps !== undefined) {
+        orchestrator.applyWorldState({ ...state, physicalSession: { ...ps, currentTokens: data["currentTokens"] as number ?? 0, tokenLimit: data["tokenLimit"] as number ?? 0 } });
+      }
       break;
-    case "assistant.usage":
-      orchestrator.accumulateUsageTokens(
-        orchSessionId,
-        data["inputTokens"] as number ?? 0,
-        data["outputTokens"] as number ?? 0,
-        data["quotaSnapshots"] as Record<string, unknown> | undefined,
-      );
+    case "assistant.usage": {
+      if (ps !== undefined) {
+        const snapshots = data["quotaSnapshots"] as Record<string, unknown> | undefined;
+        orchestrator.applyWorldState({
+          ...state,
+          physicalSession: {
+            ...ps,
+            totalInputTokens: (ps.totalInputTokens ?? 0) + (data["inputTokens"] as number ?? 0),
+            totalOutputTokens: (ps.totalOutputTokens ?? 0) + (data["outputTokens"] as number ?? 0),
+            ...(snapshots !== undefined ? { latestQuotaSnapshots: snapshots } : {}),
+          },
+        });
+      }
       break;
+    }
     case "session.model_change":
-      orchestrator.updatePhysicalSessionModel(orchSessionId, data["newModel"] as string ?? "unknown");
+      if (ps !== undefined) {
+        orchestrator.applyWorldState({ ...state, physicalSession: { ...ps, model: data["newModel"] as string ?? "unknown" } });
+      }
       break;
-    case "subagent.started":
-      orchestrator.addSubagentSession(orchSessionId, {
+    case "subagent.started": {
+      const newInfo: SubagentInfo = {
         toolCallId: data["toolCallId"] as string ?? "",
         agentName: data["agentName"] as string ?? "unknown",
         agentDisplayName: data["agentDisplayName"] as string ?? "unknown",
         status: "running",
         startedAt: timestamp,
-      });
+      };
+      const existing = state.subagentSessions ?? [];
+      let updated = [...existing, newInfo];
+      if (updated.length > 50) updated = updated.slice(updated.length - 50);
+      orchestrator.applyWorldState({ ...state, subagentSessions: updated });
       break;
+    }
     case "subagent.completed":
-      orchestrator.updateSubagentStatus(orchSessionId, data["toolCallId"] as string ?? "", "completed");
+    case "subagent.failed": {
+      if (state.subagentSessions !== undefined) {
+        const status = eventType === "subagent.completed" ? "completed" : "failed";
+        const toolCallId = data["toolCallId"] as string ?? "";
+        const updatedSubs = state.subagentSessions.map((s) =>
+          s.toolCallId === toolCallId ? { ...s, status } : s,
+        );
+        orchestrator.applyWorldState({ ...state, subagentSessions: updatedSubs });
+      }
       break;
-    case "subagent.failed":
-      orchestrator.updateSubagentStatus(orchSessionId, data["toolCallId"] as string ?? "", "failed");
-      break;
+    }
   }
 }
 
@@ -416,7 +462,7 @@ describe("daemon onSessionEvent — orchestrator routing via sessionId", () => {
   it("routes assistant.usage to accumulateUsageTokens after physical_session_started", () => {
     const orch = new SessionOrchestrator();
     const sessionId = orch.startSession("ch-routing");
-    orch.updatePhysicalSession(sessionId, {
+    setPhysicalSession(orch, sessionId, {
       sessionId: "copilot-xyz",
       model: "gpt-4.1",
       startedAt: "2026-01-01T00:00:00Z",
@@ -442,7 +488,7 @@ describe("daemon onSessionEvent — orchestrator routing via sessionId", () => {
   it("routes tool.execution_start to updatePhysicalSessionState", () => {
     const orch = new SessionOrchestrator();
     const sessionId = orch.startSession("ch-tool");
-    orch.updatePhysicalSession(sessionId, {
+    setPhysicalSession(orch, sessionId, {
       sessionId: "copilot-abc",
       model: "gpt-4.1",
       startedAt: "2026-01-01T00:00:00Z",
@@ -460,7 +506,7 @@ describe("daemon onSessionEvent — orchestrator routing via sessionId", () => {
   it("resets currentState to idle on tool.execution_complete", () => {
     const orch = new SessionOrchestrator();
     const sessionId = orch.startSession("ch-idle");
-    orch.updatePhysicalSession(sessionId, {
+    setPhysicalSession(orch, sessionId, {
       sessionId: "copilot-idle",
       model: "gpt-4.1",
       startedAt: "2026-01-01T00:00:00Z",
@@ -489,7 +535,7 @@ describe("daemon onSessionEvent — orchestrator routing via sessionId", () => {
   it("routes session.model_change to updatePhysicalSessionModel", () => {
     const orch = new SessionOrchestrator();
     const sessionId = orch.startSession("ch-model");
-    orch.updatePhysicalSession(sessionId, {
+    setPhysicalSession(orch, sessionId, {
       sessionId: "copilot-model",
       model: "gpt-4",
       startedAt: "2026-01-01T00:00:00Z",
@@ -507,7 +553,7 @@ describe("daemon onSessionEvent — orchestrator routing via sessionId", () => {
   it("routes subagent.started and subagent.completed through the orchestrator", () => {
     const orch = new SessionOrchestrator();
     const sessionId = orch.startSession("ch-sub");
-    orch.updatePhysicalSession(sessionId, {
+    setPhysicalSession(orch, sessionId, {
       sessionId: "copilot-sub",
       model: "gpt-4.1",
       startedAt: "2026-01-01T00:00:00Z",

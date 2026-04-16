@@ -4,8 +4,11 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 
 import type { PhysicalSessionSummary, SubagentInfo } from "./ipc-client.js";
+import type { AbstractSessionWorldState, AbstractSessionStatus } from "./session-events.js";
+import { reduceAbstractSession } from "./session-reducer.js";
+import type { Store } from "./store.js";
 
-export type AbstractSessionStatus = "new" | "starting" | "waiting" | "notified" | "processing" | "idle" | "suspended";
+export type { AbstractSessionStatus };
 
 export interface AbstractSession {
   sessionId: string;
@@ -33,6 +36,8 @@ export interface SessionOrchestratorOptions {
   persistPath?: string;
   /** Path to legacy agent-bindings.json for one-time migration. */
   legacyBindingsPath?: string;
+  /** Store instance for channel backoff persistence (v0.82.0). */
+  store?: Store;
 }
 
 export class SessionOrchestrator {
@@ -40,6 +45,7 @@ export class SessionOrchestrator {
   private readonly channelBindings = new Map<string, string>(); // channelId → sessionId
   private readonly channelBackoff = new Map<string, number>(); // channelId → expiresAt timestamp
   private readonly db: Database.Database;
+  private readonly store: Store | undefined;
 
   constructor(options?: SessionOrchestratorOptions) {
     const dbPath = options?.persistPath ?? ":memory:";
@@ -48,6 +54,7 @@ export class SessionOrchestrator {
     }
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
+    this.store = options?.store;
     this.initSchema();
 
     // One-time migration from legacy agent-bindings.json (must run before data migrations
@@ -58,6 +65,7 @@ export class SessionOrchestrator {
 
     this.runDataMigrations();
     this.loadFromDb();
+    this.loadBackoffsFromStore();
   }
 
   private static readonly LATEST_SCHEMA_VERSION = 4;
@@ -303,8 +311,11 @@ export class SessionOrchestrator {
   }
 
   /**
-   * Create a new session bound to the given channel, or revive a suspended
-   * session that is already bound to it.  Returns the sessionId.
+   * Create a new abstract session bound to the given channel, or revive a suspended/idle/new
+   * session that is already bound to it. Returns the sessionId.
+   *
+   * This is the sole method that can create new sessions. Reviving uses applyWorldState
+   * to keep the single write-path invariant.
    */
   startSession(channelId: string): string {
     const existingSessionId = this.channelBindings.get(channelId);
@@ -312,10 +323,10 @@ export class SessionOrchestrator {
       const existing = this.sessions.get(existingSessionId);
       if (existing !== undefined) {
         if (existing.status === "suspended" || existing.status === "idle" || existing.status === "new") {
-          // Revive from suspended, idle, or new
-          existing.status = "starting";
-          existing.channelId = channelId;
-          this.persistSession(existing);
+          // Revive from suspended, idle, or new via applyWorldState (single write path)
+          const worldState = this.sessionToWorldState(existing);
+          const revived: AbstractSessionWorldState = { ...worldState, status: "starting" };
+          this.applyWorldState(revived);
           return existingSessionId;
         }
         // Already active — return as-is
@@ -324,75 +335,24 @@ export class SessionOrchestrator {
     }
 
     const sessionId = randomUUID();
-    const session: AbstractSession = {
+    const now = new Date().toISOString();
+    const newState: AbstractSessionWorldState = {
       sessionId,
       status: "new",
       channelId,
-      startedAt: new Date().toISOString(),
+      startedAt: now,
+      physicalSessionId: undefined,
       cumulativeInputTokens: 0,
       cumulativeOutputTokens: 0,
+      physicalSession: undefined,
       physicalSessionHistory: [],
+      subagentSessions: undefined,
+      processingStartedAt: undefined,
       waitingOnWaitTool: false,
       hasHadPhysicalSession: false,
     };
-    this.sessions.set(sessionId, session);
-    this.channelBindings.set(channelId, sessionId);
-    this.persistSession(session);
+    this.applyWorldState(newState);
     return sessionId;
-  }
-
-  /**
-   * Transition a session to suspended.  Accumulates token counts from the
-   * current physical session (if any) and moves it to history.
-   */
-  suspendSession(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return;
-
-    if (session.physicalSession !== undefined) {
-      // If already idle, tokens were already accumulated and physicalSession
-      // was already pushed to history — just clear the visible reference.
-      if (session.status === "idle") {
-        session.physicalSession = undefined;
-      } else {
-        session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
-        session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
-        session.physicalSessionHistory.push(session.physicalSession);
-        session.physicalSession = undefined;
-      }
-    }
-    session.subagentSessions = undefined;
-    session.processingStartedAt = undefined;
-    session.status = "suspended";
-    this.persistSession(session);
-  }
-
-  /**
-   * Transition a session to idle (turn run ended).
-   * Accumulates token counts, archives physicalSession to history (so it
-   * survives restart), and keeps a visible reference with zeroed tokens.
-   */
-  idleSession(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return;
-
-    if (session.physicalSession !== undefined && session.status !== "idle") {
-      session.cumulativeInputTokens += session.physicalSession.totalInputTokens ?? 0;
-      session.cumulativeOutputTokens += session.physicalSession.totalOutputTokens ?? 0;
-      // Push to history with original token counts before zeroing, so that
-      // loadFromDb can restore a visible physicalSession on restart.
-      session.physicalSessionHistory.push({ ...session.physicalSession });
-      // Zero out to prevent double-counting if idleSession or suspendSession is called
-      // again on the same physical session (e.g., end-turn-run API followed by
-      // onPhysicalSessionEnded callback).
-      session.physicalSession.totalInputTokens = 0;
-      session.physicalSession.totalOutputTokens = 0;
-      session.physicalSession.currentState = "stopped";
-    }
-    session.subagentSessions = undefined;
-    session.processingStartedAt = undefined;
-    session.status = "idle";
-    this.persistSession(session);
   }
 
   /** Return a snapshot of all sessions keyed by sessionId. */
@@ -423,14 +383,33 @@ export class SessionOrchestrator {
     if (expiresAt === undefined) return false;
     if (Date.now() >= expiresAt) {
       this.channelBackoff.delete(channelId);
+      this.store?.clearChannelBackoff(channelId);
       return false;
     }
     return true;
   }
 
-  /** Record a backoff period for the channel. */
+  /** Record a backoff period for the channel. Persists to store if available. */
   recordBackoff(channelId: string, durationMs: number): void {
-    this.channelBackoff.set(channelId, Date.now() + durationMs);
+    const expiresAt = Date.now() + durationMs;
+    this.channelBackoff.set(channelId, expiresAt);
+    // Persist via store (v0.82.0 — replaces ephemeral-only backoff)
+    this.store?.persistChannelBackoff(channelId, 1, expiresAt, `backoff ${durationMs}ms`);
+  }
+
+  /** Load persisted channel backoffs from store on startup (v0.82.0). */
+  private loadBackoffsFromStore(): void {
+    if (this.store === undefined) return;
+    const backoffs = this.store.loadChannelBackoffs();
+    const now = Date.now();
+    for (const b of backoffs) {
+      if (b.nextRetryAt > now) {
+        this.channelBackoff.set(b.channelId, b.nextRetryAt);
+      } else {
+        // Expired backoff — clean it up
+        this.store.clearChannelBackoff(b.channelId);
+      }
+    }
   }
 
   /**
@@ -447,95 +426,6 @@ export class SessionOrchestrator {
   /** Get the sessionId bound to a channel, if any. */
   getSessionIdForChannel(channelId: string): string | undefined {
     return this.channelBindings.get(channelId);
-  }
-
-  /** Set or clear the waitingOnWaitTool flag. */
-  setWaitingOnWaitTool(sessionId: string, value: boolean): void {
-    const session = this.sessions.get(sessionId);
-    if (session !== undefined) session.waitingOnWaitTool = value;
-    // Not persisted — in-memory only (survives restart as false, which is safe)
-  }
-
-  /** Update the current physical session on an abstract session. Also marks hasHadPhysicalSession. */
-  updatePhysicalSession(sessionId: string, physicalSession: PhysicalSessionSummary): void {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return;
-    session.physicalSession = physicalSession;
-    session.hasHadPhysicalSession = true;
-    this.persistSession(session);
-  }
-
-  /** Update the status of an abstract session. */
-  updateSessionStatus(sessionId: string, status: AbstractSessionStatus): void {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return;
-    session.status = status;
-    if (status === "processing") {
-      session.processingStartedAt = new Date().toISOString();
-    } else {
-      session.processingStartedAt = undefined;
-    }
-    this.persistSession(session);
-  }
-
-  // --- Real-time physical session state updates from forwarded SDK events ---
-  // These allow the gateway to maintain the dashboard-visible state without
-  // relying on the agent's IPC status RPC.
-
-  /** Update physical session's currentState from tool events. */
-  updatePhysicalSessionState(sessionId: string, currentState: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session?.physicalSession !== undefined) {
-      session.physicalSession.currentState = currentState;
-    }
-  }
-
-  /** Update physical session's token usage from usage_info events. */
-  updatePhysicalSessionTokens(sessionId: string, currentTokens: number, tokenLimit: number): void {
-    const session = this.sessions.get(sessionId);
-    if (session?.physicalSession !== undefined) {
-      session.physicalSession.currentTokens = currentTokens;
-      session.physicalSession.tokenLimit = tokenLimit;
-    }
-  }
-
-  /** Accumulate assistant.usage tokens on the physical session. */
-  accumulateUsageTokens(sessionId: string, inputTokens: number, outputTokens: number, quotaSnapshots?: Record<string, unknown>): void {
-    const session = this.sessions.get(sessionId);
-    if (session?.physicalSession !== undefined) {
-      const ps = session.physicalSession;
-      ps.totalInputTokens = (ps.totalInputTokens ?? 0) + inputTokens;
-      ps.totalOutputTokens = (ps.totalOutputTokens ?? 0) + outputTokens;
-      if (quotaSnapshots !== undefined) {
-        ps.latestQuotaSnapshots = quotaSnapshots;
-      }
-    }
-  }
-
-  /** Update model on physical session from model_change events. */
-  updatePhysicalSessionModel(sessionId: string, newModel: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session?.physicalSession !== undefined) {
-      session.physicalSession.model = newModel;
-    }
-  }
-
-  /** Track a subagent session start. */
-  addSubagentSession(sessionId: string, info: SubagentInfo): void {
-    const session = this.sessions.get(sessionId);
-    if (session === undefined) return;
-    if (session.subagentSessions === undefined) session.subagentSessions = [];
-    session.subagentSessions.push(info);
-    if (session.subagentSessions.length > 50) {
-      session.subagentSessions.splice(0, session.subagentSessions.length - 50);
-    }
-  }
-
-  /** Update a subagent session status. */
-  updateSubagentStatus(sessionId: string, toolCallId: string, status: "completed" | "failed"): void {
-    const session = this.sessions.get(sessionId);
-    const sub = session?.subagentSessions?.find((s) => s.toolCallId === toolCallId);
-    if (sub !== undefined) sub.status = status;
   }
 
   /**
@@ -566,11 +456,19 @@ export class SessionOrchestrator {
    * Transition all active sessions to idle (not suspended).
    * Used when the agent stream disconnects (agent restart) — physical sessions
    * are gone but abstract sessions should remain visible with their last state.
+   * Routes each session through the reducer's PhysicalSessionEnded(reason="idle") event.
    */
   idleAllActive(): void {
-    for (const [sessionId, session] of this.sessions) {
+    for (const [, session] of this.sessions) {
       if (session.status !== "suspended" && session.status !== "idle" && session.status !== "new") {
-        this.idleSession(sessionId);
+        const state = this.sessionToWorldState(session);
+        const { newState } = reduceAbstractSession(state, {
+          type: "PhysicalSessionEnded",
+          physicalSessionId: session.physicalSessionId ?? "",
+          reason: "idle",
+          elapsedMs: 0,
+        });
+        this.applyWorldState(newState);
       }
     }
   }
@@ -588,23 +486,41 @@ export class SessionOrchestrator {
   reconcileWithAgent(runningSessions: Array<{ sessionId: string; status: string }>): void {
     const reportedIds = new Set(runningSessions.map((r) => r.sessionId));
 
-    // Suspend any sessions that orchestrator thinks are active but agent doesn't report.
+    // Idle any sessions that orchestrator thinks are active but agent doesn't report.
     // This handles: gateway restart → orchestrator loads stale "active" state from SQLite
-    // → agent is a new process with no sessions → stale active sessions must be suspended.
+    // → agent is a new process with no sessions → stale active sessions must be idled.
     for (const [sessionId, session] of this.sessions) {
       if (session.status !== "suspended" && session.status !== "idle" && session.status !== "new" && !reportedIds.has(sessionId)) {
         console.error(`[orchestrator] reconciled: idling stale session ${sessionId.slice(0, 8)} (not reported by agent)`);
-        this.idleSession(sessionId);
+        const state = this.sessionToWorldState(session);
+        const { newState } = reduceAbstractSession(state, {
+          type: "PhysicalSessionEnded",
+          physicalSessionId: session.physicalSessionId ?? "",
+          reason: "idle",
+          elapsedMs: 0,
+        });
+        this.applyWorldState(newState);
       }
     }
 
-    // Revive suspended sessions that agent reports as running.
+    // Revive suspended/idle sessions that agent reports as running.
     for (const running of runningSessions) {
       const existing = this.sessions.get(running.sessionId);
       if (existing !== undefined) {
         if (existing.status === "suspended" || existing.status === "idle") {
-          existing.status = running.status === "waiting" ? "waiting" : running.status === "processing" ? "processing" : "starting";
-          this.persistSession(existing);
+          // Map agent-reported status to abstract session status
+          const targetStatus: AbstractSessionStatus =
+            running.status === "waiting" ? "waiting"
+            : running.status === "processing" ? "processing"
+            : "starting";
+          const state = this.sessionToWorldState(existing);
+          // Apply directly since reducer may not have a direct "revive to arbitrary status" path
+          const revivedState: AbstractSessionWorldState = {
+            ...state,
+            status: targetStatus,
+            processingStartedAt: targetStatus === "processing" ? new Date().toISOString() : undefined,
+          };
+          this.applyWorldState(revivedState);
           console.error(`[orchestrator] reconciled: revived session ${running.sessionId.slice(0, 8)}`);
         }
       } else {
@@ -628,13 +544,14 @@ export class SessionOrchestrator {
 
   /**
    * Apply a world state snapshot to the in-memory map and persist it to SQLite.
-   * This is the single write path used by the effect runtime after reducer execution.
-   * Replaces the scattered direct-mutate pattern throughout session-orchestrator.ts.
+   * This is the single write path for all session state changes.
+   * Used by the effect runtime after reducer execution, and internally by
+   * startSession / idleAllActive / reconcileWithAgent.
    *
    * The orchestrator's channelBindings map is kept consistent: if the channelId
    * changes (e.g., a session becomes unbound), the binding is updated accordingly.
    */
-  applyWorldState(state: import("./session-events.js").AbstractSessionWorldState): void {
+  applyWorldState(state: AbstractSessionWorldState): void {
     const existing = this.sessions.get(state.sessionId);
 
     const session: AbstractSession = {
@@ -665,5 +582,24 @@ export class SessionOrchestrator {
 
     this.sessions.set(state.sessionId, session);
     this.persistSession(session);
+  }
+
+  /** Convert an AbstractSession to its world-state representation. */
+  private sessionToWorldState(session: AbstractSession): AbstractSessionWorldState {
+    return {
+      sessionId: session.sessionId,
+      channelId: session.channelId,
+      status: session.status,
+      waitingOnWaitTool: session.waitingOnWaitTool,
+      hasHadPhysicalSession: session.hasHadPhysicalSession,
+      physicalSessionId: session.physicalSessionId,
+      physicalSession: session.physicalSession,
+      physicalSessionHistory: session.physicalSessionHistory,
+      cumulativeInputTokens: session.cumulativeInputTokens,
+      cumulativeOutputTokens: session.cumulativeOutputTokens,
+      subagentSessions: session.subagentSessions,
+      processingStartedAt: session.processingStartedAt,
+      startedAt: session.startedAt,
+    };
   }
 }
