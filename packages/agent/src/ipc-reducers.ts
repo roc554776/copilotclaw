@@ -107,6 +107,24 @@ export function reduceSendQueue(
         commands: allToFlush.length > 0 ? [{ type: "FlushBatch", messages: allToFlush }] : [],
       };
     }
+
+    case "QueueOverflowed": {
+      // Drop the oldest message and append the new one (queue-full eviction policy).
+      const trimmed = state.messages.slice(1);
+      const newMessages = [...trimmed, event.message];
+      return {
+        newState: { ...state, messages: newMessages },
+        commands: [{ type: "PersistQueue", messages: newMessages }],
+      };
+    }
+
+    case "LegacyFlushCompleted": {
+      // Pre-ACK messages were flushed with no _queueId — clear state and disk immediately.
+      return {
+        newState: { ...state, messages: [], flushInProgress: false, pendingAckIds: [] },
+        commands: [{ type: "ClearDisk" }],
+      };
+    }
   }
 }
 

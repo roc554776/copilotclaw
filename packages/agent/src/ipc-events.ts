@@ -27,7 +27,11 @@ export type SendQueueEvent =
   | { type: "MessageAcknowledged"; messageId: string }
   | { type: "FlushCompleted" }
   | { type: "ConnectionLost" }
-  | { type: "ConnectionRestored" };
+  | { type: "ConnectionRestored" }
+  /** Evict the oldest message and enqueue a new one atomically (queue-full policy). */
+  | { type: "QueueOverflowed"; message: QueuedMessage }
+  /** Flush of legacy (pre-ACK) messages completed — clear state immediately (no ACKs expected). */
+  | { type: "LegacyFlushCompleted" };
 
 export type SendQueueCommand =
   | { type: "FlushBatch"; messages: QueuedMessage[] }

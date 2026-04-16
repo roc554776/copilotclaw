@@ -1,7 +1,15 @@
+import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import type { LogEntry } from "./log-buffer.js";
 import type { SessionEvent } from "./session-event-store.js";
 import type { Channel } from "./store.js";
+import { reduceChannelSse, reduceGlobalSse } from "./sse-broadcaster-reducer.js";
+import type {
+  ChannelScopedSseState,
+  GlobalSseState,
+  SseBroadcasterEvent,
+  ChannelSseEvent,
+} from "./sse-broadcaster-events.js";
 
 /**
  * Token usage summary aggregated per model over a time window.
@@ -59,9 +67,68 @@ export function formatSessionSseFrame(event: SseSessionEvent): string {
  * Server-Sent Events broadcaster. Uses SSE instead of WebSocket
  * because Node.js 22 has no built-in WebSocketServer and SSE
  * requires no external dependencies.
+ *
+ * World state (replay buffers) is managed by the channel and global SSE reducers.
+ * Process state (live HTTP response handles) is kept in the `clients` Set and
+ * is intentionally excluded from reducer world state — it cannot be serialized
+ * and is not subject to reducer transitions.
  */
 export class SseBroadcaster {
   private readonly clients = new Set<SseClient>();
+
+  // ── World state managed by reducers ──────────────────────────────────────────
+
+  /** Replay buffer world state for channel-scoped SSE (managed by reduceChannelSse). */
+  private channelSseState: ChannelScopedSseState = { channels: {} };
+
+  /** Replay buffer world state for global SSE (managed by reduceGlobalSse). */
+  private globalSseState: GlobalSseState = { lastEventId: 0, recentEvents: [] };
+
+  // ── Reducer dispatch ──────────────────────────────────────────────────────────
+
+  /**
+   * Dispatch a SseBroadcasterEvent through both channel and global reducers.
+   * Executes all resulting commands as side effects against process state.
+   * clientId is required for ClientConnected/ClientDisconnected events; pass undefined otherwise.
+   */
+  private dispatchSseEvent(event: SseBroadcasterEvent, clientRes?: ServerResponse): void {
+    // Channel reducer
+    const { newState: newChannelState, commands: channelCmds } = reduceChannelSse(this.channelSseState, event);
+    this.channelSseState = newChannelState;
+
+    // Global reducer
+    const { newState: newGlobalState, commands: globalCmds } = reduceGlobalSse(this.globalSseState, event);
+    this.globalSseState = newGlobalState;
+
+    // Execute commands from both reducers
+    for (const cmd of [...channelCmds, ...globalCmds]) {
+      if (cmd.type === "BroadcastToChannel") {
+        const payload = `data: ${JSON.stringify({ ...cmd.event, channelId: cmd.channelId })}\n\n`;
+        for (const client of this.clients) {
+          if (client.scope.type === "channel" && client.scope.channelId === cmd.channelId) {
+            client.res.write(payload);
+          }
+        }
+      } else if (cmd.type === "BroadcastGlobal") {
+        const payload = `data: ${JSON.stringify(cmd.event)}\n\n`;
+        for (const client of this.clients) {
+          if (client.scope.type === "global") {
+            client.res.write(payload);
+          }
+        }
+      } else if (cmd.type === "SendReplayEvents") {
+        // Send missed events to the newly connected client.
+        if (clientRes !== undefined) {
+          for (const evt of cmd.channelEvents) {
+            clientRes.write(`data: ${JSON.stringify(evt)}\n\n`);
+          }
+          for (const evt of cmd.globalEvents) {
+            clientRes.write(`data: ${JSON.stringify(evt)}\n\n`);
+          }
+        }
+      }
+    }
+  }
 
   private initSse(res: ServerResponse): void {
     res.writeHead(200, {
@@ -73,18 +140,43 @@ export class SseBroadcaster {
     res.write(":\n\n"); // SSE comment as keepalive
   }
 
-  addChannelClient(res: ServerResponse, channelId: string): void {
+  addChannelClient(res: ServerResponse, channelId: string, lastEventId?: number): void {
     this.initSse(res);
+    const clientId = randomUUID();
     const client: SseClient = { res, scope: { type: "channel", channelId } };
     this.clients.add(client);
-    res.on("close", () => { this.clients.delete(client); });
+    // Dispatch ClientConnected: triggers SendReplayEvents command if lastEventId is set.
+    const event: SseBroadcasterEvent = {
+      type: "ClientConnected",
+      clientId,
+      scope: "channel",
+      channelId,
+      lastEventId,
+    };
+    this.dispatchSseEvent(event, res);
+    res.on("close", () => {
+      this.clients.delete(client);
+      this.dispatchSseEvent({ type: "ClientDisconnected", clientId });
+    });
   }
 
-  addGlobalClient(res: ServerResponse): void {
+  addGlobalClient(res: ServerResponse, lastEventId?: number): void {
     this.initSse(res);
+    const clientId = randomUUID();
     const client: SseClient = { res, scope: { type: "global" } };
     this.clients.add(client);
-    res.on("close", () => { this.clients.delete(client); });
+    // Dispatch ClientConnected: triggers SendReplayEvents command if lastEventId is set.
+    const event: SseBroadcasterEvent = {
+      type: "ClientConnected",
+      clientId,
+      scope: "global",
+      lastEventId,
+    };
+    this.dispatchSseEvent(event, res);
+    res.on("close", () => {
+      this.clients.delete(client);
+      this.dispatchSseEvent({ type: "ClientDisconnected", clientId });
+    });
   }
 
   addSessionClient(res: ServerResponse, sessionId: string): void {
@@ -107,12 +199,14 @@ export class SseBroadcaster {
   }
 
   broadcastToChannel(channelId: string, event: { type: string; data?: unknown }): void {
-    const payload = `data: ${JSON.stringify({ ...event, channelId })}\n\n`;
-    for (const client of this.clients) {
-      if (client.scope.type === "channel" && client.scope.channelId === channelId) {
-        client.res.write(payload);
-      }
-    }
+    // Route through ChannelEventPublished — reducer updates replay buffer and emits BroadcastToChannel command.
+    // The actual write to client.res is performed inside dispatchSseEvent via the BroadcastToChannel command.
+    const sseEvent: ChannelSseEvent = {
+      type: event.type as ChannelSseEvent["type"],
+      channelId,
+      data: event.data,
+    };
+    this.dispatchSseEvent({ type: "ChannelEventPublished", channelId, event: sseEvent });
   }
 
   broadcastToSession(sessionId: string, event: SseSessionEvent): void {
@@ -125,12 +219,9 @@ export class SseBroadcaster {
   }
 
   broadcastGlobal(event: GlobalSseEvent): void {
-    const payload = `data: ${JSON.stringify(event)}\n\n`;
-    for (const client of this.clients) {
-      if (client.scope.type === "global") {
-        client.res.write(payload);
-      }
-    }
+    // Route through GlobalEventPublished — reducer updates replay buffer and emits BroadcastGlobal command.
+    // The actual write to client.res is performed inside dispatchSseEvent via the BroadcastGlobal command.
+    this.dispatchSseEvent({ type: "GlobalEventPublished", event });
   }
 
   /**

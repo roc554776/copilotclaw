@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
+import { reduceChannel } from "./channel-reducer.js";
+import type { ChannelWorldState, ChannelEvent } from "./channel-events.js";
+import { reducePendingQueue } from "./pending-queue-reducer.js";
+import type { PendingQueueState } from "./pending-queue-events.js";
 
 export type AgentRole = "channel-operator" | "worker" | "subagent" | "unknown";
 
@@ -245,6 +249,45 @@ export class Store {
     this.onChannelListChange = cb;
   }
 
+  /** Convert a Channel SQL row to ChannelWorldState for the channel reducer. */
+  private channelToWorldState(ch: Channel): ChannelWorldState {
+    return {
+      channelId: ch.id,
+      archivedAt: ch.archivedAt != null ? Date.parse(ch.archivedAt) : undefined,
+      model: ch.model ?? undefined,
+      draft: ch.draft ?? undefined,
+      backoff: undefined, // backoff is managed separately via persistChannelBackoff/clearChannelBackoff
+    };
+  }
+
+  /**
+   * Dispatch a ChannelEvent through the channel reducer for a given channel.
+   * Loads current state from SQL, reduces, executes persistence commands, and returns the new state.
+   * Returns undefined if the channel does not exist or the transition is a no-op (state unchanged).
+   *
+   * The caller is responsible for running any SQL writes derived from the new state.
+   */
+  private dispatchChannelEvent(channelId: string, event: ChannelEvent): ChannelWorldState | undefined {
+    const ch = this.getChannel(channelId);
+    if (ch === undefined) return undefined;
+    const state = this.channelToWorldState(ch);
+    const { newState, commands } = reduceChannel(state, event);
+
+    // Execute persistence commands emitted by the reducer
+    for (const cmd of commands) {
+      if (cmd.type === "PersistDraft") {
+        const value = cmd.draft != null && cmd.draft.length > 0 ? cmd.draft : null;
+        this.db.prepare("UPDATE channels SET draft = ? WHERE id = ?").run(value, cmd.channelId);
+      } else if (cmd.type === "PersistBackoff") {
+        this.persistChannelBackoff(cmd.channelId, cmd.backoff.failureCount, cmd.backoff.nextRetryAt, cmd.backoff.lastFailureReason);
+      } else if (cmd.type === "ClearBackoff") {
+        this.clearChannelBackoff(cmd.channelId);
+      }
+    }
+
+    return newState;
+  }
+
   /** Invoke the channel list change callback safely. Exceptions are caught and logged so
    *  callers (e.g. API handlers) are never disrupted by a misbehaving callback. */
   private notifyChannelListChange(): void {
@@ -279,6 +322,8 @@ export class Store {
 
   /** Update the model setting for a channel. Pass null to clear (use global default). */
   updateChannelModel(channelId: string, model: string | null): boolean {
+    const newState = this.dispatchChannelEvent(channelId, { type: "DefaultModelSet", model: model ?? undefined });
+    if (newState === undefined) return false;
     const result = this.db.prepare("UPDATE channels SET model = ? WHERE id = ?").run(model, channelId);
     if (result.changes > 0) this.notifyChannelListChange();
     return result.changes > 0;
@@ -286,19 +331,34 @@ export class Store {
 
   /** Save a draft message for a channel. Pass null or empty string to clear. */
   saveDraft(channelId: string, draft: string | null): boolean {
-    const value = draft !== null && draft.length > 0 ? draft : null;
-    const result = this.db.prepare("UPDATE channels SET draft = ? WHERE id = ?").run(value, channelId);
-    return result.changes > 0;
+    const normalizedDraft = draft !== null && draft.length > 0 ? draft : undefined;
+    // dispatchChannelEvent handles the PersistDraft command (SQL write) via the reducer.
+    const newState = this.dispatchChannelEvent(channelId, { type: "DraftUpdated", draft: normalizedDraft });
+    return newState !== undefined;
   }
 
   archiveChannel(channelId: string): boolean {
-    const result = this.db.prepare("UPDATE channels SET archivedAt = ? WHERE id = ? AND archivedAt IS NULL").run(new Date().toISOString(), channelId);
+    const ch = this.getChannel(channelId);
+    if (ch === undefined) return false;
+    // Reducer idempotency check: if already archived, Archived event is a no-op.
+    if (ch.archivedAt != null) return false;
+    const newState = this.dispatchChannelEvent(channelId, { type: "Archived" });
+    if (newState === undefined || newState.archivedAt === undefined) return false;
+    // Use the reducer's computed archivedAt timestamp for the SQL write.
+    const archivedAtIso = new Date(newState.archivedAt).toISOString();
+    const result = this.db.prepare("UPDATE channels SET archivedAt = ? WHERE id = ?").run(archivedAtIso, channelId);
     if (result.changes > 0) this.notifyChannelListChange();
     return result.changes > 0;
   }
 
   unarchiveChannel(channelId: string): boolean {
-    const result = this.db.prepare("UPDATE channels SET archivedAt = NULL WHERE id = ? AND archivedAt IS NOT NULL").run(channelId);
+    const ch = this.getChannel(channelId);
+    if (ch === undefined) return false;
+    // Reducer idempotency check: if not archived, Unarchived event is a no-op.
+    if (ch.archivedAt == null) return false;
+    const newState = this.dispatchChannelEvent(channelId, { type: "Unarchived" });
+    if (newState === undefined || newState.archivedAt !== undefined) return false;
+    const result = this.db.prepare("UPDATE channels SET archivedAt = NULL WHERE id = ?").run(channelId);
     if (result.changes > 0) this.notifyChannelListChange();
     return result.changes > 0;
   }
@@ -361,18 +421,61 @@ export class Store {
     return rows.map((r) => this.parseMessageRow(r));
   }
 
-  drainPending(channelId: string): Message[] {
+  /** Load the current PendingQueueState for a channel from SQL (stateless load per operation). */
+  private loadPendingQueueState(channelId: string): PendingQueueState {
     type RawRow = { id: string; channelId: string; sender: "user" | "agent" | "cron" | "system"; message: string; createdAt: string; senderMeta?: string | null };
-    let rawRows: RawRow[] = [];
-    this.db.transaction(() => {
-      rawRows = this.db.prepare(
-        "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt, m.senderMeta FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC",
-      ).all(channelId) as RawRow[];
-      if (rawRows.length > 0) {
-        this.db.prepare("DELETE FROM pending_queue WHERE channelId = ?").run(channelId);
+    const rawRows = this.db.prepare(
+      "SELECT m.id, m.channelId, m.sender, m.message, m.createdAt, m.senderMeta FROM pending_queue p JOIN messages m ON p.messageId = m.id WHERE p.channelId = ? ORDER BY p.id ASC",
+    ).all(channelId) as RawRow[];
+    return {
+      channelId,
+      messages: rawRows.map((r) => this.parseMessageRow(r)),
+      drainInProgress: false,
+      lastDrainedAt: undefined,
+    };
+  }
+
+  /** Execute PendingQueueCommand effects against SQL. */
+  private executePendingQueueCommands(commands: import("./pending-queue-events.js").PendingQueueCommand[]): void {
+    for (const cmd of commands) {
+      if (cmd.type === "PersistQueue") {
+        // Rebuild the pending_queue table for this channel from the reducer's authoritative message list.
+        this.db.transaction(() => {
+          this.db.prepare("DELETE FROM pending_queue WHERE channelId = ?").run(cmd.channelId);
+          for (const msg of cmd.messages) {
+            this.db.prepare("INSERT INTO pending_queue (channelId, messageId) VALUES (?, ?)").run(cmd.channelId, msg.id);
+          }
+        })();
       }
-    })();
-    return rawRows.map((r) => this.parseMessageRow(r));
+      // DeliverMessages: side-effectful delivery — handled by callers (e.g. daemon.ts) after drainPending returns.
+      // SendAck: IPC-level acknowledgment — not applicable in the store's SQL context.
+    }
+  }
+
+  drainPending(channelId: string): Message[] {
+    const state = this.loadPendingQueueState(channelId);
+    const requestId = randomUUID();
+
+    // DrainStarted: validates that drain is possible and computes DeliverMessages command.
+    const { newState: afterDrainStart, commands: drainStartCmds } = reducePendingQueue(state, { type: "DrainStarted", requestId });
+    const deliverCmd = drainStartCmds.find((c) => c.type === "DeliverMessages");
+    if (deliverCmd === undefined) {
+      // No messages to drain (empty queue or drainInProgress).
+      return [];
+    }
+
+    const drained = (deliverCmd as { type: "DeliverMessages"; channelId: string; messages: Message[] }).messages;
+    const drainedIds = drained.map((m) => m.id);
+
+    // DrainCompleted: remove drained messages from state and emit PersistQueue command.
+    const { commands: drainCompleteCmds } = reducePendingQueue(afterDrainStart, {
+      type: "DrainCompleted",
+      requestId,
+      drainedIds,
+    });
+    this.executePendingQueueCommands(drainCompleteCmds);
+
+    return drained;
   }
 
   peekOldestPending(channelId: string): Message | undefined {
@@ -385,8 +488,11 @@ export class Store {
   }
 
   flushPending(channelId: string): number {
-    const result = this.db.prepare("DELETE FROM pending_queue WHERE channelId = ?").run(channelId);
-    return result.changes;
+    const state = this.loadPendingQueueState(channelId);
+    const { commands } = reducePendingQueue(state, { type: "QueueFlushed", reason: "force-flush" });
+    this.executePendingQueueCommands(commands);
+    // Return count of messages that were flushed.
+    return state.messages.length;
   }
 
   pendingCounts(): Record<string, number> {

@@ -170,9 +170,11 @@ export function initSendQueue(dataDir: string): void {
       if (loaded.length > maxQueueSize) {
         loaded = loaded.slice(loaded.length - maxQueueSize);
       }
-      // Initialize state with loaded messages
-      sendQueueState = { ...sendQueueState, messages: loaded as QueuedMessage[] };
-      // Sync pendingAckIds
+      // Initialize state with loaded messages. This is a startup restoration from
+      // persisted disk state — equivalent to loadFromDb() in the session orchestrator.
+      // pendingAckIds is intentionally cleared: disk-restored messages use _queueId-based
+      // ACK tracking which is re-established on the next stream flush.
+      sendQueueState = { ...sendQueueState, messages: loaded as QueuedMessage[], pendingAckIds: [] };
       pendingAckIds.clear();
     } catch {
       // file read error — start with empty queue
@@ -220,12 +222,8 @@ export function flushSendQueue(): void {
   if (batchIds.length > 0) {
     dispatchSendQueueEvent({ type: "FlushStarted", batchIds });
   } else {
-    // No ACK IDs — old-format messages (pre-ACK) sent. Clear state and disk immediately.
-    sendQueueState = { ...sendQueueState, messages: [], flushInProgress: false };
-    pendingAckIds.clear();
-    if (sendQueuePath !== null) {
-      try { writeFileSync(sendQueuePath, "", "utf-8"); } catch { /* non-fatal */ }
-    }
+    // No ACK IDs — old-format messages (pre-ACK) sent. Clear state and disk via reducer.
+    dispatchSendQueueEvent({ type: "LegacyFlushCompleted" });
   }
 }
 
@@ -238,15 +236,10 @@ export function sendToGateway(msg: Record<string, unknown>): void {
     const buffered = { ...msg, _queueId: nextQueueId() };
     // Enforce size limit before enqueuing
     if (sendQueueState.messages.length >= maxQueueSize) {
-      // Drop oldest by trimming state directly (eviction policy)
-      sendQueueState = {
-        ...sendQueueState,
-        messages: [...sendQueueState.messages.slice(1), buffered as QueuedMessage],
-      };
-      persistQueue();
+      // Queue full — evict oldest and add new via reducer (eviction policy).
+      dispatchSendQueueEvent({ type: "QueueOverflowed", message: buffered as QueuedMessage });
     } else {
       // Reducer issues PersistQueue command which calls persistQueue() for full rewrite.
-      // appendToQueueDisk fast path removed — reducer owns all disk writes.
       dispatchSendQueueEvent({ type: "MessageEnqueued", message: buffered as QueuedMessage });
     }
     return;
