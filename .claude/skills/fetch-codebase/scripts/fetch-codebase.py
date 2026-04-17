@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -74,7 +74,6 @@ def main() -> None:
     git_url: str = args.url
     github_info = parse_github_url(git_url)
 
-    # Resolve path
     rel_path: str
     if args.path:
         rel_path = args.path
@@ -85,7 +84,6 @@ def main() -> None:
         print("Error: --path is required for non-GitHub URLs", file=sys.stderr)
         sys.exit(1)
 
-    # Resolve commitish
     commitish: str
     if args.commitish:
         commitish = args.commitish
@@ -100,12 +98,19 @@ def main() -> None:
     repo_root = get_repo_root()
     ref_dir = repo_root / "tmp" / "ref"
     target_dir = ref_dir / rel_path
+    resolved_target = target_dir.resolve()
+    resolved_ref = ref_dir.resolve()
+    if resolved_target == resolved_ref or not resolved_target.is_relative_to(resolved_ref):
+        print(
+            f"Error: --path must resolve to a subdirectory under {ref_dir} (got {target_dir})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     index_path = ref_dir / "index.json"
 
     print(f"Target directory: {target_dir}")
     print(f"Commitish: {commitish}")
 
-    # Load or init index.json
     index_data: dict = {}
     if index_path.exists():
         try:
@@ -114,39 +119,19 @@ def main() -> None:
             print("Warning: Could not parse index.json, starting fresh")
             index_data = {}
 
-    # Check if target has its own .git directory (i.e. we previously ran git init there).
-    # Do NOT use rev-parse --is-inside-work-tree: it traverses parent directories
-    # and would match the host repo's .git, causing all subsequent git commands
-    # to corrupt the host repo.
-    is_git_repo = target_dir.exists() and (target_dir / ".git").is_dir()
-
     target_str = str(target_dir)
 
-    if not is_git_repo:
-        print(f"Cloning into {target_dir}")
-        if target_dir.exists():
-            import shutil
-            shutil.rmtree(target_dir)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        run_git(target_str, "init")
-        run_git(target_str, "remote", "add", "origin", git_url)
-    else:
-        print(f"Updating existing repository in {target_dir}")
-        # Ensure origin points to the right URL
-        origin_check = subprocess.run(
-            ["git", "-C", target_str, "remote", "get-url", "origin"],
-            capture_output=True,
-        )
-        if origin_check.returncode != 0:
-            run_git(target_str, "remote", "add", "origin", git_url)
-        else:
-            run_git(target_str, "remote", "set-url", "origin", git_url)
+    print(f"Setting up {target_dir} (fresh clone)")
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    run_git(target_str, "init")
+    run_git(target_str, "remote", "add", "origin", git_url)
 
     print(f"Fetching {commitish} from origin")
     run_git(target_str, "fetch", "--depth", "1", "origin", commitish)
     run_git(target_str, "checkout", "--force", "FETCH_HEAD")
 
-    # Update index.json
     index_data[rel_path] = {
         "url": git_url,
         "relativePath": rel_path,
