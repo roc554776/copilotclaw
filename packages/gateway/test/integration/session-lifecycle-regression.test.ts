@@ -397,6 +397,43 @@ describe("Session lifecycle regression: 7 original bugs", () => {
   });
 
   // ────────────────────────────────────────────────────────────────────────────
+  // Cron notify timing: cron message on a starting session must not call notifyAgent
+  //
+  // A cron message that arrives while a session is in "starting" state (agent not
+  // yet acknowledged) should be stored in the pending queue but must NOT call
+  // notifyAgent, because the agent is not yet ready to drain messages. The agent
+  // will drain the pending queue on its first copilotclaw_wait call after the
+  // session transitions to "waiting" state.
+  // ────────────────────────────────────────────────────────────────────────────
+
+  it("cron message on starting session: stored in pending but notifyAgent is NOT called", async () => {
+    const { controller, orchestrator, agentManager, store, channelId } = makeRig();
+    const am = spies(agentManager);
+
+    // User message starts the session (session transitions to "starting")
+    await controller.deliverMessage(channelId, "user", "start session");
+    const sessionId = orchestrator.getSessionIdForChannel(channelId)!;
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("starting");
+
+    // Reset spy so only the cron-delivery notifyAgent call (if any) is counted
+    am.notifyAgent.mockClear();
+
+    // Cron message arrives while session is still "starting"
+    await controller.deliverMessage(channelId, "cron", "[cron:test] scheduled task");
+
+    // The cron message should be stored in the pending queue
+    const oldest = store.peekOldestPending(channelId);
+    expect(oldest).toBeDefined();
+
+    // notifyAgent must NOT be called — agent is not yet ready (starting state)
+    // The pending queue will be drained when the agent enters "waiting" and calls copilotclaw_wait
+    expect(am.notifyAgent).not.toHaveBeenCalled();
+
+    // Session must remain in "starting" (no spurious transitions)
+    expect(orchestrator.getSessionStatuses()[sessionId]?.status).toBe("starting");
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────
   // Scope note: raw-requirements bugs not covered by this integration test file
   //
   // The following two MEDIUM-priority bugs from docs/raw-requirements/message-status-bugs.md

@@ -267,6 +267,12 @@ export function reduceAbstractSession(
       // Active session: notify agent (and transition waiting → notified if applicable)
       const isActive = state.status !== "suspended" && state.status !== "idle" && state.status !== "new";
       if (isActive) {
+        // "starting": agent has not yet ACKed physical_session_started — do not notify.
+        // The agent will drain the pending queue when it first calls copilotclaw_wait,
+        // which happens after the session enters "waiting" state. Notifying now is premature.
+        if (state.status === "starting") {
+          return { newState: state, commands: [] };
+        }
         const commands: AbstractSessionCommand[] = [
           { type: "NotifyAgent", sessionId: state.sessionId },
         ];

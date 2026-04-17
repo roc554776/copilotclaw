@@ -83,3 +83,32 @@ test("status bar falls back to raw status when derivedStatus absent in SSE event
     await handle.close();
   }
 });
+
+// v0.83.0 backward compatibility: DashboardPage accepts both "channel_status_change" (new name)
+// and "session_status_change" (pre-v0.83.0 name). This test verifies the old name still works.
+test("status bar updates via legacy session_status_change SSE event name (backward compat)", async ({ page }) => {
+  const store = new Store();
+  const handle: ServerHandle = await startServer({ port: 0, store, agentManager: null });
+  const baseUrl = `http://localhost:${handle.port}`;
+  const channelId = store.listChannels()[0]!.id;
+
+  try {
+    await page.goto(`${baseUrl}/?channel=${channelId}`);
+    await page.waitForSelector(".ws-connected", { timeout: 10000 });
+
+    // Broadcast with old event type name — frontend must still update status bar
+    handle.sseBroadcaster.broadcast({
+      type: "session_status_change",
+      channelId,
+      data: {
+        sessionId: "test-session-id",
+        status: "waiting",
+        derivedStatus: "pending-trigger",
+      },
+    });
+
+    await expect(page.locator("text=pending-trigger")).toBeVisible({ timeout: 3000 });
+  } finally {
+    await handle.close();
+  }
+});

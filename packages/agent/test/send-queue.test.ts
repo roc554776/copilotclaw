@@ -227,4 +227,43 @@ describe("send queue — buffering and persistence", () => {
     // No initSendQueue call — sendToGateway should still work (just no disk persistence)
     expect(() => sendToGateway({ type: "no_init" })).not.toThrow();
   });
+
+  // ── IPC flush ordering (v0.83.0 regression) ───────────────────────────────
+  // On stream connect, agent must:
+  //   1. flushSendQueue() — deliver buffered events to gateway first
+  //   2. Then (only on gateway request) send running_sessions_report
+  //
+  // This test simulates the streamConnectedHandler + requestRunningSessionsHandler
+  // sequence from index.ts and verifies the socket write order.
+
+  it("flushed messages appear in socket output before running_sessions_report", async () => {
+    const queuePath = join(TEST_DIR, "send-queue.jsonl");
+    // Pre-populate queue file with a buffered session_event (simulates agent downtime)
+    writeFileSync(queuePath, JSON.stringify({ type: "session_event", _queueId: "q-pre" }) + "\n", "utf-8");
+
+    const { initSendQueue, flushSendQueue, sendToGateway, setStreamSocket } = await getModule();
+    initSendQueue(TEST_DIR);
+
+    const written: string[] = [];
+    const mockSocket = {
+      destroyed: false,
+      write: (data: string) => { written.push(data); return true; },
+    };
+    setStreamSocket(mockSocket as never);
+
+    // Step 1: streamConnectedHandler — flush buffered messages from disk
+    flushSendQueue();
+
+    // Step 2: requestRunningSessionsHandler — send running_sessions_report (direct, not queued)
+    sendToGateway({ type: "running_sessions_report", physicalSessionIds: [] });
+
+    // Flush messages must appear before running_sessions_report
+    expect(written.length).toBeGreaterThanOrEqual(2);
+    const types = written.map((w) => (JSON.parse(w) as { type: string }).type);
+    const flushIdx = types.findIndex((t) => t === "session_event");
+    const reportIdx = types.findIndex((t) => t === "running_sessions_report");
+    expect(flushIdx).toBeGreaterThanOrEqual(0);
+    expect(reportIdx).toBeGreaterThanOrEqual(0);
+    expect(flushIdx).toBeLessThan(reportIdx);
+  });
 });

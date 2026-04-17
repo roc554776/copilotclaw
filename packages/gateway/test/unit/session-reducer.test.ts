@@ -620,6 +620,22 @@ describe("reduceAbstractSession — MessageDelivered", () => {
     expect(newState.status).toBe("idle");
     expect(commands).toHaveLength(0);
   });
+
+  it("starting session: no commands (agent not yet ready — will drain on first copilotclaw_wait)", () => {
+    // While a session is in "starting" state, the agent has not yet ACKed
+    // physical_session_started. Notifying it is premature; the pending queue will be
+    // drained when the agent first calls copilotclaw_wait after entering "waiting" state.
+    const state = makeState({ status: "starting" });
+    const { newState, commands } = reduceAbstractSession(state, {
+      type: "MessageDelivered",
+      channelId: "channel-xyz",
+      messageId: "msg-1",
+    });
+
+    expect(newState.status).toBe("starting"); // unchanged
+    expect(commands).toHaveLength(0);
+    expect(commands.map((c) => c.type)).not.toContain("NotifyAgent");
+  });
 });
 
 // ── Regression: "starting forever stuck" (Finding 2) ─────────────────────────
