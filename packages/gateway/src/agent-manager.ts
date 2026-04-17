@@ -7,6 +7,8 @@ import { type AgentStatusResponse, type IpcStream, createStreamConnection, getAg
 import { getAgentSocketPath } from "./ipc-paths.js";
 import { getDataDir } from "./workspace.js";
 import type { AgentToGatewayEvent, GatewayToAgentEvent } from "./ipc-types.js";
+import type { ConfigPushWorldState, ConfigPushEvent } from "./config-push-events.js";
+import { reduceConfigPush } from "./config-push-reducer.js";
 
 export const MIN_AGENT_VERSION = "0.83.0";
 
@@ -78,7 +80,7 @@ export class AgentManager {
   private spawningTimer: ReturnType<typeof setTimeout> | undefined;
   private stream: IpcStream | null = null;
   private streamMessageHandler: StreamMessageHandler | null = null;
-  private configToSend: Record<string, unknown> | null = null;
+  private configPushState: ConfigPushWorldState = { config: null, connected: false };
   private streamConnectedCallbacks: Array<() => void> = [];
   private streamDisconnectedCallbacks: Array<() => void> = [];
 
@@ -103,11 +105,36 @@ export class AgentManager {
 
   /** Set the config to send to the agent when the stream connects. */
   setConfigToSend(config: Record<string, unknown>): void {
-    this.configToSend = config;
-    // If stream is already connected, send immediately
-    if (this.stream !== null && this.stream.isConnected() && this.configToSend !== null) {
-      const msg: GatewayToAgentEvent = { type: "config", config: this.configToSend };
-      this.stream.send(msg as Record<string, unknown>);
+    this.dispatchConfigPushEvent({ type: "ConfigSet", config });
+  }
+
+  /** Dispatch a ConfigPush event through the reducer and execute resulting commands.
+   *
+   * Before dispatching, reconcile configPushState.connected with the actual stream
+   * state. This prevents drift when the stream is connected via means other than
+   * connectStream() (e.g., in tests that inject a mock stream directly).
+   */
+  private dispatchConfigPushEvent(event: ConfigPushEvent): void {
+    // Sync the connected flag with the actual stream state before processing the event.
+    const actuallyConnected = this.stream !== null && this.stream.isConnected();
+    if (actuallyConnected !== this.configPushState.connected) {
+      const syncEvent: ConfigPushEvent = actuallyConnected
+        ? { type: "StreamConnected" }
+        : { type: "StreamDisconnected" };
+      const { newState } = reduceConfigPush(this.configPushState, syncEvent);
+      this.configPushState = newState;
+      // Note: we do NOT execute commands from the sync step — the sync is purely
+      // to keep the state consistent. The incoming event will emit any necessary
+      // SendConfig commands below.
+    }
+
+    const { newState, commands } = reduceConfigPush(this.configPushState, event);
+    this.configPushState = newState;
+    for (const command of commands) {
+      if (command.type === "SendConfig" && this.stream !== null && this.stream.isConnected()) {
+        const msg: GatewayToAgentEvent = { type: "config", config: command.config };
+        this.stream.send(msg as Record<string, unknown>);
+      }
     }
   }
 
@@ -119,11 +146,8 @@ export class AgentManager {
 
     this.stream.on("connected", () => {
       console.error("[gateway] IPC stream connected to agent");
-      // Push config immediately on connect
-      if (this.configToSend !== null) {
-        const configMsg: GatewayToAgentEvent = { type: "config", config: this.configToSend };
-        this.stream!.send(configMsg as Record<string, unknown>);
-      }
+      // Dispatch StreamConnected through reducer — emits SendConfig command if config is set
+      this.dispatchConfigPushEvent({ type: "StreamConnected" });
       // Fire registered connected callbacks
       for (const cb of this.streamConnectedCallbacks) {
         try { cb(); } catch { /* ignore callback errors */ }
@@ -132,6 +156,8 @@ export class AgentManager {
 
     this.stream.on("disconnected", () => {
       console.error("[gateway] IPC stream disconnected from agent");
+      // Dispatch StreamDisconnected through reducer — marks stream as disconnected
+      this.dispatchConfigPushEvent({ type: "StreamDisconnected" });
       // Fire registered disconnected callbacks
       for (const cb of this.streamDisconnectedCallbacks) {
         try { cb(); } catch { /* ignore callback errors */ }
